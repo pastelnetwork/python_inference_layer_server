@@ -233,11 +233,11 @@ async def check_supernode_list_func():
     masternode_list_full_df['activedays'] = [float(x)/86400.0 for x in masternode_list_full_df['activeseconds'].values.tolist()]
     masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int)
     masternode_list_full_df__json = masternode_list_full_df.to_json(orient='index')
-    return masternode_list_full_df__json
+    return masternode_list_full_df, masternode_list_full_df__json
     
 async def get_local_machine_supernode_data_func():
     local_machine_ip = get_external_ip_func()
-    supernode_list_full_df = await check_supernode_list_func()
+    supernode_list_full_df, _ = await check_supernode_list_func()
     proper_port_number = statistics.mode([x.split(':')[1] for x in supernode_list_full_df['ipaddress:port'].values.tolist()])
     local_machine_ip_with_proper_port = local_machine_ip + ':' + proper_port_number
     local_machine_supernode_data = supernode_list_full_df[supernode_list_full_df['ipaddress:port'] == local_machine_ip_with_proper_port]
@@ -251,7 +251,7 @@ async def get_local_machine_supernode_data_func():
     return local_machine_supernode_data, local_sn_rank, local_sn_pastelid, local_machine_ip_with_proper_port
 
 async def get_sn_data_from_pastelid_func(specified_pastelid):
-    supernode_list_full_df = await check_supernode_list_func()
+    supernode_list_full_df, _ = await check_supernode_list_func()
     specified_machine_supernode_data = supernode_list_full_df[supernode_list_full_df['extKey'] == specified_pastelid]
     if len(specified_machine_supernode_data) == 0:
         logger.error('Specified machine is not a supernode!')
@@ -260,7 +260,7 @@ async def get_sn_data_from_pastelid_func(specified_pastelid):
         return specified_machine_supernode_data
 
 async def get_sn_data_from_sn_pubkey_func(specified_sn_pubkey):
-    supernode_list_full_df = await check_supernode_list_func()
+    supernode_list_full_df, _ = await check_supernode_list_func()
     specified_machine_supernode_data = supernode_list_full_df[supernode_list_full_df['pubkey'] == specified_sn_pubkey]
     if len(specified_machine_supernode_data) == 0:
         logger.error('Specified machine is not a supernode!')
@@ -283,7 +283,7 @@ async def decompress_data_with_zstd_func(compressed_input_data):
 async def list_sn_messages_func():
     global rpc_connection
     datetime_cutoff_to_ignore_obsolete_messages = datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE)
-    supernode_list_df = pd.read_json(await check_supernode_list_func(), orient='index')
+    supernode_list_df, _ = await check_supernode_list_func()
     pastelid_to_txid_vout_dict = dict(zip(supernode_list_df['extKey'], supernode_list_df.index))
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
     async with AsyncSessionLocal() as db:

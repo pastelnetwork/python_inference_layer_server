@@ -59,7 +59,7 @@ async def get_supernode_list_json(
     }
     """
     try:
-        supernode_list_json = await service_functions.check_supernode_list_func()
+        _, supernode_list_json = await service_functions.check_supernode_list_func()
         return JSONResponse(content=json.loads(supernode_list_json))
     except Exception as e:
         logger.error(f"Error getting supernode list JSON: {e}")
@@ -87,9 +87,7 @@ async def get_supernode_list_csv(
     ...
     """
     try:
-        supernode_list_json = await service_functions.check_supernode_list_func()
-        supernode_list_df = pd.read_json(supernode_list_json, orient='index')
-        # Normalize the DataFrame
+        supernode_list_df, _ = await service_functions.check_supernode_list_func()
         normalized_df = pd.json_normalize(supernode_list_df.to_dict(orient='records'))
         # Convert the normalized DataFrame to CSV
         csv_data = normalized_df.to_csv(index=False)
