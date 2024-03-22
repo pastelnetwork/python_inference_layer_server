@@ -4,6 +4,7 @@ httpx
 pandas
 python-decouple
 starlette
+sqlalchemy
 uvicorn[standard]
 uvloop
 zstandard
