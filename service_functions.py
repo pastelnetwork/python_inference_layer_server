@@ -301,9 +301,9 @@ async def list_sn_messages_func():
             sending_pastelid = txid_vout_to_pastelid_dict[sending_sn_txid_vout]
             receiving_pastelid = txid_vout_to_pastelid_dict[receiving_sn_txid_vout]
             message_body = base64.b64decode(message['Message'].encode('utf-8'))
+            verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
             decompressed_message = await decompress_data_with_zstd_func(message_body)
             message_dict = json.loads(decompressed_message)
-            verification_status = await verify_received_message_using_pastelid_func(decompressed_message, sending_pastelid)
             if verification_status == 'OK':
                 new_message = Message(
                     sending_sn_pastelid=sending_pastelid,
