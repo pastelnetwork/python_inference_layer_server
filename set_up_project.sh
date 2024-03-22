@@ -1,4 +1,3 @@
-cd ~
 if ! command -v pyenv &> /dev/null; then
     sudo apt-get update
     sudo apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev \
@@ -17,8 +16,6 @@ pyenv install 3.12
 # Setup project with Python 3.12
 
 cd ~
-git clone https://github.com/pastelnetwork/python_supernode_messaging_and_control_layer.git
-
 cd python_supernode_messaging_and_control_layer
 pyenv local 3.12
 python -m venv venv

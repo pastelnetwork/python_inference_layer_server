@@ -36,14 +36,33 @@ The API endpoints provided by this layer include:
 
 ## Installation
 
-Simply run `./set_up_project.sh` to install the required dependencies and start the FastAPI server.
+Instruction assume Ubuntu v22+.
+
+Clone the repository and navigate to the project directory:
+
+```
+git clone https://github.com/pastelnetwork/python_supernode_messaging_and_control_layer.git
+cd python_supernode_messaging_and_control_layer
+```
+
+Set up a virtual environment and activate it:
+
+```
+python -m venv venv
+source venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install wheel
+pip install -r requirements.txt
+```
+
+Alternatively, you can run the `./set_up_project.sh` script, which will install pyenv and use it to get Python 3.12 and create a virtual environment.
 
 You can change the listening port from the default `7123` by modifying the `UVICORN_PORT` environment variable in the `.env` file.
 
 Start the FastAPI server by running:
-   ```
-   uvicorn main:app --reload
-   ```
+```
+uvicorn main:app --reload
+```
 
 The server will start running at `http://localhost:7123`.
 
