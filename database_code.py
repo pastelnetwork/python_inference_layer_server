@@ -1,16 +1,10 @@
 from logger_config import setup_logger
 from datetime import datetime
-from typing import Optional
-from enum import Enum
 from decimal import Decimal
-from threading import Thread
 import traceback
-import asyncio
-from sqlalchemy import Column, String, DateTime, Integer, Numeric, Boolean, JSON, ForeignKey, LargeBinary, Text, UniqueConstraint, CheckConstraint, text as sql_text, event, MetaData, select
+from sqlalchemy import Column, String, DateTime, Integer, Numeric, LargeBinary, Text, text as sql_text
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship
-from sqlalchemy.schema import DropTable
-from pydantic import BaseModel
+from sqlalchemy.orm import sessionmaker, declarative_base
 from decouple import Config as DecoupleConfig, RepositoryEnv
 
 config = DecoupleConfig(RepositoryEnv('.env'))
@@ -24,6 +18,8 @@ class Message(Base):
     id = Column(Integer, primary_key=True, index=True)
     sending_sn_pastelid = Column(String, index=True)
     receiving_sn_pastelid = Column(String, index=True)
+    sending_sn_txid_vout = Column(String, index=True)
+    receiving_sn_txid_vout = Column(String, index=True)    
     message_type = Column(String, index=True)
     message_body = Column(Text)
     signature = Column(String)
@@ -46,6 +42,8 @@ class MessageSenderMetadata(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     sending_sn_pastelid = Column(String, index=True)
+    sending_sn_txid_vout = Column(String, index=True)
+    sending_sn_pubkey = Column(String, index=True)    
     total_messages_sent = Column(Integer)
     total_data_sent_bytes = Column(Numeric(precision=20, scale=2))
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
@@ -55,6 +53,7 @@ class MessageReceiverMetadata(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     receiving_sn_pastelid = Column(String, index=True)
+    receiving_sn_txid_vout = Column(String, index=True)
     total_messages_received = Column(Integer)
     total_data_received_bytes = Column(Numeric(precision=20, scale=2))
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)

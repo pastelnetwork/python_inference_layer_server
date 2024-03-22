@@ -5,7 +5,7 @@
             "name": "FastAPI",
             "type": "python",
             "request": "launch",
-            "program": "${workspaceFolder}/app/main.py"
+            "program": "${workspaceFolder}/main.py"
         }
     ]
 }

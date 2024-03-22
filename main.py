@@ -9,6 +9,8 @@ from fastapi.exceptions import RequestValidationError
 import uvloop
 from uvicorn import Config, Server
 from decouple import Config as DecoupleConfig, RepositoryEnv
+from database_code import initialize_db
+from service_functions import monitor_new_messages
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 UVICORN_PORT = config.get("UVICORN_PORT", cast=int)
@@ -52,6 +54,7 @@ app.add_middleware(
 async def startup():
     try:
         db_init_complete = await initialize_db()
+        logger.info(f"Database initialization complete: {db_init_complete}")
         asyncio.create_task(monitor_new_messages())  # Create a background task
     except Exception as e:
         logger.error(f"Error during startup: {e}")

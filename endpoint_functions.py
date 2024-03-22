@@ -1,19 +1,16 @@
 import service_functions
 from logger_config import setup_logger
-from service_functions import get_local_rpc_settings_func, list_sn_messages_func, send_message_to_sn_using_pastelid_func, broadcast_message_to_list_of_sns_using_pastelid_func, broadcast_message_to_list_of_sns_using_pastelid_func
-from fastapi import APIRouter, Depends, Query, Response
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, RootModel, Field, SecretStr
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, SecretStr
 from json import JSONEncoder
-from datetime import datetime
-import os
-import tempfile
-from typing import Optional, List, Dict, Any, Union
+from datetime import datetime, timedelta, timezone
+from typing import Optional, List
 logger = setup_logger()
 
 # RPC Client Dependency
 async def get_rpc_connection():
-    rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func() 
+    rpc_host, rpc_port, rpc_user, rpc_password, other_flags = service_functions.get_local_rpc_settings_func() 
     return service_functions.AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
 
 router = APIRouter()
@@ -68,7 +65,7 @@ async def send_message(
     Returns a SendMessageResponse object containing the status and message.
     """
     try:
-        signed_message = await send_message_to_sn_using_pastelid_func(
+        signed_message = await service_functions.send_message_to_sn_using_pastelid_func(
             message, message_type, receiving_sn_pastelid, pastelid_passphrase.get_secret_value()
         )
         return SendMessageResponse(status="success", message=f"Message sent: {signed_message}")
@@ -98,14 +95,13 @@ async def broadcast_message(
     Returns a SendMessageResponse object containing the status and message.
     """
     try:
-        signed_message = await broadcast_message_to_list_of_sns_using_pastelid_func(
+        signed_message = await service_functions.broadcast_message_to_list_of_sns_using_pastelid_func(
             message, message_type, list_of_receiving_sn_pastelids, pastelid_passphrase.get_secret_value(), verbose
         )
         return SendMessageResponse(status="success", message=f"Message broadcasted: {signed_message}")
     except Exception as e:
         logger.error(f"Error broadcasting message: {str(e)}")
         return SendMessageResponse(status="error", message=f"Error broadcasting message: {str(e)}")
-
 
 @router.get("/show_logs/{minutes}", response_class=HTMLResponse)
 async def show_logs(minutes: int = 5):
@@ -126,7 +122,7 @@ async def show_logs(minutes: int = 5):
                     continue  # ignore the log and continue with the next line
             except ValueError:
                 pass  # If the line does not start with a datetime, ignore the ValueError and process the line anyway                        
-            logs.append(service_funcs.highlight_rules_func(line.rstrip('\n')))  # add the highlighted log to the list and strip any newline at the end
+            logs.append(service_functions.highlight_rules_func(line.rstrip('\n')))  # add the highlighted log to the list and strip any newline at the end
     logs_as_string = "<br>".join(logs)  # joining with <br> directly
     logs_as_string_newlines_rendered = logs_as_string.replace("\n", "<br>")
     logs_as_string_newlines_rendered_font_specified = """

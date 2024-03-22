@@ -8,17 +8,16 @@ import os
 import platform
 import statistics
 import time
+import re
+import html
 import warnings
 from datetime import datetime, timedelta
 import pandas as pd
-import numpy as np
 from httpx import AsyncClient, Limits, Timeout
 import urllib.parse as urlparse
 from logger_config import setup_logger
 import zstandard as zstd
-from database_code import Base, engine, AsyncSessionLocal, get_db, initialize_db, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from typing import List
+from database_code import AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata
 from sqlalchemy import select, func
 
 # Logger setup
@@ -310,12 +309,16 @@ async def list_sn_messages_func():
                     message_type=message_dict['message_type'],
                     message_body=message_dict['message'],
                     signature=message_dict['signature'],
-                    timestamp=datetime.fromtimestamp(message['Timestamp'])
+                    timestamp=datetime.fromtimestamp(message['Timestamp']),
+                    sending_sn_txid_vout=sending_sn_txid_vout,
+                    receiving_sn_txid_vout=receiving_sn_txid_vout
                 )
                 new_messages_data.append(new_message.to_dict())
                 db.add(new_message)
         await db.commit()
-        new_messages_df = pd.DataFrame(new_messages_data)
+        new_messages_df = pd.DataFrame(new_messages_data, columns=['sending_sn_pastelid', 'receiving_sn_pastelid', 'message_type', 'message_body', 'signature', 'timestamp', 'sending_sn_txid_vout', 'receiving_sn_txid_vout'])
+        new_messages_df['sending_sn_txid_vout'] = new_messages_df['sending_sn_pastelid'].map(pastelid_to_txid_vout_dict)
+        new_messages_df['receiving_sn_txid_vout'] = new_messages_df['receiving_sn_pastelid'].map(pastelid_to_txid_vout_dict)
         combined_messages_df = pd.concat([db_messages_df, new_messages_df])
         combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
         combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
@@ -335,11 +338,6 @@ async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase)
     results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
     return results_dict['signature']
 
-async def verify_message_with_pastelid_func(pastelid, message_to_verify, pastelid_signature_on_message) -> str:
-    global rpc_connection
-    verification_result = await rpc_connection.pastelid('verify', message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
-    return verification_result['verification']
-
 async def verify_received_message_using_pastelid_func(message_received, sending_sn_pastelid):
     try:
         decompressed_message = await decompress_data_with_zstd_func(message_received)
@@ -347,8 +345,9 @@ async def verify_received_message_using_pastelid_func(message_received, sending_
         raw_message = message_received_dict['message']
         signature = message_received_dict['signature']
         verification_status = await verify_message_with_pastelid_func(sending_sn_pastelid, raw_message, signature)
-    except:
-        verification_status = 'Message is not in the correct format: ' + message_received
+    except Exception as e:
+        logger.error(f"Error verifying message: {e}")
+        verification_status = f"Message verification failed: {str(e)}"
     return verification_status
 
 async def send_message_to_sn_using_pastelid_func(message_to_send, message_type, receiving_sn_pastelid, pastelid_passphrase):
@@ -357,7 +356,12 @@ async def send_message_to_sn_using_pastelid_func(message_to_send, message_type, 
     sending_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
     sending_sn_pubkey = local_machine_supernode_data['pubkey'].values.tolist()[0]
     pastelid_signature_on_message = await sign_message_with_pastelid_func(sending_sn_pastelid, message_to_send, pastelid_passphrase)
-    signed_message_to_send = json.dumps({'message': message_to_send, 'message_type': message_type, 'signature': pastelid_signature_on_message})
+    signed_message_to_send = json.dumps({
+        'message': message_to_send,
+        'message_type': message_type,
+        'signature': pastelid_signature_on_message,
+        'sending_sn_pubkey': sending_sn_pubkey
+    })    
     compressed_message, _ = await compress_data_with_zstd_func(signed_message_to_send.encode('utf-8'))
     compressed_message_base64 = base64.b64encode(compressed_message).decode('utf-8')
     specified_machine_supernode_data = await get_sn_data_from_pastelid_func(receiving_sn_pastelid)
@@ -371,29 +375,12 @@ async def broadcast_message_to_list_of_sns_using_pastelid_func(message_to_send, 
     sending_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
     sending_sn_pubkey = local_machine_supernode_data['pubkey'].values.tolist()[0]
     pastelid_signature_on_message = await sign_message_with_pastelid_func(sending_sn_pastelid, message_to_send, pastelid_passphrase)
-    signed_message_to_send = json.dumps({'message': message_to_send, 'message_type': message_type, 'signature': pastelid_signature_on_message})
-    compressed_message, _ = await compress_data_with_zstd_func(signed_message_to_send.encode('utf-8'))
-    compressed_message_base64 = base64.b64encode(compressed_message).decode('utf-8')
-    if verbose:
-        logger.info(f"Sending message to {len(list_of_receiving_sn_pastelids)} SNs...")
-    sending_tasks = []
-    for idx, current_receiving_sn_pastelid in enumerate(list_of_receiving_sn_pastelids):
-        current_receiving_sn_pubkey = (await get_sn_data_from_pastelid_func(current_receiving_sn_pastelid))['pubkey'].values.tolist()[0]
-        if verbose:
-            logger.info(f"Now sending message to SN with PastelID: {current_receiving_sn_pastelid} and SN pubkey: {current_receiving_sn_pubkey}")
-        sending_tasks.append(rpc_connection.masternode('message', 'send', current_receiving_sn_pubkey, compressed_message_base64))
-    await asyncio.gather(*sending_tasks)
-    if verbose:
-        logger.info(f"Message sent to {len(list_of_receiving_sn_pastelids)} SNs")
-    return signed_message_to_send
-
-async def broadcast_message_to_list_of_sns_using_pastelid_func(message_to_send, message_type, list_of_receiving_sn_pastelids, pastelid_passphrase, verbose=0):
-    global rpc_connection
-    local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
-    sending_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
-    sending_sn_pubkey = local_machine_supernode_data['pubkey'].values.tolist()[0]
-    pastelid_signature_on_message = await sign_message_with_pastelid_func(sending_sn_pastelid, message_to_send, pastelid_passphrase)
-    signed_message_to_send = json.dumps({'message': message_to_send, 'message_type': message_type, 'signature': pastelid_signature_on_message})
+    signed_message_to_send = json.dumps({
+        'message': message_to_send,
+        'message_type': message_type,
+        'signature': pastelid_signature_on_message,
+        'sending_sn_pubkey': sending_sn_pubkey
+    })
     compressed_message, _ = await compress_data_with_zstd_func(signed_message_to_send.encode('utf-8'))
     compressed_message_base64 = base64.b64encode(compressed_message).decode('utf-8')
     if verbose:
@@ -432,11 +419,15 @@ async def monitor_new_messages():
                             if sender_metadata:
                                 sender_metadata.total_messages_sent += 1
                                 sender_metadata.total_data_sent_bytes += message_size_bytes
+                                sender_metadata.sending_sn_txid_vout = message['sending_sn_txid_vout']
+                                sender_metadata.sending_sn_pubkey = message['signature']
                             else:
                                 sender_metadata = MessageSenderMetadata(
                                     sending_sn_pastelid=sending_sn_pastelid,
                                     total_messages_sent=1,
-                                    total_data_sent_bytes=message_size_bytes
+                                    total_data_sent_bytes=message_size_bytes,
+                                    sending_sn_txid_vout=message['sending_sn_txid_vout'],
+                                    sending_sn_pubkey=message['signature']
                                 )
                                 db.add(sender_metadata)
                             # Update MessageReceiverMetadata
@@ -446,11 +437,13 @@ async def monitor_new_messages():
                             if receiver_metadata:
                                 receiver_metadata.total_messages_received += 1
                                 receiver_metadata.total_data_received_bytes += message_size_bytes
+                                receiver_metadata.receiving_sn_txid_vout = message['receiving_sn_txid_vout']
                             else:
                                 receiver_metadata = MessageReceiverMetadata(
                                     receiving_sn_pastelid=receiving_sn_pastelid,
                                     total_messages_received=1,
-                                    total_data_received_bytes=message_size_bytes
+                                    total_data_received_bytes=message_size_bytes,
+                                    receiving_sn_txid_vout=message['receiving_sn_txid_vout']
                                 )
                                 db.add(receiver_metadata)
                             # Update MessageSenderReceiverMetadata
@@ -620,7 +613,7 @@ def safe_highlight_func(text, pattern, replacement):
     try:
         return re.sub(pattern, replacement, text)
     except Exception as e:
-        logging.warning(f"Failed to apply highlight rule: {e}")
+        logger.warning(f"Failed to apply highlight rule: {e}")
         return text
 
 
