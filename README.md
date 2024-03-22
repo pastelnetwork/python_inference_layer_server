@@ -55,7 +55,14 @@ python -m pip install wheel
 pip install -r requirements.txt
 ```
 
-Alternatively, you can run the `./set_up_project.sh` script, which will install pyenv and use it to get Python 3.12 and create a virtual environment.
+Alternatively, you can run:
+
+```
+chmod +x ./set_up_project.sh
+./set_up_project.sh
+```
+
+This will install pyenv and use it to get Python 3.12 and create a virtual environment.
 
 You can change the listening port from the default `7123` by modifying the `UVICORN_PORT` environment variable in the `.env` file.
 
