@@ -282,7 +282,7 @@ async def decompress_data_with_zstd_func(compressed_input_data):
 
 async def list_sn_messages_func():
     global rpc_connection
-    datetime_cutoff_to_ignore_obsolete_messages = datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE)
+    datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
     supernode_list_df, _ = await check_supernode_list_func()
     pastelid_to_txid_vout_dict = dict(zip(supernode_list_df['extKey'], supernode_list_df.index))
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
@@ -322,7 +322,8 @@ async def list_sn_messages_func():
         new_messages_df['sending_sn_txid_vout'] = new_messages_df['sending_sn_pastelid'].map(pastelid_to_txid_vout_dict)
         new_messages_df['receiving_sn_txid_vout'] = new_messages_df['receiving_sn_pastelid'].map(pastelid_to_txid_vout_dict)
         combined_messages_df = pd.concat([db_messages_df, new_messages_df])
-        combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
+        combined_messages_df['timestamp'] = pd.to_datetime(combined_messages_df['timestamp'])      
+        combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]        
         combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
     return combined_messages_df
 
