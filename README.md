@@ -58,6 +58,9 @@ pip install -r requirements.txt
 Alternatively, you can run:
 
 ```
+cd ~
+git clone https://github.com/pastelnetwork/python_supernode_messaging_and_control_layer.git
+cd python_supernode_messaging_and_control_layer
 chmod +x ./set_up_project.sh
 ./set_up_project.sh
 ```
