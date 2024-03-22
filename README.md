@@ -1,5 +1,7 @@
 # Pastel Supernode Messaging and Control Layer
 
+![Illustration](https://raw.githubusercontent.com/pastelnetwork/python_supernode_messaging_and_control_layer/master/illustration.webp)
+
 The Supernode messaging and control layer is implemented using Python and FastAPI. It provides a set of API endpoints that allow communication and coordination among the Supernodes in the Pastel Network.
 
 The key components of this layer include:
