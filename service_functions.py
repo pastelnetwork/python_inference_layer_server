@@ -293,12 +293,14 @@ async def list_sn_messages_func():
         # Retrieve new messages from the RPC interface
         new_messages = await rpc_connection.masternode('message', 'list')
         new_messages_data = []
-        for message_key, message_value in new_messages.items():
-            sending_sn_txid_vout = message_value['From']
-            receiving_sn_txid_vout = message_value['To']
+        for message in new_messages:
+            message_key = list(message.keys())[0]
+            message = message[message_key]
+            sending_sn_txid_vout = message['From']
+            receiving_sn_txid_vout = message['To']
             sending_pastelid = txid_vout_to_pastelid_dict[sending_sn_txid_vout]
             receiving_pastelid = txid_vout_to_pastelid_dict[receiving_sn_txid_vout]
-            message_body = base64.b64decode(message_value['Message'].encode('utf-8'))
+            message_body = base64.b64decode(message['Message'].encode('utf-8'))
             decompressed_message = await decompress_data_with_zstd_func(message_body)
             message_dict = json.loads(decompressed_message)
             verification_status = await verify_received_message_using_pastelid_func(decompressed_message, sending_pastelid)
@@ -309,7 +311,7 @@ async def list_sn_messages_func():
                     message_type=message_dict['message_type'],
                     message_body=message_dict['message'],
                     signature=message_dict['signature'],
-                    timestamp=datetime.fromtimestamp(message_value['Timestamp']),
+                    timestamp=datetime.fromtimestamp(message['Timestamp']),
                     sending_sn_txid_vout=sending_sn_txid_vout,
                     receiving_sn_txid_vout=receiving_sn_txid_vout
                 )
