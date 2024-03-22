@@ -1,9 +1,12 @@
 import service_functions
 from logger_config import setup_logger
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.exceptions import HTTPException
 from pydantic import BaseModel, SecretStr
 from json import JSONEncoder
+import json
+import pandas as pd
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 logger = setup_logger()
@@ -27,6 +30,82 @@ class MessageModel(BaseModel):
 class SendMessageResponse(BaseModel):
     status: str
     message: str
+
+@router.get("/supernode_list_json", response_model=dict)
+async def get_supernode_list_json(
+    rpc_connection=Depends(get_rpc_connection),
+):
+    """
+    Retrieves the list of Supernodes as JSON data.
+
+    Returns a JSON object containing the Supernode list data.
+
+    Raises:
+    - HTTPException (status_code=500): If an error occurs while retrieving the Supernode list.
+
+    Example response:
+    {
+        "1234567890abcdef": {
+            "supernode_status": "ENABLED",
+            "protocol_version": "1.0",
+            "supernode_psl_address": "tPmkbohSbiocyAhXJVBZkBsKJiuVyNRp2GJ",
+            "lastseentime": "2024-03-22T12:34:56.789000",
+            "activeseconds": 3600,
+            "lastpaidtime": "2024-03-22T11:34:56.789000",
+            "lastpaidblock": 12345,
+            "ipaddress:port": "127.0.0.1:9999",
+            "rank": 1,
+            "pubkey": "0x1234567890abcdef",
+            "extAddress": "127.0.0.1:9999",
+            "extP2P": "127.0.0.1:9998",
+            "extKey": "1234567890abcdef",
+            "activedays": 1.0
+        },
+        ...
+    }
+    """
+    try:
+        supernode_list_json = await service_functions.check_supernode_list_func()
+        return JSONResponse(content=json.loads(supernode_list_json))
+    except Exception as e:
+        logger.error(f"Error getting supernode list JSON: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.get("/supernode_list_csv")
+async def get_supernode_list_csv(
+    rpc_connection=Depends(get_rpc_connection),
+):
+    """
+    Retrieves the list of Supernodes as a normalized CSV file.
+
+    Returns a StreamingResponse containing the CSV file data.
+
+    Raises:
+    - HTTPException (status_code=500): If an error occurs while retrieving or processing the Supernode list.
+
+    Example response:
+    A CSV file named "supernode_list.csv" will be downloaded containing the normalized Supernode list data.
+
+    CSV file structure:
+    supernode_status,protocol_version,supernode_psl_address,lastseentime,activeseconds,lastpaidtime,lastpaidblock,ipaddress:port,rank,pubkey,extAddress,extP2P,extKey,activedays
+    ENABLED,1.0,tPmkbohSbiocyAhXJVBZkBsKJiuVyNRp2GJ,2024-03-22T12:34:56.789000,3600,2024-03-22T11:34:56.789000,12345,127.0.0.1:9999,1,0x1234567890abcdef,127.0.0.1:9999,127.0.0.1:9998,1234567890abcdef,1.0
+    ...
+    """
+    try:
+        supernode_list_json = await service_functions.check_supernode_list_func()
+        supernode_list_df = pd.read_json(supernode_list_json, orient='index')
+        # Normalize the DataFrame
+        normalized_df = pd.json_normalize(supernode_list_df.to_dict(orient='records'))
+        # Convert the normalized DataFrame to CSV
+        csv_data = normalized_df.to_csv(index=False)
+        # Create a StreamingResponse with the CSV data
+        response = StreamingResponse(iter([csv_data]), media_type="text/csv")
+        response.headers["Content-Disposition"] = "attachment; filename=supernode_list.csv"
+        return response
+    except Exception as e:
+        logger.error(f"Error getting supernode list CSV: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+
 
 @router.get("/get_messages", response_model=List[MessageModel])
 async def get_messages(
@@ -102,6 +181,7 @@ async def broadcast_message(
     except Exception as e:
         logger.error(f"Error broadcasting message: {str(e)}")
         return SendMessageResponse(status="error", message=f"Error broadcasting message: {str(e)}")
+
 
 @router.get("/show_logs/{minutes}", response_class=HTMLResponse)
 async def show_logs(minutes: int = 5):
@@ -186,7 +266,7 @@ async def show_logs(minutes: int = 5):
             var text = document.querySelector('#log-container').innerText;
             var element = document.createElement('a');
             element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
-            element.setAttribute('download', 'pastel_gateway_verification_monitor_log__' + new Date().toISOString() + '.txt');
+            element.setAttribute('download', 'pastel_supernode_messaging_and_control_layer_log__' + new Date().toISOString() + '.txt');
             element.style.display = 'none';
             document.body.appendChild(element);
             element.click();
