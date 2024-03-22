@@ -50,8 +50,7 @@ docs/_build/
 
 #JE stuff:
 db/
-uploaded_image_files/
 venv/
 *_log
-old_application_log_files/
 old_logs/
+super_node_messaging_and_control_layer.sqlite*

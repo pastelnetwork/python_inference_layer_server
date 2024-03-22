@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from decouple import Config as DecoupleConfig, RepositoryEnv
 
 config = DecoupleConfig(RepositoryEnv('.env'))
-DATABASE_URL = config.get("DATABASE_URL", cast=str, default="sqlite+aiosqlite:///super_node_messaging_and_control_layer.db")
+DATABASE_URL = config.get("DATABASE_URL", cast=str, default="sqlite+aiosqlite:///super_node_messaging_and_control_layer.sqlite")
 logger = setup_logger()
 Base = declarative_base()
 
