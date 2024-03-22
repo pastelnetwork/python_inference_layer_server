@@ -1,15 +1,17 @@
 import service_functions
+import database_code as db
 from logger_config import setup_logger
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.exceptions import HTTPException
-from pydantic import BaseModel, SecretStr
 from json import JSONEncoder
 import json
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
+from pydantic import SecretStr
 logger = setup_logger()
+
 
 # RPC Client Dependency
 async def get_rpc_connection():
@@ -22,14 +24,6 @@ class DateTimeEncoder(JSONEncoder):
     def default(self, obj):
         if isinstance(obj, (datetime.date, datetime.datetime)):
             return obj.isoformat()
-
-class MessageModel(BaseModel):
-    message: str
-    message_type: str
-
-class SendMessageResponse(BaseModel):
-    status: str
-    message: str
 
 @router.get("/supernode_list_json", response_model=dict)
 async def get_supernode_list_json(
@@ -71,6 +65,7 @@ async def get_supernode_list_json(
         logger.error(f"Error getting supernode list JSON: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+
 @router.get("/supernode_list_csv")
 async def get_supernode_list_csv(
     rpc_connection=Depends(get_rpc_connection),
@@ -106,8 +101,122 @@ async def get_supernode_list_csv(
         logger.error(f"Error getting supernode list CSV: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+@router.get("/get_local_machine_sn_info", response_model=db.LocalMachineSupernodeInfo)
+async def get_local_machine_sn_info(
+    rpc_connection=Depends(get_rpc_connection),
+):
+    """
+    Retrieves information about the local machine's Supernode status.
 
-@router.get("/get_messages", response_model=List[MessageModel])
+    Returns a LocalMachineSupernodeInfo object containing the following fields:
+    - `local_machine_supernode_data`: DataFrame containing the local machine's Supernode data (if it is a Supernode).
+    - `local_sn_rank`: The rank of the local machine's Supernode (if it is a Supernode).
+    - `local_sn_pastelid`: The PastelID of the local machine's Supernode (if it is a Supernode).
+    - `local_machine_ip_with_proper_port`: The IP address and port of the local machine's Supernode (if it is a Supernode).
+
+    Raises:
+    - HTTPException (status_code=404): If the local machine is not a Supernode.
+    - HTTPException (status_code=500): If an error occurs while retrieving the local machine's Supernode information.
+
+    Example response:
+    {
+        "local_machine_supernode_data": {
+            "supernode_status": "ENABLED",
+            "protocol_version": "1.0",
+            ...
+        },
+        "local_sn_rank": 1,
+        "local_sn_pastelid": "1234567890abcdef",
+        "local_machine_ip_with_proper_port": "127.0.0.1:9999"
+    }
+    """
+    try:
+        local_machine_supernode_data, local_sn_rank, local_sn_pastelid, local_machine_ip_with_proper_port = await service_functions.get_local_machine_supernode_data_func()
+        if not local_machine_supernode_data.empty:
+            return db.LocalMachineSupernodeInfo(
+                local_machine_supernode_data=local_machine_supernode_data.to_dict(orient='records')[0],
+                local_sn_rank=local_sn_rank,
+                local_sn_pastelid=local_sn_pastelid,
+                local_machine_ip_with_proper_port=local_machine_ip_with_proper_port
+            )
+        else:
+            raise HTTPException(status_code=404, detail="Local machine is not a Supernode")
+    except Exception as e:
+        logger.error(f"Error getting local machine Supernode info: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+    
+    
+@router.get("/get_sn_data_from_pastelid", response_model=db.SupernodeData)
+async def get_sn_data_from_pastelid(
+    pastelid: str = Query(..., description="The PastelID of the Supernode"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    """
+    Retrieves Supernode data based on the specified PastelID.
+
+    - `pastelid`: The PastelID of the Supernode.
+
+    Returns a SupernodeData object containing the Supernode data.
+
+    Raises:
+    - HTTPException (status_code=404): If the specified machine is not a Supernode.
+    - HTTPException (status_code=500): If an error occurs while retrieving the Supernode data.
+
+    Example response:
+    {
+        "supernode_status": "ENABLED",
+        "protocol_version": "1.0",
+        "supernode_psl_address": "tPmkbohSbiocyAhXJVBZkBsKJiuVyNRp2GJ",
+        ...
+    }
+    """
+    try:
+        supernode_data = await service_functions.get_sn_data_from_pastelid_func(pastelid)
+        if not supernode_data.empty:
+            return db.SupernodeData(**supernode_data.to_dict(orient='records')[0])
+        else:
+            raise HTTPException(status_code=404, detail="Specified machine is not a Supernode")
+    except Exception as e:
+        logger.error(f"Error getting Supernode data from PastelID: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")    
+    
+    
+@router.get("/get_sn_data_from_sn_pubkey", response_model=db.SupernodeData)
+async def get_sn_data_from_sn_pubkey(
+    pubkey: str = Query(..., description="The public key of the Supernode"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    """
+    Retrieves Supernode data based on the specified Supernode public key.
+
+    - `pubkey`: The public key of the Supernode.
+
+    Returns a SupernodeData object containing the Supernode data.
+
+    Raises:
+    - HTTPException (status_code=404): If the specified machine is not a Supernode.
+    - HTTPException (status_code=500): If an error occurs while retrieving the Supernode data.
+
+    Example response:
+    {
+        "supernode_status": "ENABLED",
+        "protocol_version": "1.0",
+        "supernode_psl_address": "tPmkbohSbiocyAhXJVBZkBsKJiuVyNRp2GJ",
+        ...
+    }
+    """
+    try:
+        supernode_data = await service_functions.get_sn_data_from_sn_pubkey_func(pubkey)
+        if not supernode_data.empty:
+            return db.SupernodeData(**supernode_data.to_dict(orient='records')[0])
+        else:
+            raise HTTPException(status_code=404, detail="Specified machine is not a Supernode")
+    except Exception as e:
+        logger.error(f"Error getting Supernode data from public key: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
+    
+        
+@router.get("/get_messages", response_model=List[db.MessageModel])
 async def get_messages(
     last_k_minutes: Optional[int] = Query(10, description="Number of minutes to retrieve messages from"),
     message_type: Optional[str] = Query("all", description="Type of messages to retrieve ('all' or specific type)"),
@@ -122,10 +231,10 @@ async def get_messages(
     Returns a list of MessageModel objects containing the message and message_type.
     """
     messages = await service_functions.parse_sn_messages_from_last_k_minutes_func(last_k_minutes, message_type)
-    return [MessageModel(message=msg["message"], message_type=msg["message_type"]) for msg in messages]
+    return [db.MessageModel(message=msg["message"], message_type=msg["message_type"]) for msg in messages]
 
 
-@router.post("/send_message", response_model=SendMessageResponse)
+@router.post("/send_message", response_model=db.SendMessageResponse)
 async def send_message(
     message: str = Query(..., description="Message to send"),
     message_type: str = Query(..., description="Type of the message"),
@@ -147,13 +256,13 @@ async def send_message(
         signed_message = await service_functions.send_message_to_sn_using_pastelid_func(
             message, message_type, receiving_sn_pastelid, pastelid_passphrase.get_secret_value()
         )
-        return SendMessageResponse(status="success", message=f"Message sent: {signed_message}")
+        return db.SendMessageResponse(status="success", message=f"Message sent: {signed_message}")
     except Exception as e:
         logger.error(f"Error sending message: {str(e)}")
-        return SendMessageResponse(status="error", message=f"Error sending message: {str(e)}")
+        return db.SendMessageResponse(status="error", message=f"Error sending message: {str(e)}")
 
 
-@router.post("/broadcast_message", response_model=SendMessageResponse)
+@router.post("/broadcast_message", response_model=db.SendMessageResponse)
 async def broadcast_message(
     message: str = Query(..., description="Message to broadcast"),
     message_type: str = Query(..., description="Type of the message"),
@@ -177,10 +286,10 @@ async def broadcast_message(
         signed_message = await service_functions.broadcast_message_to_list_of_sns_using_pastelid_func(
             message, message_type, list_of_receiving_sn_pastelids, pastelid_passphrase.get_secret_value(), verbose
         )
-        return SendMessageResponse(status="success", message=f"Message broadcasted: {signed_message}")
+        return db.SendMessageResponse(status="success", message=f"Message broadcasted: {signed_message}")
     except Exception as e:
         logger.error(f"Error broadcasting message: {str(e)}")
-        return SendMessageResponse(status="error", message=f"Error broadcasting message: {str(e)}")
+        return db.SendMessageResponse(status="error", message=f"Error broadcasting message: {str(e)}")
 
 
 @router.get("/show_logs/{minutes}", response_class=HTMLResponse)

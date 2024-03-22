@@ -6,7 +6,46 @@ from sqlalchemy import Column, String, DateTime, Integer, Numeric, LargeBinary, 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from decouple import Config as DecoupleConfig, RepositoryEnv
+from pydantic import BaseModel
+from typing import Optional
 
+class MessageModel(BaseModel):
+    message: str
+    message_type: str
+
+class SendMessageResponse(BaseModel):
+    status: str
+    message: str
+
+class SupernodeData(BaseModel):
+    supernode_status: str
+    protocol_version: str
+    supernode_psl_address: str
+    lastseentime: datetime
+    activeseconds: int
+    lastpaidtime: datetime
+    lastpaidblock: int
+    ipaddress_port: str
+    rank: int
+    pubkey: str
+    extAddress: Optional[str]
+    extP2P: Optional[str]
+    extKey: Optional[str]
+    activedays: float
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+class LocalMachineSupernodeInfo(BaseModel):
+    local_machine_supernode_data: SupernodeData
+    local_sn_rank: int
+    local_sn_pastelid: str
+    local_machine_ip_with_proper_port: str
+
+    class Config:
+        from_attributes = True
+        
 config = DecoupleConfig(RepositoryEnv('.env'))
 DATABASE_URL = config.get("DATABASE_URL", cast=str, default="sqlite+aiosqlite:///super_node_messaging_and_control_layer.sqlite")
 logger = setup_logger()
