@@ -6,7 +6,7 @@ from sqlalchemy import Column, String, DateTime, Integer, Numeric, LargeBinary, 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from decouple import Config as DecoupleConfig, RepositoryEnv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 
 class MessageModel(BaseModel):
