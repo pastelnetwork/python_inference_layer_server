@@ -14,7 +14,7 @@ cd ~/.pyenv && git pull && cd -
 pyenv install 3.12
 
 # Setup project with Python 3.12
-
+source ~/.zshrc
 cd ~
 cd python_supernode_messaging_and_control_layer
 pyenv local 3.12
