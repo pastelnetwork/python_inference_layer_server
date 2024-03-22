@@ -130,8 +130,8 @@ async def get_local_machine_sn_info(
     """
     try:
         local_machine_supernode_data, local_sn_rank, local_sn_pastelid, local_machine_ip_with_proper_port = await service_functions.get_local_machine_supernode_data_func()
-        if not local_machine_supernode_data.empty:
-            return db.LocalMachineSupernodeInfo(
+        if len(local_machine_supernode_data) > 0:
+            return LocalMachineSupernodeInfo(
                 local_machine_supernode_data=local_machine_supernode_data.to_dict(orient='records')[0],
                 local_sn_rank=local_sn_rank,
                 local_sn_pastelid=local_sn_pastelid,

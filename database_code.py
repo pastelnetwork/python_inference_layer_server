@@ -25,14 +25,14 @@ class SupernodeData(BaseModel):
     activeseconds: int
     lastpaidtime: datetime
     lastpaidblock: int
-    ipaddress_port: str
+    ipaddress_port: str = Field(..., alias='ipaddress:port')
     rank: int
     pubkey: str
     extAddress: Optional[str]
     extP2P: Optional[str]
     extKey: Optional[str]
     activedays: float
-
+    
     class Config:
         from_attributes = True
         populate_by_name = True
