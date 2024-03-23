@@ -306,25 +306,25 @@ async def broadcast_message_to_all_sns(
 async def get_inference_model_menu_endpoint(
     rpc_connection=Depends(get_rpc_connection),
 ):
-    model_menu = await get_inference_model_menu()
+    model_menu = await service_functions.get_inference_model_menu()
     return model_menu
 
 
 @router.post("/validate_inference_api_usage_request")
 async def validate_inference_api_usage_request_endpoint(
-    request_data: InferenceAPIUsageRequestModel,
+    request_data: db.InferenceAPIUsageRequestModel,
     rpc_connection=Depends(get_rpc_connection),
 ):
-    is_valid = await validate_inference_api_usage_request(request_data.dict())
+    is_valid = await service_functions.validate_inference_api_usage_request(request_data.dict())
     return {"is_valid": is_valid}
 
 
 @router.post("/process_inference_confirmation")
 async def process_inference_confirmation_endpoint(
-    confirmation_data: InferenceConfirmationModel,
+    confirmation_data: db.InferenceConfirmationModel,
     rpc_connection=Depends(get_rpc_connection),
 ):
-    is_processed = await process_inference_confirmation(confirmation_data.inference_request_id, confirmation_data.confirmation_transaction)
+    is_processed = await service_functions.process_inference_confirmation(confirmation_data.inference_request_id, confirmation_data.confirmation_transaction)
     return {"is_processed": is_processed}
 
 
@@ -333,25 +333,25 @@ async def execute_inference_request_endpoint(
     inference_request_id: str,
     rpc_connection=Depends(get_rpc_connection),
 ):
-    output_results = await execute_inference_request(inference_request_id)
+    output_results = await service_functions.execute_inference_request(inference_request_id)
     return output_results
 
 
 @router.post("/send_inference_output_results")
 async def send_inference_output_results_endpoint(
-    output_results_data: InferenceOutputResultsModel,
+    output_results_data: db.InferenceOutputResultsModel,
     rpc_connection=Depends(get_rpc_connection),
 ):
-    inference_output_result = await send_inference_output_results(output_results_data.inference_request_id, output_results_data.inference_response_id, output_results_data.output_results)
+    inference_output_result = await service_functions.send_inference_output_results(output_results_data.inference_request_id, output_results_data.inference_response_id, output_results_data.output_results)
     return inference_output_result
 
 
 @router.post("/update_inference_sn_reputation_score")
 async def update_inference_sn_reputation_score_endpoint(
-    reputation_score_data: ReputationScoreUpdateModel,
+    reputation_score_data: db.ReputationScoreUpdateModel,
     rpc_connection=Depends(get_rpc_connection),
 ):
-    is_updated = await update_inference_sn_reputation_score(reputation_score_data.supernode_pastelid, reputation_score_data.reputation_score)
+    is_updated = await service_functions.update_inference_sn_reputation_score(reputation_score_data.supernode_pastelid, reputation_score_data.reputation_score)
     return {"is_updated": is_updated}
 
 

@@ -2,12 +2,12 @@ from logger_config import setup_logger
 from datetime import datetime
 from decimal import Decimal
 import traceback
-from sqlalchemy import Column, String, DateTime, Integer, Numeric, LargeBinary, Text, text as sql_text
+from sqlalchemy import Column, String, DateTime, Integer, Numeric, LargeBinary, Text, text as sql_text, ForeignKey, JSON
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
         
 config = DecoupleConfig(RepositoryEnv('.env'))
 DATABASE_URL = config.get("DATABASE_URL", cast=str, default="sqlite+aiosqlite:///super_node_messaging_and_control_layer.sqlite")
@@ -57,6 +57,7 @@ class LocalMachineSupernodeInfo(BaseModel):
 
     class Config:
         from_attributes = True
+        
 class InferenceCreditPackRequest(BaseModel):
     authorized_pastelids_to_use_credits: List[str]
     psl_cost_per_credit: float
@@ -84,6 +85,9 @@ class InferenceAPIUsageRequestModel(BaseModel):
     model_parameters_json: str
     model_input_data_json_b64: str
 
+    class Config:
+        protected_namespaces = ()
+        
 class Message(Base):
     __tablename__ = "messages"
 
@@ -119,6 +123,9 @@ class InferenceAPIUsageRequest(Message):
         "polymorphic_identity": "inference_api_usage_request",
     }
 
+    class Config:
+        protected_namespaces = ()
+        
 class InferenceAPIUsageResponse(Message):
     __tablename__ = "inference_api_usage_responses"
 
