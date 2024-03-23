@@ -18,6 +18,7 @@ import urllib.parse as urlparse
 from logger_config import setup_logger
 import zstandard as zstd
 from database_code import AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata
+from database_code import InferenceCreditPack, InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult
 from sqlalchemy import select, func
 
 # Logger setup
@@ -29,6 +30,7 @@ loop = asyncio.get_event_loop()
 warnings.filterwarnings('ignore')
 
 NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = 3
+GITHUB_MODEL_MENU_URL = "https://raw.githubusercontent.com/pastelnetwork/python_supernode_messaging_and_control_layer/master/model_menu.json"
 
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
@@ -575,6 +577,131 @@ async def monitor_new_messages():
             logger.error(f"Error while monitoring new messages: {str(e)}")
             await asyncio.sleep(5)
 
+async def get_inference_model_menu():
+    try:
+        # Check if the model menu file exists locally
+        if os.path.exists("model_menu.json"):
+            with open("model_menu.json", "r") as file:
+                local_model_menu = json.load(file)
+        else:
+            local_model_menu = None
+
+        # Fetch the latest model menu from GitHub
+        async with httpx.AsyncClient() as client:
+            response = await client.get(GITHUB_MODEL_MENU_URL)
+            response.raise_for_status()
+            github_model_menu = response.json()
+
+        # Compare the local and GitHub model menus
+        if local_model_menu != github_model_menu:
+            # Update the local model menu file
+            with open("model_menu.json", "w") as file:
+                json.dump(github_model_menu, file, indent=2)
+
+        # Use the updated model menu
+        model_menu = github_model_menu
+
+        return model_menu
+
+    except Exception as e:
+        logger.error(f"Error retrieving inference model menu: {str(e)}")
+        # Fallback to the local model menu if available
+        if local_model_menu:
+            return local_model_menu
+        else:
+            raise
+
+async def get_inference_model_menu():
+    try:
+        # TODO: Implement the logic to retrieve the latest inference model menu from the configured source
+        # For now, let's assume the model menu is a static dictionary
+        model_menu = {
+            "models": [
+                {
+                    "model_name": "llama-7b",
+                    "model_url": "https://huggingface.co/decapoda-research/llama-7b-hf",
+                    "input_fields": ["text"],
+                    "output_fields": ["text"],
+                    "model_parameters": {
+                        "max_length": 100,
+                        "temperature": 0.7
+                    },
+                    "credit_costs": {
+                        "input_tokens": 1.5,
+                        "output_tokens": 1.1
+                    }
+                },
+                # Add more models as needed
+            ]
+        }
+        return model_menu
+    except Exception as e:
+        logger.error(f"Error retrieving inference model menu: {str(e)}")
+        raise
+
+async def validate_inference_api_usage_request(request_data: dict):
+    try:
+        # TODO: Implement the validation logic for the inference API usage request
+        # Check the credit pack balance, verify the user's PastelID signature, and ensure that the requested model and parameters are valid based on the model menu
+        # For now, let's assume the request is valid
+        return True
+    except Exception as e:
+        logger.error(f"Error validating inference API usage request: {str(e)}")
+        raise
+
+async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: dict):
+    try:
+        # TODO: Implement the logic to process the inference confirmation
+        # Check if the confirmation transaction is valid and trigger the inference request processing
+        # For now, let's assume the confirmation is valid and the inference request is processed
+        return True
+    except Exception as e:
+        logger.error(f"Error processing inference confirmation: {str(e)}")
+        raise
+
+async def execute_inference_request(inference_request_id: str):
+    try:
+        # TODO: Implement the logic to execute the inference request
+        # Integrate with the Swiss Army Llama project or other inference libraries to perform the inference task and generate the output results
+        # For now, let's assume the inference is executed successfully and the output results are generated
+        output_results = {
+            "output_text": "This is the generated output text.",
+            "output_files": []
+        }
+        return output_results
+    except Exception as e:
+        logger.error(f"Error executing inference request: {str(e)}")
+        raise
+
+async def send_inference_output_results(inference_request_id: str, inference_response_id: str, output_results: dict):
+    try:
+        async with AsyncSessionLocal() as db:
+            inference_output_result = InferenceAPIOutputResult(
+                inference_request_id=inference_request_id,
+                inference_response_id=inference_response_id,
+                responding_supernode_pastelid="your_supernode_pastelid",
+                inference_result_json_base64="base64_encoded_output_results",
+                responding_supernode_signature_on_inference_result_id="your_signature"
+            )
+            db.add(inference_output_result)
+            await db.commit()
+            await db.refresh(inference_output_result)
+            return inference_output_result
+    except Exception as e:
+        logger.error(f"Error sending inference output results: {str(e)}")
+        raise
+
+async def update_inference_sn_reputation_score(supernode_pastelid: str, reputation_score: float):
+    try:
+        # TODO: Implement the logic to update the inference SN reputation score
+        # Update the reputation score of the supernode based on its performance in the inference request process
+        # For now, let's assume the reputation score is updated successfully
+        return True
+    except Exception as e:
+        logger.error(f"Error updating inference SN reputation score: {str(e)}")
+        raise
+    
+        
 # ________________________________________________________________________________________________________________________________
 
 # Blockchain ticket related functions:

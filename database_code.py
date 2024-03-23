@@ -8,6 +8,11 @@ from sqlalchemy.orm import sessionmaker, declarative_base
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from pydantic import BaseModel, Field
 from typing import Optional
+        
+config = DecoupleConfig(RepositoryEnv('.env'))
+DATABASE_URL = config.get("DATABASE_URL", cast=str, default="sqlite+aiosqlite:///super_node_messaging_and_control_layer.sqlite")
+logger = setup_logger()
+Base = declarative_base()
 
 class MessageModel(BaseModel):
     message: str
@@ -52,11 +57,32 @@ class LocalMachineSupernodeInfo(BaseModel):
 
     class Config:
         from_attributes = True
-        
-config = DecoupleConfig(RepositoryEnv('.env'))
-DATABASE_URL = config.get("DATABASE_URL", cast=str, default="sqlite+aiosqlite:///super_node_messaging_and_control_layer.sqlite")
-logger = setup_logger()
-Base = declarative_base()
+class InferenceCreditPackRequest(BaseModel):
+    authorized_pastelids_to_use_credits: List[str]
+    psl_cost_per_credit: float
+    total_psl_cost_for_pack: float
+    initial_credit_balance: float
+    credit_usage_tracking_psl_address: str
+
+class InferenceConfirmationModel(BaseModel):
+    inference_request_id: str
+    confirmation_transaction: dict
+
+class InferenceOutputResultsModel(BaseModel):
+    inference_request_id: str
+    inference_response_id: str
+    output_results: dict
+    
+class ReputationScoreUpdateModel(BaseModel):
+    supernode_pastelid: str
+    reputation_score: float    
+
+class InferenceAPIUsageRequestModel(BaseModel):
+    requesting_pastelid: str
+    credit_pack_identifier: str
+    requested_model_canonical_string: str
+    model_parameters_json: str
+    model_input_data_json_b64: str
 
 class Message(Base):
     __tablename__ = "messages"
@@ -73,6 +99,73 @@ class Message(Base):
 
     def __repr__(self):
         return f"<Message(id={self.id}, sending_sn_pastelid='{self.sending_sn_pastelid}', receiving_sn_pastelid='{self.receiving_sn_pastelid}', message_type='{self.message_type}', timestamp='{self.timestamp}')>"
+
+# Add the new message types as separate models inheriting from the base Message model
+class InferenceAPIUsageRequest(Message):
+    __tablename__ = "inference_api_usage_requests"
+
+    id = Column(Integer, ForeignKey("messages.id"), primary_key=True)
+    inference_request_id = Column(String, unique=True, index=True)
+    requesting_pastelid = Column(String, index=True)
+    credit_pack_identifier = Column(String, index=True)
+    requested_model_canonical_string = Column(String)
+    model_parameters_json = Column(JSON)
+    model_input_data_json_b64 = Column(String)
+    total_psl_cost_for_pack = Column(Numeric(precision=20, scale=8))
+    initial_credit_balance = Column(Numeric(precision=20, scale=8))
+    requesting_pastelid_signature = Column(String)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "inference_api_usage_request",
+    }
+
+class InferenceAPIUsageResponse(Message):
+    __tablename__ = "inference_api_usage_responses"
+
+    id = Column(Integer, ForeignKey("messages.id"), primary_key=True)
+    inference_response_id = Column(String, unique=True, index=True)
+    inference_request_id = Column(String, ForeignKey("inference_api_usage_requests.inference_request_id"), index=True)
+    proposed_cost_of_request_in_inference_credits = Column(Numeric(precision=20, scale=8))
+    remaining_credits_in_pack_after_request_processed = Column(Numeric(precision=20, scale=8))
+    credit_usage_tracking_psl_address = Column(String, index=True)
+    request_confirmation_message_amount_in_patoshis = Column(Integer)
+    max_block_height_to_include_confirmation_transaction = Column(Integer)
+    supernode_pastelids_and_signatures_pack_on_inference_response_id = Column(String)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "inference_api_usage_response",
+    }
+
+class InferenceAPIOutputResult(Message):
+    __tablename__ = "inference_api_output_results"
+
+    id = Column(Integer, ForeignKey("messages.id"), primary_key=True)
+    inference_result_id = Column(String, unique=True, index=True)
+    inference_request_id = Column(String, ForeignKey("inference_api_usage_requests.inference_request_id"), index=True)
+    inference_response_id = Column(String, ForeignKey("inference_api_usage_responses.inference_response_id"), index=True)
+    responding_supernode_pastelid = Column(String, index=True)
+    inference_result_json_base64 = Column(String)
+    responding_supernode_signature_on_inference_result_id = Column(String)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "inference_api_output_result",
+    }
+
+# Add a new model for storing inference credit packs
+class InferenceCreditPack(Base):
+    __tablename__ = "inference_credit_packs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    credit_pack_identifier = Column(String, unique=True, index=True)
+    authorized_pastelids = Column(JSON)
+    psl_cost_per_credit = Column(Numeric(precision=20, scale=8))
+    total_psl_cost_for_pack = Column(Numeric(precision=20, scale=8))
+    initial_credit_balance = Column(Numeric(precision=20, scale=8))
+    current_credit_balance = Column(Numeric(precision=20, scale=8))
+    credit_usage_tracking_psl_address = Column(String, index=True)
+    version = Column(Integer)
+    purchase_height = Column(Integer)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
 
 class MessageMetadata(Base):
     __tablename__ = "message_metadata"

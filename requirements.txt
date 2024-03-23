@@ -1,11 +1,12 @@
-asyncio
 aiosqlite
+asyncio
 fastapi
 httpx
 pandas
+psutil
 python-decouple
-starlette
 sqlalchemy
+starlette
 uvicorn[standard]
 uvloop
 zstandard

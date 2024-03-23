@@ -302,6 +302,59 @@ async def broadcast_message_to_all_sns(
         return db.SendMessageResponse(status="error", message=f"Error broadcasting message: {str(e)}")
 
 
+@router.get("/get_inference_model_menu")
+async def get_inference_model_menu_endpoint(
+    rpc_connection=Depends(get_rpc_connection),
+):
+    model_menu = await get_inference_model_menu()
+    return model_menu
+
+
+@router.post("/validate_inference_api_usage_request")
+async def validate_inference_api_usage_request_endpoint(
+    request_data: InferenceAPIUsageRequestModel,
+    rpc_connection=Depends(get_rpc_connection),
+):
+    is_valid = await validate_inference_api_usage_request(request_data.dict())
+    return {"is_valid": is_valid}
+
+
+@router.post("/process_inference_confirmation")
+async def process_inference_confirmation_endpoint(
+    confirmation_data: InferenceConfirmationModel,
+    rpc_connection=Depends(get_rpc_connection),
+):
+    is_processed = await process_inference_confirmation(confirmation_data.inference_request_id, confirmation_data.confirmation_transaction)
+    return {"is_processed": is_processed}
+
+
+@router.post("/execute_inference_request")
+async def execute_inference_request_endpoint(
+    inference_request_id: str,
+    rpc_connection=Depends(get_rpc_connection),
+):
+    output_results = await execute_inference_request(inference_request_id)
+    return output_results
+
+
+@router.post("/send_inference_output_results")
+async def send_inference_output_results_endpoint(
+    output_results_data: InferenceOutputResultsModel,
+    rpc_connection=Depends(get_rpc_connection),
+):
+    inference_output_result = await send_inference_output_results(output_results_data.inference_request_id, output_results_data.inference_response_id, output_results_data.output_results)
+    return inference_output_result
+
+
+@router.post("/update_inference_sn_reputation_score")
+async def update_inference_sn_reputation_score_endpoint(
+    reputation_score_data: ReputationScoreUpdateModel,
+    rpc_connection=Depends(get_rpc_connection),
+):
+    is_updated = await update_inference_sn_reputation_score(reputation_score_data.supernode_pastelid, reputation_score_data.reputation_score)
+    return {"is_updated": is_updated}
+
+
 @router.get("/show_logs/{minutes}", response_class=HTMLResponse)
 async def show_logs(minutes: int = 5):
     # read the entire log file and generate HTML with logs up to `minutes` minutes from now
