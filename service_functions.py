@@ -287,8 +287,10 @@ async def list_sn_messages_func():
     pastelid_to_txid_vout_dict = dict(zip(supernode_list_df['extKey'], supernode_list_df.index))
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
     async with AsyncSessionLocal() as db:
+        # Retrieve messages from the database
         db_messages = await db.execute(select(Message).where(Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages).order_by(Message.timestamp.desc()))
         db_messages_df = pd.DataFrame([message.to_dict() for message in db_messages.scalars().all()])
+        # Retrieve new messages from the RPC interface
         new_messages = await rpc_connection.masternode('message', 'list')
         new_messages_data = []
         for message in new_messages:
@@ -306,16 +308,17 @@ async def list_sn_messages_func():
                     Message.receiving_sn_pastelid == receiving_pastelid,
                     Message.timestamp == message_timestamp
                 )
-            ).scalar()
-            if existing_message is not None:
+            )
+            if existing_message.scalar() is not None:
                 logger.debug(f"Message already exists in the database. Skipping...")
                 continue
             message_body = base64.b64decode(message['Message'].encode('utf-8'))
             verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
             decompressed_message = await decompress_data_with_zstd_func(message_body)
             decompressed_message = decompressed_message.decode('utf-8')
+            decompressed_message = unidecode(decompressed_message)
             try:
-                message_dict = json.loads(decompressed_message, encoding='utf-8')
+                message_dict = json.loads(decompressed_message)
             except json.JSONDecodeError as e:
                 logger.error(f"Error parsing JSON: {e}")
                 logger.error(f"Decompressed message: {decompressed_message}")
