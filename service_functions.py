@@ -316,7 +316,6 @@ async def list_sn_messages_func():
             verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
             decompressed_message = await decompress_data_with_zstd_func(message_body)
             decompressed_message = decompressed_message.decode('utf-8')
-            decompressed_message = unidecode(decompressed_message)
             try:
                 message_dict = json.loads(decompressed_message)
             except json.JSONDecodeError as e:
@@ -354,18 +353,16 @@ async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase)
 async def parse_sn_messages_from_last_k_minutes_func(k=10, message_type='all'):
     messages_list_df = await list_sn_messages_func()
     messages_list_df__recent = messages_list_df[messages_list_df['timestamp'] > (datetime.now() - timedelta(minutes=k))]
-    def load_json(message_body):
-        return json.loads(message_body, encoding='utf-8')
     if message_type == 'all':
-        list_of_message_dicts = messages_list_df__recent['message_body'].apply(load_json).tolist()
+        list_of_message_dicts = messages_list_df__recent['message_body'].apply(json.loads).tolist()
     else:
-        list_of_message_dicts = messages_list_df__recent[messages_list_df__recent['message_type'] == message_type]['message_body'].apply(load_json).tolist()
+        list_of_message_dicts = messages_list_df__recent[messages_list_df__recent['message_type'] == message_type]['message_body'].apply(json.loads).tolist()
     return list_of_message_dicts
 
 async def verify_received_message_using_pastelid_func(message_received, sending_sn_pastelid):
     try:
         decompressed_message = await decompress_data_with_zstd_func(message_received)
-        message_received_dict = json.loads(decompressed_message, encoding='utf-8')
+        message_received_dict = json.loads(decompressed_message)
         raw_message = message_received_dict['message']
         signature = message_received_dict['signature']
         verification_status = await verify_message_with_pastelid_func(sending_sn_pastelid, raw_message, signature)
