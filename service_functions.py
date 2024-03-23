@@ -321,18 +321,18 @@ async def list_sn_messages_func():
                 logger.error(f"Decompressed message: {decompressed_message}")
                 continue
             if verification_status == 'OK':
-                new_message = Message(
-                    sending_sn_pastelid=sending_pastelid,
-                    receiving_sn_pastelid=receiving_pastelid,
-                    message_type=message_dict['message_type'],
-                    message_body=decompressed_message,
-                    signature=message_dict['signature'],
-                    timestamp=message_timestamp,
-                    sending_sn_txid_vout=sending_sn_txid_vout,
-                    receiving_sn_txid_vout=receiving_sn_txid_vout
-                )
-                new_messages_data.append(new_message.to_dict())
-        new_messages_df = pd.DataFrame(new_messages_data, columns=['sending_sn_pastelid', 'receiving_sn_pastelid', 'message_type', 'message_body', 'signature', 'timestamp', 'sending_sn_txid_vout', 'receiving_sn_txid_vout'])
+                new_message = {
+                    'sending_sn_pastelid': sending_pastelid,
+                    'receiving_sn_pastelid': receiving_pastelid,
+                    'message_type': message_dict['message_type'],
+                    'message_body': decompressed_message,
+                    'signature': message_dict['signature'],
+                    'timestamp': message_timestamp,
+                    'sending_sn_txid_vout': sending_sn_txid_vout,
+                    'receiving_sn_txid_vout': receiving_sn_txid_vout
+                }
+                new_messages_data.append(new_message)
+        new_messages_df = pd.DataFrame(new_messages_data)
         combined_messages_df = pd.concat([db_messages_df, new_messages_df])
         combined_messages_df['timestamp'] = pd.to_datetime(combined_messages_df['timestamp'])
         combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
