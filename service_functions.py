@@ -302,15 +302,13 @@ async def list_sn_messages_func():
             receiving_pastelid = txid_vout_to_pastelid_dict[receiving_sn_txid_vout]
             message_timestamp = datetime.fromtimestamp(message['Timestamp'])
             # Check if the message already exists in the database
-            existing_message_result = await db.execute(
-                select(Message).where(
-                    Message.sending_sn_pastelid == sending_pastelid,
-                    Message.receiving_sn_pastelid == receiving_pastelid,
-                    Message.timestamp == message_timestamp
-                )
-            )
-            if existing_message_result.scalar() is not None:
-                logger.debug("Message already exists in the database. Skipping...")
+            existing_message = db_messages_df[
+                (db_messages_df['sending_sn_pastelid'] == sending_pastelid) &
+                (db_messages_df['receiving_sn_pastelid'] == receiving_pastelid) &
+                (db_messages_df['timestamp'] == message_timestamp)
+            ]
+            if not existing_message.empty:
+                logger.debug(f"Message already exists in the database. Skipping...")
                 continue
             message_body = base64.b64decode(message['Message'].encode('utf-8'))
             verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
@@ -334,8 +332,6 @@ async def list_sn_messages_func():
                     receiving_sn_txid_vout=receiving_sn_txid_vout
                 )
                 new_messages_data.append(new_message.to_dict())
-                db.add(new_message)
-        await db.commit()
         new_messages_df = pd.DataFrame(new_messages_data, columns=['sending_sn_pastelid', 'receiving_sn_pastelid', 'message_type', 'message_body', 'signature', 'timestamp', 'sending_sn_txid_vout', 'receiving_sn_txid_vout'])
         new_messages_df['sending_sn_txid_vout'] = new_messages_df['sending_sn_pastelid'].map(pastelid_to_txid_vout_dict)
         new_messages_df['receiving_sn_txid_vout'] = new_messages_df['receiving_sn_pastelid'].map(pastelid_to_txid_vout_dict)
@@ -359,7 +355,7 @@ async def parse_sn_messages_from_last_k_minutes_func(k=10, message_type='all'):
         list_of_message_dicts = messages_list_df__recent[messages_list_df__recent['message_type'] == message_type][['message_body', 'message_type', 'sending_sn_pastelid', 'timestamp']].to_dict(orient='records')
     return [
         {
-            'message': json.loads(msg['message_body']),
+            'message': json.loads(msg['message_body'])['message'],  # Extract the 'message' field as a string
             'message_type': msg['message_type'],
             'sending_sn_pastelid': msg['sending_sn_pastelid'],
             'timestamp': msg['timestamp']
