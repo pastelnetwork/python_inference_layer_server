@@ -447,7 +447,7 @@ async def monitor_new_messages():
                     result = await db.execute(select(Message.timestamp).order_by(Message.timestamp.desc()).limit(1))
                     last_processed_timestamp = result.scalar()
                     if last_processed_timestamp is None:
-                        last_processed_timestamp = pd.Timestamp.min  # Correctly sets to minimum timestamp without using await
+                        last_processed_timestamp = pd.Timestamp.min
                 new_messages_df = await list_sn_messages_func()
                 if not new_messages_df.empty:
                     new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
@@ -462,7 +462,7 @@ async def monitor_new_messages():
                             )
                             existing_message = result.scalar()
                             if existing_message:
-                                continue  # Skip this message if it already exists
+                                continue
                             logger.info(f"New message received: {message['message_body']}")
                             last_processed_timestamp = message['timestamp']
                             sending_sn_pastelid = message['sending_sn_pastelid']
@@ -476,14 +476,14 @@ async def monitor_new_messages():
                                 sender_metadata.total_messages_sent += 1
                                 sender_metadata.total_data_sent_bytes += message_size_bytes
                                 sender_metadata.sending_sn_txid_vout = message['sending_sn_txid_vout']
-                                sender_metadata.sending_sn_pubkey = message['signature']
+                                sender_metadata.sending_sn_pubkey = message['sending_sn_pubkey']
                             else:
                                 sender_metadata = MessageSenderMetadata(
                                     sending_sn_pastelid=sending_sn_pastelid,
                                     total_messages_sent=1,
                                     total_data_sent_bytes=message_size_bytes,
                                     sending_sn_txid_vout=message['sending_sn_txid_vout'],
-                                    sending_sn_pubkey=message['signature']
+                                    sending_sn_pubkey=message['sending_sn_pubkey']
                                 )
                                 db.add(sender_metadata)
                             # Update MessageReceiverMetadata
@@ -494,12 +494,14 @@ async def monitor_new_messages():
                                 receiver_metadata.total_messages_received += 1
                                 receiver_metadata.total_data_received_bytes += message_size_bytes
                                 receiver_metadata.receiving_sn_txid_vout = message['receiving_sn_txid_vout']
+                                receiver_metadata.receiving_sn_pubkey = message['receiving_sn_pubkey']
                             else:
                                 receiver_metadata = MessageReceiverMetadata(
                                     receiving_sn_pastelid=receiving_sn_pastelid,
                                     total_messages_received=1,
                                     total_data_received_bytes=message_size_bytes,
-                                    receiving_sn_txid_vout=message['receiving_sn_txid_vout']
+                                    receiving_sn_txid_vout=message['receiving_sn_txid_vout'],
+                                    receiving_sn_pubkey=message['receiving_sn_pubkey']
                                 )
                                 db.add(receiver_metadata)
                             # Update MessageSenderReceiverMetadata
@@ -520,7 +522,19 @@ async def monitor_new_messages():
                                     total_data_bytes=message_size_bytes
                                 )
                                 db.add(sender_receiver_metadata)
-                        new_messages = [Message(**row) for _, row in new_messages_df.iterrows()]
+                        new_messages = [
+                            Message(
+                                sending_sn_pastelid=row['sending_sn_pastelid'],
+                                receiving_sn_pastelid=row['receiving_sn_pastelid'],
+                                message_type=row['message_type'],
+                                message_body=row['message_body'],
+                                signature=row['signature'],
+                                timestamp=row['timestamp'],
+                                sending_sn_txid_vout=row['sending_sn_txid_vout'],
+                                receiving_sn_txid_vout=row['receiving_sn_txid_vout']
+                            )
+                            for _, row in new_messages_df.iterrows()
+                        ]
                         db.add_all(new_messages)
                         # Update overall MessageMetadata
                         result = await db.execute(
@@ -530,17 +544,25 @@ async def monitor_new_messages():
                                 func.count(func.distinct(Message.receiving_sn_pastelid))
                             )
                         )
-                        total_messages, total_senders, total_receivers = result.first()  # Use .first() for multiple results
-                        message_metadata = MessageMetadata(
-                            total_messages=total_messages,
-                            total_senders=total_senders,
-                            total_receivers=total_receivers
-                        )
-                        db.add(message_metadata)
+                        total_messages, total_senders, total_receivers = result.first()
+                        message_metadata = await db.execute(
+                            select(MessageMetadata).order_by(MessageMetadata.timestamp.desc()).limit(1)
+                        ).scalar()
+                        if message_metadata:
+                            message_metadata.total_messages = total_messages
+                            message_metadata.total_senders = total_senders
+                            message_metadata.total_receivers = total_receivers
+                        else:
+                            message_metadata = MessageMetadata(
+                                total_messages=total_messages,
+                                total_senders=total_senders,
+                                total_receivers=total_receivers
+                            )
+                            db.add(message_metadata)
                         await db.commit()
                 await asyncio.sleep(5)
         except Exception as e:
-            logger.error(f"Error while monitoring new messages: {e}")
+            logger.error(f"Error while monitoring new messages: {str(e)}")
             await asyncio.sleep(5)
             
 # ________________________________________________________________________________________________________________________________
