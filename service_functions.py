@@ -343,6 +343,11 @@ async def list_sn_messages_func():
         combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
     return combined_messages_df
 
+async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase) -> str:
+    global rpc_connection
+    results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
+    return results_dict['signature']
+
 async def parse_sn_messages_from_last_k_minutes_func(k=10, message_type='all'):
     messages_list_df = await list_sn_messages_func()
     messages_list_df__recent = messages_list_df[messages_list_df['timestamp'] > (datetime.now() - timedelta(minutes=k))]
