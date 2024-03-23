@@ -331,7 +331,7 @@ async def parse_sn_messages_from_last_k_minutes_func(k=10, message_type='all'):
     messages_list_df = await list_sn_messages_func()
     messages_list_df__recent = messages_list_df[messages_list_df['timestamp'] > (datetime.now() - timedelta(minutes=k))]
     if message_type == 'all':
-        list_of_message_dicts = messages_list_df__recent['message_body'].apply().apply(json.loads).tolist()
+        list_of_message_dicts = messages_list_df__recent['message_body'].apply(json.loads).tolist()
     else:
         list_of_message_dicts = messages_list_df__recent[messages_list_df__recent['message_type'] == message_type]['message_body'].apply(json.loads).tolist()
     return list_of_message_dicts
