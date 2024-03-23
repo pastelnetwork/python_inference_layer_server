@@ -336,7 +336,7 @@ async def list_sn_messages_func():
                 }
                 new_messages_data.append(new_message)
         new_messages_df = pd.DataFrame(new_messages_data)
-        combined_messages_df = pd.concat([db_messages_df, new_messages_df])
+        combined_messages_df = pd.concat([db_messages_df, new_messages_df], ignore_index=True)
         combined_messages_df['timestamp'] = pd.to_datetime(combined_messages_df['timestamp'])
         combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
         combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
