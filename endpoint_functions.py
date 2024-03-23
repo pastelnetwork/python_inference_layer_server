@@ -1,7 +1,7 @@
 import service_functions
 import database_code as db
 from logger_config import setup_logger
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request, Body, Path
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.exceptions import HTTPException
 from json import JSONEncoder
@@ -10,8 +10,11 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from pydantic import SecretStr
-logger = setup_logger()
+from decouple import Config as DecoupleConfig, RepositoryEnv
 
+config = DecoupleConfig(RepositoryEnv('.env'))
+TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0)
+logger = setup_logger()
 
 # RPC Client Dependency
 async def get_rpc_connection():
@@ -20,6 +23,12 @@ async def get_rpc_connection():
 
 router = APIRouter()
 
+def localhost_only(request: Request):
+    client_host = request.client.host
+    if not TEMP_OVERRIDE_LOCALHOST_ONLY:
+        if client_host != "127.0.0.1":
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    
 class DateTimeEncoder(JSONEncoder):
     def default(self, obj):
         if isinstance(obj, (datetime.date, datetime.datetime)):
@@ -99,11 +108,14 @@ async def get_supernode_list_csv(
         logger.error(f"Error getting supernode list CSV: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-@router.get("/get_local_machine_sn_info", response_model=db.LocalMachineSupernodeInfo)
+
+@router.get("/get_local_machine_sn_info", response_model=db.LocalMachineSupernodeInfo, dependencies=[Depends(localhost_only)])
 async def get_local_machine_sn_info(
     rpc_connection=Depends(get_rpc_connection),
 ):
     """
+    Note: Endpoint only available on localhost.
+        
     Retrieves information about the local machine's Supernode status.
 
     Returns a LocalMachineSupernodeInfo object containing the following fields:
@@ -144,12 +156,14 @@ async def get_local_machine_sn_info(
         raise HTTPException(status_code=500, detail="Internal Server Error")
     
     
-@router.get("/get_sn_data_from_pastelid", response_model=db.SupernodeData)
+@router.get("/get_sn_data_from_pastelid", response_model=db.SupernodeData, dependencies=[Depends(localhost_only)])
 async def get_sn_data_from_pastelid(
     pastelid: str = Query(..., description="The PastelID of the Supernode"),
     rpc_connection=Depends(get_rpc_connection),
 ):
     """
+    Note: Endpoint only available on localhost.
+        
     Retrieves Supernode data based on the specified PastelID.
 
     - `pastelid`: The PastelID of the Supernode.
@@ -179,12 +193,14 @@ async def get_sn_data_from_pastelid(
         raise HTTPException(status_code=500, detail="Internal Server Error")    
     
     
-@router.get("/get_sn_data_from_sn_pubkey", response_model=db.SupernodeData)
+@router.get("/get_sn_data_from_sn_pubkey", response_model=db.SupernodeData, dependencies=[Depends(localhost_only)])
 async def get_sn_data_from_sn_pubkey(
     pubkey: str = Query(..., description="The public key of the Supernode"),
     rpc_connection=Depends(get_rpc_connection),
 ):
     """
+    Note: Endpoint only available on localhost.
+        
     Retrieves Supernode data based on the specified Supernode public key.
 
     - `pubkey`: The public key of the Supernode.
@@ -214,13 +230,15 @@ async def get_sn_data_from_sn_pubkey(
         raise HTTPException(status_code=500, detail="Internal Server Error")
         
 
-@router.get("/get_messages", response_model=List[db.MessageModel])
+@router.get("/get_messages", response_model=List[db.MessageModel], dependencies=[Depends(localhost_only)])
 async def get_messages(
     last_k_minutes: Optional[int] = Query(100, description="Number of minutes to retrieve messages from"),
     message_type: Optional[str] = Query("all", description="Type of messages to retrieve ('all' or specific type)"),
     rpc_connection=Depends(get_rpc_connection),
 ):
     """
+    Note: Endpoint only available on localhost.
+        
     Retrieves Supernode messages from the last specified minutes.
 
     - `last_k_minutes`: Number of minutes to retrieve messages from (default: 100).
@@ -244,7 +262,7 @@ async def get_messages(
         raise HTTPException(status_code=500, detail=f"Error retrieving messages: {str(e)}")
     
 
-@router.post("/send_message_to_list_of_sns", response_model=db.SendMessageResponse)
+@router.post("/broadcast_message_to_all_sns", response_model=db.SendMessageResponse, dependencies=[Depends(localhost_only)])
 async def send_message_to_list_of_sns(
     message: str = Query(..., description="Message to broadcast"),
     message_type: str = Query(..., description="Type of the message"),
@@ -254,6 +272,8 @@ async def send_message_to_list_of_sns(
     rpc_connection=Depends(get_rpc_connection),
 ):
     """
+    Note: Endpoint only available on localhost.
+        
     Broadcasts a message to a list of Supernodes.
 
     - `message`: Message to broadcast.
@@ -274,7 +294,7 @@ async def send_message_to_list_of_sns(
         return db.SendMessageResponse(status="error", message=f"Error broadcasting message: {str(e)}")
 
 
-@router.post("/broadcast_message_to_all_sns", response_model=db.SendMessageResponse)
+@router.post("/broadcast_message_to_all_sns", response_model=db.SendMessageResponse, dependencies=[Depends(localhost_only)])
 async def broadcast_message_to_all_sns(
     message: str = Query(..., description="Message to broadcast"),
     message_type: str = Query(..., description="Type of the message"),
@@ -283,6 +303,8 @@ async def broadcast_message_to_all_sns(
     rpc_connection=Depends(get_rpc_connection),
 ):
     """
+    Note: Endpoint only available on localhost.
+    
     Broadcasts a message to a list of Supernodes.
 
     - `message`: Message to broadcast.
@@ -301,6 +323,110 @@ async def broadcast_message_to_all_sns(
         logger.error(f"Error broadcasting message: {str(e)}")
         return db.SendMessageResponse(status="error", message=f"Error broadcasting message: {str(e)}")
 
+
+@router.post("/request_challenge")
+async def request_challenge(
+    pastelid: str = Body(..., description="The PastelID requesting the challenge"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    """
+    Request a challenge string for authentication.
+
+    - `pastelid`: The PastelID requesting the challenge.
+
+    Returns a dictionary containing the challenge string and the challenge ID.
+    """
+    try:
+        challenge, challenge_id = await service_functions.generate_challenge(pastelid)
+        return {"challenge": challenge, "challenge_id": challenge_id}
+    except Exception as e:
+        logger.error(f"Error generating challenge: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating challenge: {str(e)}")
+
+
+@router.post("/send_user_message", response_model=db.SupernodeUserMessageModel)
+async def send_user_message(
+    user_message: db.UserMessageCreate = Body(...),
+    pastelid_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    """
+    Send a user message via Supernodes.
+
+    - `user_message`: The user message to be sent, including `from_pastelid`, `to_pastelid`, `message_body`, and `signature`.
+    - `pastelid_signature`: The signature of the PastelID on the challenge string.
+    - `challenge_id`: The ID of the challenge string.
+
+    Returns a `SupernodeUserMessageModel` representing the sent message.
+    """
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            user_message.from_pastelid, pastelid_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        supernode_user_message = await service_functions.send_user_message_via_supernodes(
+            user_message.from_pastelid, user_message.to_pastelid, user_message.message_body, user_message.signature
+        )
+        return db.SupernodeUserMessageModel(
+            message=supernode_user_message.user_message.message_body,
+            message_type="user_message",
+            sending_sn_pastelid=supernode_user_message.sending_sn_pastelid,
+            timestamp=supernode_user_message.user_message.timestamp,
+            id=supernode_user_message.id,
+            user_message=db.UserMessageModel(
+                from_pastelid=supernode_user_message.user_message.from_pastelid,
+                to_pastelid=supernode_user_message.user_message.to_pastelid,
+                message_body=supernode_user_message.user_message.message_body,
+                signature=supernode_user_message.user_message.signature,
+                id=supernode_user_message.user_message.id,
+                timestamp=supernode_user_message.user_message.timestamp
+            )
+        )
+    except Exception as e:
+        logger.error(f"Error sending user message: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error sending user message: {str(e)}")
+
+
+@router.get("/get_user_messages/{pastelid}", response_model=List[db.UserMessageModel])
+async def get_user_messages(
+    pastelid: str = Path(..., description="The PastelID to retrieve messages for"),
+    pastelid_signature: str = Query(..., description="The signature of the PastelID on the challenge string"),
+    challenge_id: str = Query(..., description="The ID of the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    """
+    Retrieve all user messages (sent and received) for a given PastelID.
+
+    - `pastelid`: The PastelID to retrieve messages for.
+    - `pastelid_signature`: The signature of the PastelID on the challenge string.
+    - `challenge_id`: The ID of the challenge string.
+
+    Returns a list of `UserMessageModel` objects representing the user messages.
+    """
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            pastelid, pastelid_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        user_messages = await service_functions.get_user_messages_for_pastelid(pastelid)
+        return [
+            db.UserMessageModel(
+                from_pastelid=message.from_pastelid,
+                to_pastelid=message.to_pastelid,
+                message_body=message.message_body,
+                signature=message.signature,
+                id=message.id,
+                timestamp=message.timestamp
+            )
+            for message in user_messages
+        ]
+    except Exception as e:
+        logger.error(f"Error retrieving user messages: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving user messages: {str(e)}")
+    
 
 @router.get("/get_inference_model_menu")
 async def get_inference_model_menu_endpoint(

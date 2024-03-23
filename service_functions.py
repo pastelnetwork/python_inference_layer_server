@@ -18,8 +18,11 @@ import urllib.parse as urlparse
 from logger_config import setup_logger
 import zstandard as zstd
 from database_code import AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata
-from database_code import InferenceCreditPack, InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult
+from database_code import InferenceCreditPack, InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage
 from sqlalchemy import select, func
+from typing import List
+from decouple import Config as DecoupleConfig, RepositoryEnv
+
 
 # Logger setup
 logger = setup_logger()
@@ -29,8 +32,13 @@ my_os = platform.system()
 loop = asyncio.get_event_loop()
 warnings.filterwarnings('ignore')
 
-NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = 3
-GITHUB_MODEL_MENU_URL = "https://raw.githubusercontent.com/pastelnetwork/python_supernode_messaging_and_control_layer/master/model_menu.json"
+config = DecoupleConfig(RepositoryEnv('.env'))
+TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0)
+
+NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = config.get("NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE", default=3)
+GITHUB_MODEL_MENU_URL = config.get("GITHUB_MODEL_MENU_URL")
+CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_SECONDS", default=300)
+
 
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
@@ -200,6 +208,48 @@ async def verify_message_with_pastelid_func(pastelid, message_to_verify, pasteli
     global rpc_connection
     verification_result = await rpc_connection.pastelid('verify', message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
     return verification_result['verification']
+
+
+async def generate_challenge(pastelid: str) -> Tuple[str, str]:
+    """
+    Generates a random challenge string and a unique challenge ID for a given PastelID.
+    The challenge string is stored temporarily, associated with the challenge ID, and expires after a certain period of time.
+    """
+    challenge_string = str(uuid.uuid4())
+    challenge_id = str(uuid.uuid4())
+    expiration_time = time.time() + CHALLENGE_EXPIRATION_TIME_IN_SECONDS
+    challenge_store[challenge_id] = {
+        "pastelid": pastelid,
+        "challenge_string": challenge_string,
+        "expiration_time": expiration_time
+    }
+    return challenge_string, challenge_id
+
+async def verify_challenge_signature(pastelid: str, signature: str, challenge_id: str) -> bool:
+    """
+    Verifies the signature of the PastelID on the challenge string associated with the provided challenge ID.
+    If the signature is valid and the challenge ID exists and hasn't expired, it returns True. Otherwise, it returns False.
+    """
+    global rpc_connection
+    if challenge_id not in challenge_store:
+        return False
+    challenge_data = challenge_store[challenge_id]
+    stored_pastelid = challenge_data["pastelid"]
+    challenge_string = challenge_data["challenge_string"]
+    expiration_time = challenge_data["expiration_time"]
+    if pastelid != stored_pastelid:
+        return False
+    current_time = time.time()
+    if current_time > expiration_time:
+        del challenge_store[challenge_id]
+        return False
+    verification_result = await rpc_connection.pastelid('verify', challenge_string, signature, pastelid, 'ed448')
+    is_valid_signature = verification_result['verification'] == 'OK'
+    if is_valid_signature:
+        del challenge_store[challenge_id]
+        return True
+    else:
+        return False
 
 async def check_masternode_top_func():
     global rpc_connection
@@ -576,6 +626,72 @@ async def monitor_new_messages():
         except Exception as e:
             logger.error(f"Error while monitoring new messages: {str(e)}")
             await asyncio.sleep(5)
+            
+async def create_user_message(from_pastelid: str, to_pastelid: str, message_body: str, signature: str) -> UserMessage:
+    user_message = UserMessage(from_pastelid=from_pastelid, to_pastelid=to_pastelid, message_body=message_body, signature=signature)
+    async with AsyncSessionLocal() as db:
+        db.add(user_message)
+        await db.commit()
+        await db.refresh(user_message)
+    return user_message
+
+async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_pastelid: str, user_message: UserMessage) -> SupernodeUserMessage:
+    supernode_user_message = SupernodeUserMessage(
+        sending_sn_pastelid=sending_sn_pastelid,
+        receiving_sn_pastelid=receiving_sn_pastelid,
+        user_message_id=user_message.id
+    )
+    async with AsyncSessionLocal() as db:
+        db.add(supernode_user_message)
+        await db.commit()
+        await db.refresh(supernode_user_message)
+    return supernode_user_message
+
+async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str, message_body: str, signature: str, pastelid_passphrase: str):
+    user_message = await create_user_message(from_pastelid, to_pastelid, message_body, signature)
+
+    local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
+    sending_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
+
+    receiving_sn_data = await get_sn_data_from_pastelid_func(to_pastelid)
+    if receiving_sn_data.empty:
+        raise ValueError(f"No Supernode found for PastelID: {to_pastelid}")
+    receiving_sn_pastelid = receiving_sn_data['extKey'].values.tolist()[0]
+
+    supernode_user_message = await create_supernode_user_message(sending_sn_pastelid, receiving_sn_pastelid, user_message)
+
+    signed_message_to_send = json.dumps({
+        'message': user_message.message_body,
+        'message_type': 'user_message',
+        'signature': user_message.signature,
+        'from_pastelid': user_message.from_pastelid,
+        'to_pastelid': user_message.to_pastelid
+    }, ensure_ascii=False)
+
+    await send_message_to_sn_using_pastelid_func(signed_message_to_send, 'user_message', receiving_sn_pastelid, pastelid_passphrase)
+
+    return supernode_user_message
+
+async def process_received_user_message(supernode_user_message: SupernodeUserMessage):
+    async with AsyncSessionLocal() as db:
+        user_message = await db.get(UserMessage, supernode_user_message.user_message_id)
+        if user_message:
+            verification_status = await verify_received_message_using_pastelid_func(user_message.message_body.encode('utf-8'), user_message.from_pastelid)
+            if verification_status == 'OK':
+                # Process the user message (e.g., store it, forward it to the recipient, etc.)
+                logger.info(f"Received and verified user message from {user_message.from_pastelid} to {user_message.to_pastelid}")
+            else:
+                logger.warning(f"Received user message from {user_message.from_pastelid} to {user_message.to_pastelid}, but verification failed")
+        else:
+            logger.warning(f"Received SupernodeUserMessage (id: {supernode_user_message.id}), but the associated UserMessage was not found")
+
+async def get_user_messages_for_pastelid(pastelid: str) -> List[UserMessage]:
+    async with AsyncSessionLocal() as db:
+        user_messages = await db.execute(select(UserMessage).where((UserMessage.from_pastelid == pastelid) | (UserMessage.to_pastelid == pastelid)))
+        return user_messages.scalars().all()
+            
+            
+#________________________________________________________________________________________________________________            
 
 async def get_inference_model_menu():
     try:

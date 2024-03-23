@@ -25,9 +25,52 @@ class MessageModel(BaseModel):
             datetime: lambda v: v.isoformat()
         }
 
+class UserMessage(Base):
+    __tablename__ = "user_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    from_pastelid = Column(String, index=True)
+    to_pastelid = Column(String, index=True)
+    message_body = Column(Text)
+    signature = Column(String)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+class SupernodeUserMessage(MessageModel):
+    __tablename__ = "supernode_user_messages"
+
+    id: int = Column(Integer, ForeignKey("messages.id"), primary_key=True)
+    user_message_id: int = Column(Integer, ForeignKey("user_messages.id"), index=True)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "supernode_user_message",
+    }
+    
 class SendMessageResponse(BaseModel):
     status: str
     message: str
+
+class UserMessageCreate(BaseModel):
+    from_pastelid: str
+    to_pastelid: str
+    message_body: str
+    signature: str
+
+class UserMessageModel(UserMessageCreate):
+    id: int
+    timestamp: datetime
+
+    class Config:
+        from_attributes = True
+
+class SupernodeUserMessageCreate(MessageModel):
+    user_message: UserMessageCreate
+
+class SupernodeUserMessageModel(MessageModel):
+    id: int
+    user_message: UserMessageModel
+
+    class Config:
+        from_attributes = True
 
 class SupernodeData(BaseModel):
     supernode_status: str
