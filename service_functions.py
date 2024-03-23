@@ -290,7 +290,8 @@ async def list_sn_messages_func():
         # Retrieve messages from the database
         result = await db.execute(select(Message).where(Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages).order_by(Message.timestamp.desc()))
         db_messages_df = pd.DataFrame([message.to_dict() for message in result.scalars().all()])
-        db_messages_df['timestamp'] = pd.to_datetime(db_messages_df['timestamp'])
+        if not db_messages_df.empty:
+            db_messages_df['timestamp'] = pd.to_datetime(db_messages_df['timestamp'])
         # Retrieve new messages from the RPC interface
         new_messages = await rpc_connection.masternode('message', 'list')
         new_messages_data = []
@@ -306,14 +307,15 @@ async def list_sn_messages_func():
                 continue
             message_timestamp = pd.to_datetime(datetime.fromtimestamp(message['Timestamp']))
             # Check if the message already exists in the database
-            existing_message = db_messages_df[
-                (db_messages_df['sending_sn_pastelid'] == sending_pastelid) &
-                (db_messages_df['receiving_sn_pastelid'] == receiving_pastelid) &
-                (db_messages_df['timestamp'] == message_timestamp)
-            ]
-            if not existing_message.empty:
-                logger.debug(f"Message already exists in the database. Skipping...")
-                continue
+            if not db_messages_df.empty:
+                existing_message = db_messages_df[
+                    (db_messages_df['sending_sn_pastelid'] == sending_pastelid) &
+                    (db_messages_df['receiving_sn_pastelid'] == receiving_pastelid) &
+                    (db_messages_df['timestamp'] == message_timestamp)
+                ]
+                if not existing_message.empty:
+                    logger.debug(f"Message already exists in the database. Skipping...")
+                    continue
             message_body = base64.b64decode(message['Message'].encode('utf-8'))
             verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
             decompressed_message = await decompress_data_with_zstd_func(message_body)
@@ -338,8 +340,9 @@ async def list_sn_messages_func():
                 new_messages_data.append(new_message)
         new_messages_df = pd.DataFrame(new_messages_data)
         combined_messages_df = pd.concat([db_messages_df, new_messages_df], ignore_index=True)
-        combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
-        combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
+        if not combined_messages_df.empty:
+            combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
+            combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
     return combined_messages_df
 
 async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase) -> str:
@@ -354,15 +357,18 @@ async def parse_sn_messages_from_last_k_minutes_func(k=10, message_type='all'):
         list_of_message_dicts = messages_list_df__recent[['message_body', 'message_type', 'sending_sn_pastelid', 'timestamp']].to_dict(orient='records')
     else:
         list_of_message_dicts = messages_list_df__recent[messages_list_df__recent['message_type'] == message_type][['message_body', 'message_type', 'sending_sn_pastelid', 'timestamp']].to_dict(orient='records')
-    return [
-        {
-            'message': json.loads(msg['message_body'])['message'],  # Extract the 'message' field as a string
-            'message_type': msg['message_type'],
-            'sending_sn_pastelid': msg['sending_sn_pastelid'],
-            'timestamp': msg['timestamp']
-        }
-        for msg in list_of_message_dicts
-    ]
+    if len(list_of_message_dicts) > 0:
+        return [
+            {
+                'message': json.loads(msg['message_body'])['message'],  # Extract the 'message' field as a string
+                'message_type': msg['message_type'],
+                'sending_sn_pastelid': msg['sending_sn_pastelid'],
+                'timestamp': msg['timestamp'].isoformat()  # Convert timestamp to ISO format
+            }
+            for msg in list_of_message_dicts
+        ]
+    else:
+        return []
 
 async def verify_received_message_using_pastelid_func(message_received, sending_sn_pastelid):
     try:
@@ -448,7 +454,7 @@ async def monitor_new_messages():
             async with AsyncSessionLocal() as db:
                 if last_processed_timestamp is None:
                     result = await db.execute(select(Message.timestamp).order_by(Message.timestamp.desc()).limit(1))
-                    last_processed_timestamp = result.scalar()
+                    last_processed_timestamp = await result.scalar()
                     if last_processed_timestamp is None:
                         last_processed_timestamp = pd.Timestamp.min
                 new_messages_df = await list_sn_messages_func()
@@ -463,7 +469,7 @@ async def monitor_new_messages():
                                     Message.timestamp == message['timestamp']
                                 )
                             )
-                            existing_message = result.scalar()
+                            existing_message = await result.scalar()
                             if existing_message:
                                 continue
                             logger.info(f"New message received: {message['message_body']}")
@@ -472,9 +478,10 @@ async def monitor_new_messages():
                             receiving_sn_pastelid = message['receiving_sn_pastelid']
                             message_size_bytes = len(message['message_body'].encode('utf-8'))
                             # Update MessageSenderMetadata
-                            sender_metadata = await db.execute(
+                            result = await db.execute(
                                 select(MessageSenderMetadata).where(MessageSenderMetadata.sending_sn_pastelid == sending_sn_pastelid)
-                            ).scalar()
+                            )
+                            sender_metadata = await result.scalar()
                             if sender_metadata:
                                 sender_metadata.total_messages_sent += 1
                                 sender_metadata.total_data_sent_bytes += message_size_bytes
@@ -490,9 +497,10 @@ async def monitor_new_messages():
                                 )
                                 db.add(sender_metadata)
                             # Update MessageReceiverMetadata
-                            receiver_metadata = await db.execute(
+                            result = await db.execute(
                                 select(MessageReceiverMetadata).where(MessageReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid)
-                            ).scalar()
+                            )
+                            receiver_metadata = await result.scalar()
                             if receiver_metadata:
                                 receiver_metadata.total_messages_received += 1
                                 receiver_metadata.total_data_received_bytes += message_size_bytes
@@ -506,12 +514,13 @@ async def monitor_new_messages():
                                 )
                                 db.add(receiver_metadata)
                             # Update MessageSenderReceiverMetadata
-                            sender_receiver_metadata = await db.execute(
+                            result = await db.execute(
                                 select(MessageSenderReceiverMetadata).where(
                                     MessageSenderReceiverMetadata.sending_sn_pastelid == sending_sn_pastelid,
                                     MessageSenderReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid
                                 )
-                            ).scalar()
+                            )
+                            sender_receiver_metadata = await result.scalar()
                             if sender_receiver_metadata:
                                 sender_receiver_metadata.total_messages += 1
                                 sender_receiver_metadata.total_data_bytes += message_size_bytes
@@ -545,10 +554,11 @@ async def monitor_new_messages():
                                 func.count(func.distinct(Message.receiving_sn_pastelid))
                             )
                         )
-                        total_messages, total_senders, total_receivers = result.first()
-                        message_metadata = await db.execute(
+                        total_messages, total_senders, total_receivers = await result.first()
+                        result = await db.execute(
                             select(MessageMetadata).order_by(MessageMetadata.timestamp.desc()).limit(1)
-                        ).scalar()
+                        )
+                        message_metadata = await result.scalar()
                         if message_metadata:
                             message_metadata.total_messages = total_messages
                             message_metadata.total_senders = total_senders
