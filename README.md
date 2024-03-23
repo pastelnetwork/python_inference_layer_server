@@ -76,9 +76,60 @@ uvicorn main:app --reload
 
 The server will start running at `http://localhost:7123`.
 
-## API Documentation
+## Configuration
 
-The API documentation is available at `http://localhost:7123` when the server is running. It is powered by Swagger and provides detailed information about the available endpoints, request/response schemas, and example usage.
+The application uses environment variables for configuration. You can set these variables in the `.env` file located in the project root directory. The following variables are required:
+
+- `DATABASE_URL`: The URL for the SQLite database (e.g., `sqlite:///./database.db`).
+- `RPC_HOST`: The hostname or IP address of the Pastel node's RPC server.
+- `RPC_PORT`: The port number of the Pastel node's RPC server.
+- `RPC_USER`: The username for authenticating with the RPC server.
+- `RPC_PASSWORD`: The password for authenticating with the RPC server.
+- `UVICORN_PORT`: The port number on which the FastAPI server should run (default: 7123).
+
+## Endpoints
+
+The following endpoints are available in the Pastel Supernode Messaging and Control Layer:
+
+- `/supernode_list_json`: Retrieves the list of Supernodes as JSON data.
+- `/supernode_list_csv`: Retrieves the list of Supernodes as a normalized CSV file.
+- `/get_local_machine_sn_info`: Retrieves information about the local machine's Supernode status.
+- `/get_sn_data_from_pastelid`: Retrieves Supernode data based on the specified PastelID.
+- `/get_sn_data_from_sn_pubkey`: Retrieves Supernode data based on the specified Supernode public key.
+- `/get_messages`: Retrieves Supernode messages from the last specified minutes.
+- `/broadcast_message_to_all_sns`: Broadcasts a message to a list of Supernodes.
+- `/request_challenge`: Request a challenge string for authentication.
+- `/send_user_message`: Send a user message via Supernodes.
+- `/get_user_messages/{pastelid}`: Retrieve all user messages (sent and received) for a given PastelID.
+- `/get_inference_model_menu`: Retrieve the inference model menu.
+- `/validate_inference_api_usage_request`: Validate an inference API usage request.
+- `/process_inference_confirmation`: Process an inference confirmation.
+- `/execute_inference_request`: Execute an inference request.
+- `/send_inference_output_results`: Send inference output results.
+- `/update_inference_sn_reputation_score`: Update the inference Supernode reputation score.
+- `/show_logs/{minutes}`: Show application logs for the specified number of minutes.
+
+Refer to the API documentation available at `http://localhost:7123` when the server is running. It is powered by Swagger and provides detailed information about the available endpoints, request/response schemas, and example usage.
+
+## Database
+
+The application uses SQLite as the database backend. The database file is located at `./super_node_messaging_and_control_layer.sqlite` by default. The database schema is defined in the `database_code.py` file.
+
+The following tables are used:
+
+- `messages`: Stores the Supernode messages.
+- `message_metadata`: Stores metadata about the messages.
+- `message_sender_metadata`: Stores metadata about message senders.
+- `message_receiver_metadata`: Stores metadata about message receivers.
+- `message_sender_receiver_metadata`: Stores metadata about sender-receiver pairs.
+
+## Logging
+
+The application uses the `logging` module for logging. The logger is configured in the `logger_config.py` file. Log messages are written to the console and the `opennode_fastapi_log.txt` file.
+
+The log format includes the timestamp, log level, and message. The log levels used are INFO, WARNING, and ERROR.
+
+You can view the application logs by accessing the `/show_logs/{minutes}` endpoint, which displays the logs for the specified number of minutes.
 
 ## Usage
 
