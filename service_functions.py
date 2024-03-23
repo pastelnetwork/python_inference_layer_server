@@ -442,6 +442,8 @@ async def monitor_new_messages():
                 if last_processed_timestamp is None:
                     result = await db.execute(select(Message.timestamp).order_by(Message.timestamp.desc()).limit(1))
                     last_processed_timestamp = result.scalar()
+                    if last_processed_timestamp is None:
+                        last_processed_timestamp = pd.Timestamp.min  # Set to the minimum possible timestamp
                 new_messages_df = await list_sn_messages_func()
                 if not new_messages_df.empty:
                     new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
@@ -462,7 +464,11 @@ async def monitor_new_messages():
                             sending_sn_pastelid = message['sending_sn_pastelid']
                             receiving_sn_pastelid = message['receiving_sn_pastelid']
                             message_size_bytes = len(message['message_body'].encode('utf-8'))
-
+                            
+                            # Update MessageSenderMetadata
+                            sender_metadata = await db.execute(
+                                select(MessageSenderMetadata).where(MessageSenderMetadata.sending_sn_pastelid == sending_sn_pastelid)
+                            ).scalar()
                             if sender_metadata:
                                 sender_metadata.total_messages_sent += 1
                                 sender_metadata.total_data_sent_bytes += message_size_bytes
@@ -521,7 +527,7 @@ async def monitor_new_messages():
                                 func.count(func.distinct(Message.receiving_sn_pastelid))
                             )
                         )
-                        total_messages, total_senders, total_receivers = metadata.first()
+                        total_messages, total_senders, total_receivers = metadata.scalar()
                         message_metadata = MessageMetadata(
                             total_messages=total_messages,
                             total_senders=total_senders,
