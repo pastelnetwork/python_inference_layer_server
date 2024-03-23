@@ -232,36 +232,8 @@ async def get_messages(
     return [db.MessageModel(message=msg["message"], message_type=msg["message_type"]) for msg in messages]
 
 
-@router.post("/send_message", response_model=db.SendMessageResponse)
-async def send_message(
-    message: str = Query(..., description="Message to send"),
-    message_type: str = Query(..., description="Type of the message"),
-    receiving_sn_pastelid: str = Query(..., description="PastelID of the receiving Supernode"),
-    pastelid_passphrase: SecretStr = Query(..., description="Passphrase for the sending PastelID"),
-    rpc_connection=Depends(get_rpc_connection),
-):
-    """
-    Sends a message to a specific Supernode.
-
-    - `message`: Message to send.
-    - `message_type`: Type of the message.
-    - `receiving_sn_pastelid`: PastelID of the receiving Supernode.
-    - `pastelid_passphrase`: Passphrase for the sending PastelID.
-
-    Returns a SendMessageResponse object containing the status and message.
-    """
-    try:
-        signed_message = await service_functions.send_message_to_sn_using_pastelid_func(
-            message, message_type, receiving_sn_pastelid, pastelid_passphrase.get_secret_value()
-        )
-        return db.SendMessageResponse(status="success", message=f"Message sent: {signed_message}")
-    except Exception as e:
-        logger.error(f"Error sending message: {str(e)}")
-        return db.SendMessageResponse(status="error", message=f"Error sending message: {str(e)}")
-
-
-@router.post("/broadcast_message", response_model=db.SendMessageResponse)
-async def broadcast_message(
+@router.post("/send_message_to_list_of_sns", response_model=db.SendMessageResponse)
+async def send_message_to_list_of_sns(
     message: str = Query(..., description="Message to broadcast"),
     message_type: str = Query(..., description="Type of the message"),
     list_of_receiving_sn_pastelids: List[str] = Query(..., description="List of PastelIDs of the receiving Supernodes"),
@@ -283,6 +255,34 @@ async def broadcast_message(
     try:
         signed_message = await service_functions.broadcast_message_to_list_of_sns_using_pastelid_func(
             message, message_type, list_of_receiving_sn_pastelids, pastelid_passphrase.get_secret_value(), verbose
+        )
+        return db.SendMessageResponse(status="success", message=f"Message broadcasted: {signed_message}")
+    except Exception as e:
+        logger.error(f"Error broadcasting message: {str(e)}")
+        return db.SendMessageResponse(status="error", message=f"Error broadcasting message: {str(e)}")
+
+
+@router.post("/broadcast_message_to_all_sns", response_model=db.SendMessageResponse)
+async def broadcast_message_to_all_sns(
+    message: str = Query(..., description="Message to broadcast"),
+    message_type: str = Query(..., description="Type of the message"),
+    pastelid_passphrase: SecretStr = Query(..., description="Passphrase for the sending PastelID"),
+    verbose: Optional[int] = Query(0, description="Verbose mode (0 or 1)"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    """
+    Broadcasts a message to a list of Supernodes.
+
+    - `message`: Message to broadcast.
+    - `message_type`: Type of the message.
+    - `pastelid_passphrase`: Passphrase for the sending PastelID.
+    - `verbose`: Verbose mode (0 or 1) (default: 0).
+
+    Returns a SendMessageResponse object containing the status and message.
+    """
+    try:
+        signed_message = await service_functions.broadcast_message_to_all_sns_using_pastelid_func(
+            message, message_type, pastelid_passphrase.get_secret_value(), verbose
         )
         return db.SendMessageResponse(status="success", message=f"Message broadcasted: {signed_message}")
     except Exception as e:

@@ -397,6 +397,32 @@ async def broadcast_message_to_list_of_sns_using_pastelid_func(message_to_send, 
         logger.info(f"Message sent to {len(list_of_receiving_sn_pastelids)} SNs")
     return signed_message_to_send
 
+async def broadcast_message_to_all_sns_using_pastelid_func(message_to_send, message_type, pastelid_passphrase, verbose=0):
+    global rpc_connection
+    local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
+    sending_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
+    sending_sn_pubkey = local_machine_supernode_data['pubkey'].values.tolist()[0]
+    pastelid_signature_on_message = await sign_message_with_pastelid_func(sending_sn_pastelid, message_to_send, pastelid_passphrase)
+    signed_message_to_send = json.dumps({
+        'message': message_to_send,
+        'message_type': message_type,
+        'signature': pastelid_signature_on_message,
+        'sending_sn_pubkey': sending_sn_pubkey
+    })
+    compressed_message, _ = await compress_data_with_zstd_func(signed_message_to_send.encode('utf-8'))
+    compressed_message_base64 = base64.b64encode(compressed_message).decode('utf-8')
+    list_of_receiving_sn_pastelids = (await check_supernode_list_func())[0]['extKey'].values.tolist()
+    if verbose:
+        logger.info(f"Sending message to ALL {len(list_of_receiving_sn_pastelids)} SNs...")
+    for idx, current_receiving_sn_pastelid in enumerate(list_of_receiving_sn_pastelids):
+        current_receiving_sn_pubkey = (await get_sn_data_from_pastelid_func(current_receiving_sn_pastelid))['pubkey'].values.tolist()[0]
+        if verbose:
+            logger.info(f"Now sending message to SN with PastelID: {current_receiving_sn_pastelid} and SN pubkey: {current_receiving_sn_pubkey}")
+        await rpc_connection.masternode('message','send', current_receiving_sn_pubkey, compressed_message_base64)
+    if verbose:
+        logger.info(f"Message sent to {len(list_of_receiving_sn_pastelids)} SNs")
+    return signed_message_to_send
+
 async def monitor_new_messages():
     last_processed_timestamp = None
     while True:
