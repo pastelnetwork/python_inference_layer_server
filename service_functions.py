@@ -298,8 +298,8 @@ async def list_sn_messages_func():
             message = message[message_key]
             sending_sn_txid_vout = message['From']
             receiving_sn_txid_vout = message['To']
-            sending_pastelid = txid_vout_to_pastelid_dict[sending_sn_txid_vout]
-            receiving_pastelid = txid_vout_to_pastelid_dict[receiving_sn_txid_vout]
+            sending_pastelid = txid_vout_to_pastelid_dict.get(sending_sn_txid_vout)
+            receiving_pastelid = txid_vout_to_pastelid_dict.get(receiving_sn_txid_vout)
             message_timestamp = datetime.fromtimestamp(message['Timestamp'])
             # Check if the message already exists in the database
             existing_message = db_messages_df[
@@ -333,8 +333,6 @@ async def list_sn_messages_func():
                 )
                 new_messages_data.append(new_message.to_dict())
         new_messages_df = pd.DataFrame(new_messages_data, columns=['sending_sn_pastelid', 'receiving_sn_pastelid', 'message_type', 'message_body', 'signature', 'timestamp', 'sending_sn_txid_vout', 'receiving_sn_txid_vout'])
-        new_messages_df['sending_sn_txid_vout'] = new_messages_df['sending_sn_pastelid'].map(pastelid_to_txid_vout_dict)
-        new_messages_df['receiving_sn_txid_vout'] = new_messages_df['receiving_sn_pastelid'].map(pastelid_to_txid_vout_dict)
         combined_messages_df = pd.concat([db_messages_df, new_messages_df])
         combined_messages_df['timestamp'] = pd.to_datetime(combined_messages_df['timestamp'])
         combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
