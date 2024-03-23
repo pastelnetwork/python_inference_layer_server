@@ -300,10 +300,29 @@ async def list_sn_messages_func():
             receiving_sn_txid_vout = message['To']
             sending_pastelid = txid_vout_to_pastelid_dict[sending_sn_txid_vout]
             receiving_pastelid = txid_vout_to_pastelid_dict[receiving_sn_txid_vout]
+            message_timestamp = datetime.fromtimestamp(message['Timestamp'])
+            # Check if the message already exists in the database
+            existing_message = await db.execute(
+                select(Message).where(
+                    Message.sending_sn_pastelid == sending_pastelid,
+                    Message.receiving_sn_pastelid == receiving_pastelid,
+                    Message.timestamp == message_timestamp
+                )
+            ).first()
+            if existing_message is not None:
+                logger.debug(f"Message already exists in the database. Skipping...")
+                continue
             message_body = base64.b64decode(message['Message'].encode('utf-8'))
             verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
             decompressed_message = await decompress_data_with_zstd_func(message_body)
-            message_dict = json.loads(decompressed_message)
+            decompressed_message = decompressed_message.decode('utf-8')
+            decompressed_message = unidecode(decompressed_message)
+            try:
+                message_dict = json.loads(decompressed_message)
+            except json.JSONDecodeError as e:
+                logger.error(f"Error parsing JSON: {e}")
+                logger.error(f"Decompressed message: {decompressed_message}")
+                continue
             if verification_status == 'OK':
                 new_message = Message(
                     sending_sn_pastelid=sending_pastelid,
@@ -311,19 +330,19 @@ async def list_sn_messages_func():
                     message_type=message_dict['message_type'],
                     message_body=decompressed_message,
                     signature=message_dict['signature'],
-                    timestamp=datetime.fromtimestamp(message['Timestamp']),
+                    timestamp=message_timestamp,
                     sending_sn_txid_vout=sending_sn_txid_vout,
                     receiving_sn_txid_vout=receiving_sn_txid_vout
                 )
                 new_messages_data.append(new_message.to_dict())
-                db.add(new_message)
+                db.add(new_message)        
         await db.commit()
         new_messages_df = pd.DataFrame(new_messages_data, columns=['sending_sn_pastelid', 'receiving_sn_pastelid', 'message_type', 'message_body', 'signature', 'timestamp', 'sending_sn_txid_vout', 'receiving_sn_txid_vout'])
         new_messages_df['sending_sn_txid_vout'] = new_messages_df['sending_sn_pastelid'].map(pastelid_to_txid_vout_dict)
         new_messages_df['receiving_sn_txid_vout'] = new_messages_df['receiving_sn_pastelid'].map(pastelid_to_txid_vout_dict)
         combined_messages_df = pd.concat([db_messages_df, new_messages_df])
-        combined_messages_df['timestamp'] = pd.to_datetime(combined_messages_df['timestamp'])      
-        combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]        
+        combined_messages_df['timestamp'] = pd.to_datetime(combined_messages_df['timestamp'])
+        combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
         combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
     return combined_messages_df
 
@@ -369,6 +388,7 @@ async def send_message_to_sn_using_pastelid_func(message_to_send, message_type, 
     compressed_message_base64 = base64.b64encode(compressed_message).decode('utf-8')
     specified_machine_supernode_data = await get_sn_data_from_pastelid_func(receiving_sn_pastelid)
     receiving_sn_pubkey = specified_machine_supernode_data['pubkey'].values.tolist()[0]
+    logger.info(f"Now sending message to SN with PastelID: {receiving_sn_pastelid} and SN pubkey: {receiving_sn_pubkey}: {message_to_send}")
     await rpc_connection.masternode('message','send', receiving_sn_pubkey, compressed_message_base64)
     return signed_message_to_send
 
@@ -387,14 +407,10 @@ async def broadcast_message_to_list_of_sns_using_pastelid_func(message_to_send, 
     compressed_message, _ = await compress_data_with_zstd_func(signed_message_to_send.encode('utf-8'))
     compressed_message_base64 = base64.b64encode(compressed_message).decode('utf-8')
     if verbose:
-        logger.info(f"Sending message to {len(list_of_receiving_sn_pastelids)} SNs...")
+        logger.info(f"Now sending message to list of {len(list_of_receiving_sn_pastelids)} SNs: `{message_to_send}`")        
     for idx, current_receiving_sn_pastelid in enumerate(list_of_receiving_sn_pastelids):
         current_receiving_sn_pubkey = (await get_sn_data_from_pastelid_func(current_receiving_sn_pastelid))['pubkey'].values.tolist()[0]
-        if verbose:
-            logger.info(f"Now sending message to SN with PastelID: {current_receiving_sn_pastelid} and SN pubkey: {current_receiving_sn_pubkey}")
         await rpc_connection.masternode('message','send', current_receiving_sn_pubkey, compressed_message_base64)
-    if verbose:
-        logger.info(f"Message sent to {len(list_of_receiving_sn_pastelids)} SNs")
     return signed_message_to_send
 
 async def broadcast_message_to_all_sns_using_pastelid_func(message_to_send, message_type, pastelid_passphrase, verbose=0):
@@ -413,14 +429,10 @@ async def broadcast_message_to_all_sns_using_pastelid_func(message_to_send, mess
     compressed_message_base64 = base64.b64encode(compressed_message).decode('utf-8')
     list_of_receiving_sn_pastelids = (await check_supernode_list_func())[0]['extKey'].values.tolist()
     if verbose:
-        logger.info(f"Sending message to ALL {len(list_of_receiving_sn_pastelids)} SNs...")
+        logger.info(f"Now sending message to ALL {len(list_of_receiving_sn_pastelids)} SNs: `{message_to_send}`")        
     for idx, current_receiving_sn_pastelid in enumerate(list_of_receiving_sn_pastelids):
         current_receiving_sn_pubkey = (await get_sn_data_from_pastelid_func(current_receiving_sn_pastelid))['pubkey'].values.tolist()[0]
-        if verbose:
-            logger.info(f"Now sending message to SN with PastelID: {current_receiving_sn_pastelid} and SN pubkey: {current_receiving_sn_pubkey}")
         await rpc_connection.masternode('message','send', current_receiving_sn_pubkey, compressed_message_base64)
-    if verbose:
-        logger.info(f"Message sent to {len(list_of_receiving_sn_pastelids)} SNs")
     return signed_message_to_send
 
 async def monitor_new_messages():
@@ -436,15 +448,22 @@ async def monitor_new_messages():
                     new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
                     if not new_messages_df.empty:
                         for _, message in new_messages_df.iterrows():
+                            # Check if the message already exists in the database
+                            existing_message = await db.execute(
+                                select(Message).where(
+                                    Message.sending_sn_pastelid == message['sending_sn_pastelid'],
+                                    Message.receiving_sn_pastelid == message['receiving_sn_pastelid'],
+                                    Message.timestamp == message['timestamp']
+                                )
+                            ).scalar()
+                            if existing_message:
+                                continue  # Skip this message if it already exists
                             logger.info(f"New message received: {message['message_body']}")
                             last_processed_timestamp = message['timestamp']
                             sending_sn_pastelid = message['sending_sn_pastelid']
                             receiving_sn_pastelid = message['receiving_sn_pastelid']
                             message_size_bytes = len(message['message_body'].encode('utf-8'))
-                            # Update MessageSenderMetadata
-                            sender_metadata = await db.execute(
-                                select(MessageSenderMetadata).where(MessageSenderMetadata.sending_sn_pastelid == sending_sn_pastelid)
-                            ).scalar()
+
                             if sender_metadata:
                                 sender_metadata.total_messages_sent += 1
                                 sender_metadata.total_data_sent_bytes += message_size_bytes

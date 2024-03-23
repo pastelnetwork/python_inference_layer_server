@@ -216,21 +216,25 @@ async def get_sn_data_from_sn_pubkey(
         
 @router.get("/get_messages", response_model=List[db.MessageModel])
 async def get_messages(
-    last_k_minutes: Optional[int] = Query(10, description="Number of minutes to retrieve messages from"),
+    last_k_minutes: Optional[int] = Query(100, description="Number of minutes to retrieve messages from"),
     message_type: Optional[str] = Query("all", description="Type of messages to retrieve ('all' or specific type)"),
     rpc_connection=Depends(get_rpc_connection),
 ):
     """
     Retrieves Supernode messages from the last specified minutes.
 
-    - `last_k_minutes`: Number of minutes to retrieve messages from (default: 10).
+    - `last_k_minutes`: Number of minutes to retrieve messages from (default: 100).
     - `message_type`: Type of messages to retrieve ('all' or specific type) (default: 'all').
 
     Returns a list of MessageModel objects containing the message and message_type.
     """
-    messages = await service_functions.parse_sn_messages_from_last_k_minutes_func(last_k_minutes, message_type)
-    return [db.MessageModel(message=msg["message"], message_type=msg["message_type"]) for msg in messages]
-
+    try:
+        messages = await service_functions.parse_sn_messages_from_last_k_minutes_func(last_k_minutes, message_type)
+        return [db.MessageModel(message=msg["message"], message_type=msg["message_type"]) for msg in messages]
+    except Exception as e:
+        logger.error(f"Error retrieving messages: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving messages: {str(e)}")
+    
 
 @router.post("/send_message_to_list_of_sns", response_model=db.SendMessageResponse)
 async def send_message_to_list_of_sns(
