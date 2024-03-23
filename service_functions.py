@@ -458,119 +458,120 @@ async def monitor_new_messages():
                     if last_processed_timestamp is None:
                         last_processed_timestamp = pd.Timestamp.min
                 new_messages_df = await list_sn_messages_func()
-                if not new_messages_df.empty:
-                    new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
+                if new_messages_df is not None:
                     if not new_messages_df.empty:
-                        for _, message in new_messages_df.iterrows():
+                        new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
+                        if not new_messages_df.empty:
+                            for _, message in new_messages_df.iterrows():
+                                result = await db.execute(
+                                    select(Message).where(
+                                        Message.sending_sn_pastelid == message['sending_sn_pastelid'],
+                                        Message.receiving_sn_pastelid == message['receiving_sn_pastelid'],
+                                        Message.timestamp == message['timestamp']
+                                    )
+                                )
+                                existing_message = await result.scalar()
+                                if existing_message:
+                                    continue
+                                logger.info(f"New message received: {message['message_body']}")
+                                last_processed_timestamp = message['timestamp']
+                                sending_sn_pastelid = message['sending_sn_pastelid']
+                                receiving_sn_pastelid = message['receiving_sn_pastelid']
+                                message_size_bytes = len(message['message_body'].encode('utf-8'))
+                                # Update MessageSenderMetadata
+                                result = await db.execute(
+                                    select(MessageSenderMetadata).where(MessageSenderMetadata.sending_sn_pastelid == sending_sn_pastelid)
+                                )
+                                sender_metadata = await result.scalar()
+                                if sender_metadata:
+                                    sender_metadata.total_messages_sent += 1
+                                    sender_metadata.total_data_sent_bytes += message_size_bytes
+                                    sender_metadata.sending_sn_txid_vout = message['sending_sn_txid_vout']
+                                    sender_metadata.sending_sn_pubkey = message['signature']
+                                else:
+                                    sender_metadata = MessageSenderMetadata(
+                                        sending_sn_pastelid=sending_sn_pastelid,
+                                        total_messages_sent=1,
+                                        total_data_sent_bytes=message_size_bytes,
+                                        sending_sn_txid_vout=message['sending_sn_txid_vout'],
+                                        sending_sn_pubkey=message['signature']
+                                    )
+                                    db.add(sender_metadata)
+                                # Update MessageReceiverMetadata
+                                result = await db.execute(
+                                    select(MessageReceiverMetadata).where(MessageReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid)
+                                )
+                                receiver_metadata = await result.scalar()
+                                if receiver_metadata:
+                                    receiver_metadata.total_messages_received += 1
+                                    receiver_metadata.total_data_received_bytes += message_size_bytes
+                                    receiver_metadata.receiving_sn_txid_vout = message['receiving_sn_txid_vout']
+                                else:
+                                    receiver_metadata = MessageReceiverMetadata(
+                                        receiving_sn_pastelid=receiving_sn_pastelid,
+                                        total_messages_received=1,
+                                        total_data_received_bytes=message_size_bytes,
+                                        receiving_sn_txid_vout=message['receiving_sn_txid_vout']
+                                    )
+                                    db.add(receiver_metadata)
+                                # Update MessageSenderReceiverMetadata
+                                result = await db.execute(
+                                    select(MessageSenderReceiverMetadata).where(
+                                        MessageSenderReceiverMetadata.sending_sn_pastelid == sending_sn_pastelid,
+                                        MessageSenderReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid
+                                    )
+                                )
+                                sender_receiver_metadata = await result.scalar()
+                                if sender_receiver_metadata:
+                                    sender_receiver_metadata.total_messages += 1
+                                    sender_receiver_metadata.total_data_bytes += message_size_bytes
+                                else:
+                                    sender_receiver_metadata = MessageSenderReceiverMetadata(
+                                        sending_sn_pastelid=sending_sn_pastelid,
+                                        receiving_sn_pastelid=receiving_sn_pastelid,
+                                        total_messages=1,
+                                        total_data_bytes=message_size_bytes
+                                    )
+                                    db.add(sender_receiver_metadata)
+                            new_messages = [
+                                Message(
+                                    sending_sn_pastelid=row['sending_sn_pastelid'],
+                                    receiving_sn_pastelid=row['receiving_sn_pastelid'],
+                                    message_type=row['message_type'],
+                                    message_body=row['message_body'],
+                                    signature=row['signature'],
+                                    timestamp=row['timestamp'],
+                                    sending_sn_txid_vout=row['sending_sn_txid_vout'],
+                                    receiving_sn_txid_vout=row['receiving_sn_txid_vout']
+                                )
+                                for _, row in new_messages_df.iterrows()
+                            ]
+                            db.add_all(new_messages)
+                            # Update overall MessageMetadata
                             result = await db.execute(
-                                select(Message).where(
-                                    Message.sending_sn_pastelid == message['sending_sn_pastelid'],
-                                    Message.receiving_sn_pastelid == message['receiving_sn_pastelid'],
-                                    Message.timestamp == message['timestamp']
+                                select(
+                                    func.count(Message.id),
+                                    func.count(func.distinct(Message.sending_sn_pastelid)),
+                                    func.count(func.distinct(Message.receiving_sn_pastelid))
                                 )
                             )
-                            existing_message = await result.scalar()
-                            if existing_message:
-                                continue
-                            logger.info(f"New message received: {message['message_body']}")
-                            last_processed_timestamp = message['timestamp']
-                            sending_sn_pastelid = message['sending_sn_pastelid']
-                            receiving_sn_pastelid = message['receiving_sn_pastelid']
-                            message_size_bytes = len(message['message_body'].encode('utf-8'))
-                            # Update MessageSenderMetadata
+                            total_messages, total_senders, total_receivers = await result.first()
                             result = await db.execute(
-                                select(MessageSenderMetadata).where(MessageSenderMetadata.sending_sn_pastelid == sending_sn_pastelid)
+                                select(MessageMetadata).order_by(MessageMetadata.timestamp.desc()).limit(1)
                             )
-                            sender_metadata = await result.scalar()
-                            if sender_metadata:
-                                sender_metadata.total_messages_sent += 1
-                                sender_metadata.total_data_sent_bytes += message_size_bytes
-                                sender_metadata.sending_sn_txid_vout = message['sending_sn_txid_vout']
-                                sender_metadata.sending_sn_pubkey = message['signature']
+                            message_metadata = await result.scalar()
+                            if message_metadata:
+                                message_metadata.total_messages = total_messages
+                                message_metadata.total_senders = total_senders
+                                message_metadata.total_receivers = total_receivers
                             else:
-                                sender_metadata = MessageSenderMetadata(
-                                    sending_sn_pastelid=sending_sn_pastelid,
-                                    total_messages_sent=1,
-                                    total_data_sent_bytes=message_size_bytes,
-                                    sending_sn_txid_vout=message['sending_sn_txid_vout'],
-                                    sending_sn_pubkey=message['signature']
+                                message_metadata = MessageMetadata(
+                                    total_messages=total_messages,
+                                    total_senders=total_senders,
+                                    total_receivers=total_receivers
                                 )
-                                db.add(sender_metadata)
-                            # Update MessageReceiverMetadata
-                            result = await db.execute(
-                                select(MessageReceiverMetadata).where(MessageReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid)
-                            )
-                            receiver_metadata = await result.scalar()
-                            if receiver_metadata:
-                                receiver_metadata.total_messages_received += 1
-                                receiver_metadata.total_data_received_bytes += message_size_bytes
-                                receiver_metadata.receiving_sn_txid_vout = message['receiving_sn_txid_vout']
-                            else:
-                                receiver_metadata = MessageReceiverMetadata(
-                                    receiving_sn_pastelid=receiving_sn_pastelid,
-                                    total_messages_received=1,
-                                    total_data_received_bytes=message_size_bytes,
-                                    receiving_sn_txid_vout=message['receiving_sn_txid_vout']
-                                )
-                                db.add(receiver_metadata)
-                            # Update MessageSenderReceiverMetadata
-                            result = await db.execute(
-                                select(MessageSenderReceiverMetadata).where(
-                                    MessageSenderReceiverMetadata.sending_sn_pastelid == sending_sn_pastelid,
-                                    MessageSenderReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid
-                                )
-                            )
-                            sender_receiver_metadata = await result.scalar()
-                            if sender_receiver_metadata:
-                                sender_receiver_metadata.total_messages += 1
-                                sender_receiver_metadata.total_data_bytes += message_size_bytes
-                            else:
-                                sender_receiver_metadata = MessageSenderReceiverMetadata(
-                                    sending_sn_pastelid=sending_sn_pastelid,
-                                    receiving_sn_pastelid=receiving_sn_pastelid,
-                                    total_messages=1,
-                                    total_data_bytes=message_size_bytes
-                                )
-                                db.add(sender_receiver_metadata)
-                        new_messages = [
-                            Message(
-                                sending_sn_pastelid=row['sending_sn_pastelid'],
-                                receiving_sn_pastelid=row['receiving_sn_pastelid'],
-                                message_type=row['message_type'],
-                                message_body=row['message_body'],
-                                signature=row['signature'],
-                                timestamp=row['timestamp'],
-                                sending_sn_txid_vout=row['sending_sn_txid_vout'],
-                                receiving_sn_txid_vout=row['receiving_sn_txid_vout']
-                            )
-                            for _, row in new_messages_df.iterrows()
-                        ]
-                        db.add_all(new_messages)
-                        # Update overall MessageMetadata
-                        result = await db.execute(
-                            select(
-                                func.count(Message.id),
-                                func.count(func.distinct(Message.sending_sn_pastelid)),
-                                func.count(func.distinct(Message.receiving_sn_pastelid))
-                            )
-                        )
-                        total_messages, total_senders, total_receivers = await result.first()
-                        result = await db.execute(
-                            select(MessageMetadata).order_by(MessageMetadata.timestamp.desc()).limit(1)
-                        )
-                        message_metadata = await result.scalar()
-                        if message_metadata:
-                            message_metadata.total_messages = total_messages
-                            message_metadata.total_senders = total_senders
-                            message_metadata.total_receivers = total_receivers
-                        else:
-                            message_metadata = MessageMetadata(
-                                total_messages=total_messages,
-                                total_senders=total_senders,
-                                total_receivers=total_receivers
-                            )
-                            db.add(message_metadata)
-                        await db.commit()
+                                db.add(message_metadata)
+                            await db.commit()
                 await asyncio.sleep(5)
         except Exception as e:
             logger.error(f"Error while monitoring new messages: {str(e)}")
