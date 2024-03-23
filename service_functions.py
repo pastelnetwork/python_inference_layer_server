@@ -287,10 +287,8 @@ async def list_sn_messages_func():
     pastelid_to_txid_vout_dict = dict(zip(supernode_list_df['extKey'], supernode_list_df.index))
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
     async with AsyncSessionLocal() as db:
-        # Retrieve messages from the database
         db_messages = await db.execute(select(Message).where(Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages).order_by(Message.timestamp.desc()))
         db_messages_df = pd.DataFrame([message.to_dict() for message in db_messages.scalars().all()])
-        # Retrieve new messages from the RPC interface
         new_messages = await rpc_connection.masternode('message', 'list')
         new_messages_data = []
         for message in new_messages:
@@ -308,7 +306,7 @@ async def list_sn_messages_func():
                     Message.receiving_sn_pastelid == receiving_pastelid,
                     Message.timestamp == message_timestamp
                 )
-            ).first()
+            ).scalar()
             if existing_message is not None:
                 logger.debug(f"Message already exists in the database. Skipping...")
                 continue
@@ -316,9 +314,8 @@ async def list_sn_messages_func():
             verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
             decompressed_message = await decompress_data_with_zstd_func(message_body)
             decompressed_message = decompressed_message.decode('utf-8')
-            decompressed_message = unidecode(decompressed_message)
             try:
-                message_dict = json.loads(decompressed_message)
+                message_dict = json.loads(decompressed_message, encoding='utf-8')
             except json.JSONDecodeError as e:
                 logger.error(f"Error parsing JSON: {e}")
                 logger.error(f"Decompressed message: {decompressed_message}")
@@ -349,21 +346,18 @@ async def list_sn_messages_func():
 async def parse_sn_messages_from_last_k_minutes_func(k=10, message_type='all'):
     messages_list_df = await list_sn_messages_func()
     messages_list_df__recent = messages_list_df[messages_list_df['timestamp'] > (datetime.now() - timedelta(minutes=k))]
+    def load_json(message_body):
+        return json.loads(message_body, encoding='utf-8')
     if message_type == 'all':
-        list_of_message_dicts = messages_list_df__recent['message_body'].apply(json.loads).tolist()
+        list_of_message_dicts = messages_list_df__recent['message_body'].apply(load_json).tolist()
     else:
-        list_of_message_dicts = messages_list_df__recent[messages_list_df__recent['message_type'] == message_type]['message_body'].apply(json.loads).tolist()
+        list_of_message_dicts = messages_list_df__recent[messages_list_df__recent['message_type'] == message_type]['message_body'].apply(load_json).tolist()
     return list_of_message_dicts
-    
-async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase) -> str:
-    global rpc_connection
-    results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
-    return results_dict['signature']
 
 async def verify_received_message_using_pastelid_func(message_received, sending_sn_pastelid):
     try:
         decompressed_message = await decompress_data_with_zstd_func(message_received)
-        message_received_dict = json.loads(decompressed_message)
+        message_received_dict = json.loads(decompressed_message, encoding='utf-8')
         raw_message = message_received_dict['message']
         signature = message_received_dict['signature']
         verification_status = await verify_message_with_pastelid_func(sending_sn_pastelid, raw_message, signature)
@@ -383,7 +377,7 @@ async def send_message_to_sn_using_pastelid_func(message_to_send, message_type, 
         'message_type': message_type,
         'signature': pastelid_signature_on_message,
         'sending_sn_pubkey': sending_sn_pubkey
-    })    
+    }, ensure_ascii=False)    
     compressed_message, _ = await compress_data_with_zstd_func(signed_message_to_send.encode('utf-8'))
     compressed_message_base64 = base64.b64encode(compressed_message).decode('utf-8')
     specified_machine_supernode_data = await get_sn_data_from_pastelid_func(receiving_sn_pastelid)
@@ -403,7 +397,7 @@ async def broadcast_message_to_list_of_sns_using_pastelid_func(message_to_send, 
         'message_type': message_type,
         'signature': pastelid_signature_on_message,
         'sending_sn_pubkey': sending_sn_pubkey
-    })
+    }, ensure_ascii=False)
     compressed_message, _ = await compress_data_with_zstd_func(signed_message_to_send.encode('utf-8'))
     compressed_message_base64 = base64.b64encode(compressed_message).decode('utf-8')
     if verbose:
@@ -424,7 +418,7 @@ async def broadcast_message_to_all_sns_using_pastelid_func(message_to_send, mess
         'message_type': message_type,
         'signature': pastelid_signature_on_message,
         'sending_sn_pubkey': sending_sn_pubkey
-    })
+    }, ensure_ascii=False)
     compressed_message, _ = await compress_data_with_zstd_func(signed_message_to_send.encode('utf-8'))
     compressed_message_base64 = base64.b64encode(compressed_message).decode('utf-8')
     list_of_receiving_sn_pastelids = (await check_supernode_list_func())[0]['extKey'].values.tolist()
