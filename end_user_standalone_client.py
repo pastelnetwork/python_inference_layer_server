@@ -6,8 +6,13 @@ import logging
 import shutil
 import queue
 import zstandard as zstd
-from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
+import base64
+import urllib.parse as urlparse
+import decimal
+import pandas as pd
 from typing import List, Dict, Any
+from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
+from httpx import AsyncClient, Limits, Timeout
 
 def setup_logger():
     if logger.handlers:
@@ -215,6 +220,16 @@ async def check_supernode_list_func():
     masternode_list_full_df__json = masternode_list_full_df.to_json(orient='index')
     return masternode_list_full_df, masternode_list_full_df__json
 
+def get_top_supernode_url(supernode_list_df):
+    if not supernode_list_df.empty:
+        top_supernode = supernode_list_df.loc[supernode_list_df['rank'] == supernode_list_df['rank'].min()]
+        if not top_supernode.empty:
+            ipaddress_port = top_supernode['ipaddress:port'].values[0]
+            ipaddress = ipaddress_port.split(':')[0]
+            supernode_url = f"http://{ipaddress}:7123"
+            return supernode_url
+    return None
+
 async def compress_data_with_zstd_func(input_data):
     zstd_compression_level = 20
     zstandard_compressor = zstd.ZstdCompressor(level=zstd_compression_level, write_content_size=True, write_checksum=True)
@@ -226,6 +241,11 @@ async def decompress_data_with_zstd_func(compressed_input_data):
     zstd_decompressor = zstd.ZstdDecompressor()
     zstd_decompressed_data = zstd_decompressor.decompress(compressed_input_data)
     return zstd_decompressed_data
+
+async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase) -> str:
+    global rpc_connection
+    results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
+    return results_dict['signature']
 
 class PastelMessagingClient:
     def __init__(self, pastelid: str, passphrase: str):
@@ -269,9 +289,34 @@ class PastelMessagingClient:
             response.raise_for_status()
             result = response.json()
             return result
+        
+async def send_user_message(self, supernode_url: str, to_pastelid: str, message_body: str, challenge: str, challenge_id: str) -> Dict[str, Any]:
+    user_message = {
+        "from_pastelid": self.pastelid,
+        "to_pastelid": to_pastelid,
+        "message_body": message_body,
+    }
 
+    # Sign the message with the user's PastelID
+    message_signature = await sign_message_with_pastelid_func(self.pastelid, json.dumps(user_message), self.passphrase)
+    user_message["signature"] = message_signature
+
+    # Sign the challenge with the user's PastelID
+    challenge_signature = await self.sign_challenge(challenge)
+
+    payload = {
+        "user_message": user_message,
+        "pastelid_signature": challenge_signature,
+        "challenge_id": challenge_id
+    }
+    async with httpx.AsyncClient() as client:
+        response = await client.post(f"{supernode_url}/send_user_message", json=payload)
+        response.raise_for_status()
+        result = response.json()
+        return result
+    
 async def main():
-
+    global rpc_connection
     rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
     rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
     
@@ -282,27 +327,24 @@ async def main():
     messaging_client = PastelMessagingClient(pastelid, passphrase)
 
     # Get the list of Supernodes
-    supernode_list = await check_supernode_list_func()
-    logger.info(f"Supernode list: {supernode_list}")
+    supernode_list_df, supernode_list_json = await check_supernode_list_func()
+    logger.info(f"Supernode list: {supernode_list_df}")
 
     # Request a challenge from a Supernode
-    challenge_result = await messaging_client.request_challenge("http://supernode_url")
+    supernode_url = get_top_supernode_url(supernode_list_df)
+    challenge_result = await messaging_client.request_challenge(supernode_url)
     challenge = challenge_result["challenge"]
     challenge_id = challenge_result["challenge_id"]
     logger.info(f"Received challenge: {challenge}")
 
     # Send a user message
-    user_message = {
-        "from_pastelid": pastelid,
-        "to_pastelid": "recipient_pastelid",
-        "message_body": "Hello, this is a test message!",
-        "signature": "message_signature"
-    }
-    send_result = await messaging_client.send_user_message("http://supernode_url", user_message, challenge, challenge_id)
+    to_pastelid = "recipient_pastelid"
+    message_body = "Hello, this is a test message!"
+    send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body, challenge, challenge_id)
     logger.info(f"Sent user message: {send_result}")
 
     # Get user messages
-    messages = await messaging_client.get_user_messages("http://supernode_url", challenge, challenge_id)
+    messages = await messaging_client.get_user_messages(supernode_url, challenge, challenge_id)
     logger.info(f"Retrieved user messages: {messages}")
 
 if __name__ == "__main__":
