@@ -20,9 +20,8 @@ import zstandard as zstd
 from database_code import AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata
 from database_code import InferenceCreditPack, InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage
 from sqlalchemy import select, func
-from typing import List
+from typing import List, Tuple
 from decouple import Config as DecoupleConfig, RepositoryEnv
-
 
 # Logger setup
 logger = setup_logger()
@@ -35,10 +34,9 @@ warnings.filterwarnings('ignore')
 config = DecoupleConfig(RepositoryEnv('.env'))
 TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0)
 
-NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = config.get("NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE", default=3)
+NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = config.get("NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE", default=3, cast=int)
 GITHUB_MODEL_MENU_URL = config.get("GITHUB_MODEL_MENU_URL")
 CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_SECONDS", default=300)
-
 
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
@@ -208,7 +206,6 @@ async def verify_message_with_pastelid_func(pastelid, message_to_verify, pasteli
     global rpc_connection
     verification_result = await rpc_connection.pastelid('verify', message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
     return verification_result['verification']
-
 
 async def generate_challenge(pastelid: str) -> Tuple[str, str]:
     """
