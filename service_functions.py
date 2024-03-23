@@ -476,14 +476,14 @@ async def monitor_new_messages():
                                 sender_metadata.total_messages_sent += 1
                                 sender_metadata.total_data_sent_bytes += message_size_bytes
                                 sender_metadata.sending_sn_txid_vout = message['sending_sn_txid_vout']
-                                sender_metadata.sending_sn_pubkey = message['sending_sn_pubkey']
+                                sender_metadata.sending_sn_pubkey = message['signature']
                             else:
                                 sender_metadata = MessageSenderMetadata(
                                     sending_sn_pastelid=sending_sn_pastelid,
                                     total_messages_sent=1,
                                     total_data_sent_bytes=message_size_bytes,
                                     sending_sn_txid_vout=message['sending_sn_txid_vout'],
-                                    sending_sn_pubkey=message['sending_sn_pubkey']
+                                    sending_sn_pubkey=message['signature']
                                 )
                                 db.add(sender_metadata)
                             # Update MessageReceiverMetadata
@@ -494,14 +494,12 @@ async def monitor_new_messages():
                                 receiver_metadata.total_messages_received += 1
                                 receiver_metadata.total_data_received_bytes += message_size_bytes
                                 receiver_metadata.receiving_sn_txid_vout = message['receiving_sn_txid_vout']
-                                receiver_metadata.receiving_sn_pubkey = message['receiving_sn_pubkey']
                             else:
                                 receiver_metadata = MessageReceiverMetadata(
                                     receiving_sn_pastelid=receiving_sn_pastelid,
                                     total_messages_received=1,
                                     total_data_received_bytes=message_size_bytes,
-                                    receiving_sn_txid_vout=message['receiving_sn_txid_vout'],
-                                    receiving_sn_pubkey=message['receiving_sn_pubkey']
+                                    receiving_sn_txid_vout=message['receiving_sn_txid_vout']
                                 )
                                 db.add(receiver_metadata)
                             # Update MessageSenderReceiverMetadata
