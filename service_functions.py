@@ -290,6 +290,7 @@ async def list_sn_messages_func():
         # Retrieve messages from the database
         result = await db.execute(select(Message).where(Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages).order_by(Message.timestamp.desc()))
         db_messages_df = pd.DataFrame([message.to_dict() for message in result.scalars().all()])
+        db_messages_df['timestamp'] = pd.to_datetime(db_messages_df['timestamp'])
         # Retrieve new messages from the RPC interface
         new_messages = await rpc_connection.masternode('message', 'list')
         new_messages_data = []
@@ -303,7 +304,7 @@ async def list_sn_messages_func():
             if sending_pastelid is None or receiving_pastelid is None:
                 logger.warning(f"Skipping message due to missing PastelID for txid_vout: {sending_sn_txid_vout} or {receiving_sn_txid_vout}")
                 continue
-            message_timestamp = datetime.fromtimestamp(message['Timestamp'])
+            message_timestamp = pd.to_datetime(datetime.fromtimestamp(message['Timestamp']))
             # Check if the message already exists in the database
             existing_message = db_messages_df[
                 (db_messages_df['sending_sn_pastelid'] == sending_pastelid) &
@@ -337,7 +338,6 @@ async def list_sn_messages_func():
                 new_messages_data.append(new_message)
         new_messages_df = pd.DataFrame(new_messages_data)
         combined_messages_df = pd.concat([db_messages_df, new_messages_df], ignore_index=True)
-        combined_messages_df['timestamp'] = pd.to_datetime(combined_messages_df['timestamp'])
         combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
         combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
     return combined_messages_df
