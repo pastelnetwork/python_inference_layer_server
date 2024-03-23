@@ -212,8 +212,8 @@ async def get_sn_data_from_sn_pubkey(
     except Exception as e:
         logger.error(f"Error getting Supernode data from public key: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-    
         
+
 @router.get("/get_messages", response_model=List[db.MessageModel])
 async def get_messages(
     last_k_minutes: Optional[int] = Query(100, description="Number of minutes to retrieve messages from"),
@@ -226,11 +226,19 @@ async def get_messages(
     - `last_k_minutes`: Number of minutes to retrieve messages from (default: 100).
     - `message_type`: Type of messages to retrieve ('all' or specific type) (default: 'all').
 
-    Returns a list of MessageModel objects containing the message and message_type.
+    Returns a list of MessageModel objects containing the message, message_type, sending_sn_pastelid, and timestamp.
     """
     try:
         messages = await service_functions.parse_sn_messages_from_last_k_minutes_func(last_k_minutes, message_type)
-        return [db.MessageModel(message=msg["message"], message_type=msg["message_type"]) for msg in messages]
+        return [
+            db.MessageModel(
+                message=msg["message"],
+                message_type=msg["message_type"],
+                sending_sn_pastelid=msg["sending_sn_pastelid"],
+                timestamp=msg["timestamp"]
+            )
+            for msg in messages
+        ]
     except Exception as e:
         logger.error(f"Error retrieving messages: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving messages: {str(e)}")

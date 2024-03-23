@@ -12,6 +12,13 @@ from typing import Optional
 class MessageModel(BaseModel):
     message: str
     message_type: str
+    sending_sn_pastelid: str
+    timestamp: datetime
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat()
+        }
 
 class SendMessageResponse(BaseModel):
     status: str

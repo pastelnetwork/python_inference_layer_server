@@ -354,10 +354,18 @@ async def parse_sn_messages_from_last_k_minutes_func(k=10, message_type='all'):
     messages_list_df = await list_sn_messages_func()
     messages_list_df__recent = messages_list_df[messages_list_df['timestamp'] > (datetime.now() - timedelta(minutes=k))]
     if message_type == 'all':
-        list_of_message_dicts = messages_list_df__recent['message_body'].apply(json.loads).tolist()
+        list_of_message_dicts = messages_list_df__recent[['message_body', 'message_type', 'sending_sn_pastelid', 'timestamp']].to_dict(orient='records')
     else:
-        list_of_message_dicts = messages_list_df__recent[messages_list_df__recent['message_type'] == message_type]['message_body'].apply(json.loads).tolist()
-    return list_of_message_dicts
+        list_of_message_dicts = messages_list_df__recent[messages_list_df__recent['message_type'] == message_type][['message_body', 'message_type', 'sending_sn_pastelid', 'timestamp']].to_dict(orient='records')
+    return [
+        {
+            'message': json.loads(msg['message_body']),
+            'message_type': msg['message_type'],
+            'sending_sn_pastelid': msg['sending_sn_pastelid'],
+            'timestamp': msg['timestamp']
+        }
+        for msg in list_of_message_dicts
+    ]
 
 async def verify_received_message_using_pastelid_func(message_received, sending_sn_pastelid):
     try:
