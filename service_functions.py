@@ -8,6 +8,7 @@ import os
 import platform
 import statistics
 import time
+import uuid
 import re
 import html
 import warnings

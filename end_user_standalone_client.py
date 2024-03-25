@@ -14,6 +14,8 @@ from typing import List, Dict, Any
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from httpx import AsyncClient, Limits, Timeout
 
+logger = logging.getLogger("pastel_supernode_messaging_client")
+
 def setup_logger():
     if logger.handlers:
         return logger
@@ -321,8 +323,8 @@ async def main():
     rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
     
     # Replace with your own values
-    pastelid = "your_pastelid"
-    passphrase = "your_passphrase"
+    pastelid = "jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"
+    passphrase = "5QcX9nX67buxyeC"
 
     messaging_client = PastelMessagingClient(pastelid, passphrase)
 
