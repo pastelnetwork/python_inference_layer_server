@@ -254,25 +254,42 @@ class PastelMessagingClient:
         self.pastelid = pastelid
         self.passphrase = passphrase
 
-    async def request_challenge(self, supernode_url: str) -> Dict[str, str]:
-        payload = {"pastelid": self.pastelid}
+    async def request_and_sign_challenge(self, supernode_url: str) -> Dict[str, str]:
         async with httpx.AsyncClient() as client:
-            response = await client.post(f"{supernode_url}/request_challenge", json=payload)
+            response = await client.post(f"{supernode_url}/request_challenge", json={"pastelid": self.pastelid})
             response.raise_for_status()
             result = response.json()
-            return result
-
-    async def sign_challenge(self, challenge: str) -> str:
-        # Use the local RPC client to sign the challenge string
-        signature = await sign_message_with_pastelid_func(self.pastelid, challenge, self.passphrase)
-        return signature
-
-    async def send_user_message(self, supernode_url: str, user_message: Dict[str, Any], challenge: str, challenge_id: str) -> Dict[str, Any]:
-        signature = await self.sign_challenge(challenge)
+            challenge = result["challenge"]
+            challenge_id = result["challenge_id"]
+            # Sign the challenge string using the local RPC client
+            signature = await sign_message_with_pastelid_func(self.pastelid, challenge, self.passphrase)
+            return {
+                "challenge": challenge,
+                "challenge_id": challenge_id,
+                "signature": signature
+            }
+                
+    async def send_user_message(self, supernode_url: str, to_pastelid: str, message_body: str) -> Dict[str, Any]:
+        # Request and sign a challenge
+        challenge_result = await self.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        challenge_id = challenge_result["challenge_id"]
+        signature = challenge_result["signature"]
+        # Sign the message body using the local RPC client
+        message_signature = await sign_message_with_pastelid_func(self.pastelid, message_body, self.passphrase)
+        # Prepare the user message
+        user_message = {
+            "from_pastelid": self.pastelid,
+            "to_pastelid": to_pastelid,
+            "message_body": message_body,
+            "message_signature": message_signature
+        }
+        # Send the user message
         payload = {
             "user_message": user_message,
-            "pastelid_signature": signature,
-            "challenge_id": challenge_id
+            "challenge": challenge,
+            "challenge_id": challenge_id,
+            "challenge_signature": signature
         }
         async with httpx.AsyncClient() as client:
             response = await client.post(f"{supernode_url}/send_user_message", json=payload)
@@ -280,53 +297,35 @@ class PastelMessagingClient:
             result = response.json()
             return result
 
-    async def get_user_messages(self, supernode_url: str, challenge: str, challenge_id: str) -> List[Dict[str, Any]]:
-        signature = await self.sign_challenge(challenge)
+    async def get_user_messages(self, supernode_url: str) -> List[Dict[str, Any]]:
+        # Request and sign a challenge
+        challenge_result = await self.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        challenge_id = challenge_result["challenge_id"]
+        signature = challenge_result["signature"]
+        # Get the user messages
         params = {
-            "pastelid_signature": signature,
-            "challenge_id": challenge_id
+            "pastelid": self.pastelid,
+            "challenge": challenge,
+            "challenge_id": challenge_id,
+            "challenge_signature": signature
         }
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{supernode_url}/get_user_messages/{self.pastelid}", params=params)
+            response = await client.get(f"{supernode_url}/get_user_messages", params=params)
             response.raise_for_status()
             result = response.json()
             return result
         
-async def send_user_message(self, supernode_url: str, to_pastelid: str, message_body: str, challenge: str, challenge_id: str) -> Dict[str, Any]:
-    user_message = {
-        "from_pastelid": self.pastelid,
-        "to_pastelid": to_pastelid,
-        "message_body": message_body,
-    }
-
-    # Sign the message with the user's PastelID
-    message_signature = await sign_message_with_pastelid_func(self.pastelid, json.dumps(user_message), self.passphrase)
-    user_message["signature"] = message_signature
-
-    # Sign the challenge with the user's PastelID
-    challenge_signature = await self.sign_challenge(challenge)
-
-    payload = {
-        "user_message": user_message,
-        "pastelid_signature": challenge_signature,
-        "challenge_id": challenge_id
-    }
-    async with httpx.AsyncClient() as client:
-        response = await client.post(f"{supernode_url}/send_user_message", json=payload)
-        response.raise_for_status()
-        result = response.json()
-        return result
-    
 async def main():
     global rpc_connection
     rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
     rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
     
     # Replace with your own values
-    pastelid = "jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"
-    passphrase = "5QcX9nX67buxyeC"
+    my_local_pastelid = "jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"
+    my_passphrase = "5QcX9nX67buxyeC"
 
-    messaging_client = PastelMessagingClient(pastelid, passphrase)
+    messaging_client = PastelMessagingClient(my_local_pastelid, my_passphrase)
 
     # Get the list of Supernodes
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
@@ -334,19 +333,21 @@ async def main():
 
     # Request a challenge from a Supernode
     supernode_url = get_top_supernode_url(supernode_list_df)
-    challenge_result = await messaging_client.request_challenge(supernode_url)
+    supernode_url = 'http://154.38.164.75:7123'
+    challenge_result = await messaging_client.request_and_sign_challenge(supernode_url)
     challenge = challenge_result["challenge"]
-    challenge_id = challenge_result["challenge_id"]
+    signature = challenge_result["signature"]
     logger.info(f"Received challenge: {challenge}")
+    logger.info(f"Signed challenge with signature: {signature}")
 
     # Send a user message
-    to_pastelid = "recipient_pastelid"
-    message_body = "Hello, this is a test message!"
-    send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body, challenge, challenge_id)
+    to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"
+    message_body = "Hello, this is a test message from a regular user!"
+    send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body)
     logger.info(f"Sent user message: {send_result}")
 
     # Get user messages
-    messages = await messaging_client.get_user_messages(supernode_url, challenge, challenge_id)
+    messages = await messaging_client.get_user_messages(supernode_url)
     logger.info(f"Retrieved user messages: {messages}")
 
 if __name__ == "__main__":
