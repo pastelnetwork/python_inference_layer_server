@@ -646,19 +646,15 @@ async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_p
         await db.refresh(supernode_user_message)
     return supernode_user_message
 
-async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str, message_body: str, signature: str, pastelid_passphrase: str):
-    user_message = await create_user_message(from_pastelid, to_pastelid, message_body, signature)
-
+async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str, message_body: str, message_signature: str):
+    user_message = await create_user_message(from_pastelid, to_pastelid, message_body, message_signature)
     local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
     sending_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
-
     receiving_sn_data = await get_sn_data_from_pastelid_func(to_pastelid)
     if receiving_sn_data.empty:
         raise ValueError(f"No Supernode found for PastelID: {to_pastelid}")
     receiving_sn_pastelid = receiving_sn_data['extKey'].values.tolist()[0]
-
     supernode_user_message = await create_supernode_user_message(sending_sn_pastelid, receiving_sn_pastelid, user_message)
-
     signed_message_to_send = json.dumps({
         'message': user_message.message_body,
         'message_type': 'user_message',
@@ -666,16 +662,14 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
         'from_pastelid': user_message.from_pastelid,
         'to_pastelid': user_message.to_pastelid
     }, ensure_ascii=False)
-
     await send_message_to_sn_using_pastelid_func(signed_message_to_send, 'user_message', receiving_sn_pastelid, pastelid_passphrase)
-
     return supernode_user_message
 
 async def process_received_user_message(supernode_user_message: SupernodeUserMessage):
     async with AsyncSessionLocal() as db:
         user_message = await db.get(UserMessage, supernode_user_message.user_message_id)
         if user_message:
-            verification_status = await verify_received_message_using_pastelid_func(user_message.message_body.encode('utf-8'), user_message.from_pastelid)
+            verification_status = await verify_message_with_pastelid_func(user_message.from_pastelid, user_message.message_body, user_message.signature)
             if verification_status == 'OK':
                 # Process the user message (e.g., store it, forward it to the recipient, etc.)
                 logger.info(f"Received and verified user message from {user_message.from_pastelid} to {user_message.to_pastelid}")

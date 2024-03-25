@@ -347,27 +347,54 @@ async def request_challenge(
 @router.post("/send_user_message", response_model=db.SupernodeUserMessageModel)
 async def send_user_message(
     user_message: db.UserMessageCreate = Body(...),
-    pastelid_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
     rpc_connection=Depends(get_rpc_connection),
 ):
     """
     Send a user message via Supernodes.
 
-    - `user_message`: The user message to be sent, including `from_pastelid`, `to_pastelid`, `message_body`, and `signature`.
-    - `pastelid_signature`: The signature of the PastelID on the challenge string.
-    - `challenge_id`: The ID of the challenge string.
+    This endpoint allows a user to send a message to another user via the Supernode network.
+    The sender must provide a valid challenge signature to authenticate their identity.
 
-    Returns a `SupernodeUserMessageModel` representing the sent message.
+    Parameters:
+    - `user_message` (UserMessageCreate): The user message to be sent, including:
+        - `from_pastelid` (str): The PastelID of the sender.
+        - `to_pastelid` (str): The PastelID of the recipient.
+        - `message_body` (str): The content of the message.
+        - `message_signature` (str): The signature of the message by the sender's PastelID.
+    - `challenge` (str): The challenge string obtained from the `/request_challenge` endpoint.
+    - `challenge_id` (str): The ID of the challenge string.
+    - `challenge_signature` (str): The signature of the PastelID on the challenge string.
+
+    Returns:
+    - `SupernodeUserMessageModel`: The sent message details, including:
+        - `message` (str): The content of the sent message.
+        - `message_type` (str): The type of the message (always "user_message").
+        - `sending_sn_pastelid` (str): The PastelID of the Supernode that sent the message.
+        - `timestamp` (datetime): The timestamp of when the message was sent.
+        - `id` (int): The unique identifier of the Supernode user message.
+        - `user_message` (UserMessageModel): The details of the user message, including:
+            - `from_pastelid` (str): The PastelID of the sender.
+            - `to_pastelid` (str): The PastelID of the recipient.
+            - `message_body` (str): The content of the message.
+            - `signature` (str): The signature of the message by the sender's PastelID.
+            - `id` (int): The unique identifier of the user message.
+            - `timestamp` (datetime): The timestamp of when the user message was created.
+
+    Raises:
+    - HTTPException (status_code=401): If the provided challenge signature is invalid.
+    - HTTPException (status_code=500): If an error occurs while sending the user message.
     """
     try:
         is_valid_signature = await service_functions.verify_challenge_signature(
-            user_message.from_pastelid, pastelid_signature, challenge_id
+            user_message.from_pastelid, challenge_signature, challenge_id
         )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         supernode_user_message = await service_functions.send_user_message_via_supernodes(
-            user_message.from_pastelid, user_message.to_pastelid, user_message.message_body, user_message.signature
+            user_message.from_pastelid, user_message.to_pastelid, user_message.message_body, user_message.message_signature
         )
         return db.SupernodeUserMessageModel(
             message=supernode_user_message.user_message.message_body,
@@ -389,25 +416,42 @@ async def send_user_message(
         raise HTTPException(status_code=500, detail=f"Error sending user message: {str(e)}")
 
 
-@router.get("/get_user_messages/{pastelid}", response_model=List[db.UserMessageModel])
+@router.get("/get_user_messages", response_model=List[db.UserMessageModel])
 async def get_user_messages(
-    pastelid: str = Path(..., description="The PastelID to retrieve messages for"),
-    pastelid_signature: str = Query(..., description="The signature of the PastelID on the challenge string"),
+    pastelid: str = Query(..., description="The PastelID to retrieve messages for"),
+    challenge: str = Query(..., description="The challenge string"),
     challenge_id: str = Query(..., description="The ID of the challenge string"),
+    challenge_signature: str = Query(..., description="The signature of the PastelID on the challenge string"),
     rpc_connection=Depends(get_rpc_connection),
 ):
     """
     Retrieve all user messages (sent and received) for a given PastelID.
 
-    - `pastelid`: The PastelID to retrieve messages for.
-    - `pastelid_signature`: The signature of the PastelID on the challenge string.
-    - `challenge_id`: The ID of the challenge string.
+    This endpoint allows a user to retrieve all messages associated with their PastelID.
+    The user must provide a valid challenge signature to authenticate their identity.
 
-    Returns a list of `UserMessageModel` objects representing the user messages.
+    Parameters:
+    - `pastelid` (str): The PastelID of the user to retrieve messages for.
+    - `challenge` (str): The challenge string obtained from the `/request_challenge` endpoint.
+    - `challenge_id` (str): The ID of the challenge string.
+    - `challenge_signature` (str): The signature of the PastelID on the challenge string.
+
+    Returns:
+    - List[UserMessageModel]: A list of user messages associated with the provided PastelID, each including:
+        - `from_pastelid` (str): The PastelID of the sender.
+        - `to_pastelid` (str): The PastelID of the recipient.
+        - `message_body` (str): The content of the message.
+        - `signature` (str): The signature of the message by the sender's PastelID.
+        - `id` (int): The unique identifier of the user message.
+        - `timestamp` (datetime): The timestamp of when the user message was created.
+
+    Raises:
+    - HTTPException (status_code=401): If the provided challenge signature is invalid.
+    - HTTPException (status_code=500): If an error occurs while retrieving the user messages.
     """
     try:
         is_valid_signature = await service_functions.verify_challenge_signature(
-            pastelid, pastelid_signature, challenge_id
+            pastelid, challenge_signature, challenge_id
         )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
