@@ -37,6 +37,7 @@ TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", defaul
 NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = config.get("NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE", default=3, cast=int)
 GITHUB_MODEL_MENU_URL = config.get("GITHUB_MODEL_MENU_URL")
 CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_SECONDS", default=300, cast=int)
+LOCAL_PASTEL_ID_PASSPHRASE = config.get("LOCAL_PASTEL_ID_PASSPHRASE")
 challenge_store = {}
 
 
@@ -662,7 +663,7 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
         'from_pastelid': user_message.from_pastelid,
         'to_pastelid': user_message.to_pastelid
     }, ensure_ascii=False)
-    await send_message_to_sn_using_pastelid_func(signed_message_to_send, 'user_message', receiving_sn_pastelid, pastelid_passphrase)
+    await send_message_to_sn_using_pastelid_func(signed_message_to_send, 'user_message', receiving_sn_pastelid, LOCAL_PASTEL_ID_PASSPHRASE)
     return supernode_user_message
 
 async def process_received_user_message(supernode_user_message: SupernodeUserMessage):
