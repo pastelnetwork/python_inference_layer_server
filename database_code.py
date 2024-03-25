@@ -4,7 +4,7 @@ from decimal import Decimal
 import traceback
 from sqlalchemy import Column, String, DateTime, Integer, Numeric, LargeBinary, Text, text as sql_text, ForeignKey, JSON
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker, declarative_base
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from pydantic import BaseModel, Field
 from typing import Optional, List
@@ -13,6 +13,27 @@ config = DecoupleConfig(RepositoryEnv('.env'))
 DATABASE_URL = config.get("DATABASE_URL", cast=str, default="sqlite+aiosqlite:///super_node_messaging_and_control_layer.sqlite")
 logger = setup_logger()
 Base = declarative_base()
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    sending_sn_pastelid = Column(String, index=True)
+    receiving_sn_pastelid = Column(String, index=True)
+    sending_sn_txid_vout = Column(String, index=True)
+    receiving_sn_txid_vout = Column(String, index=True)    
+    message_type = Column(String, index=True)
+    message_body = Column(Text)
+    signature = Column(String)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __mapper_args__ = {
+        'polymorphic_identity': 'message',
+        'polymorphic_on': message_type
+    }
+
+    def __repr__(self):
+        return f"<Message(id={self.id}, sending_sn_pastelid='{self.sending_sn_pastelid}', receiving_sn_pastelid='{self.receiving_sn_pastelid}', message_type='{self.message_type}', timestamp='{self.timestamp}')>"
 
 class MessageModel(BaseModel):
     message: str
@@ -35,11 +56,12 @@ class UserMessage(Base):
     signature = Column(String)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
 
-class SupernodeUserMessage(MessageModel):
+class SupernodeUserMessage(Message):
     __tablename__ = "supernode_user_messages"
 
-    id: int = Column(Integer, ForeignKey("messages.id"), primary_key=True)
-    user_message_id: int = Column(Integer, ForeignKey("user_messages.id"), index=True)
+    id = Column(Integer, ForeignKey("messages.id"), primary_key=True)
+    user_message_id = Column(Integer, ForeignKey("user_messages.id"), index=True)
+    user_message = relationship("UserMessage", backref="supernode_user_messages")
 
     __mapper_args__ = {
         "polymorphic_identity": "supernode_user_message",
@@ -130,24 +152,7 @@ class InferenceAPIUsageRequestModel(BaseModel):
 
     class Config:
         protected_namespaces = ()
-        
-class Message(Base):
-    __tablename__ = "messages"
 
-    id = Column(Integer, primary_key=True, index=True)
-    sending_sn_pastelid = Column(String, index=True)
-    receiving_sn_pastelid = Column(String, index=True)
-    sending_sn_txid_vout = Column(String, index=True)
-    receiving_sn_txid_vout = Column(String, index=True)    
-    message_type = Column(String, index=True)
-    message_body = Column(Text)
-    signature = Column(String)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-
-    def __repr__(self):
-        return f"<Message(id={self.id}, sending_sn_pastelid='{self.sending_sn_pastelid}', receiving_sn_pastelid='{self.receiving_sn_pastelid}', message_type='{self.message_type}', timestamp='{self.timestamp}')>"
-
-# Add the new message types as separate models inheriting from the base Message model
 class InferenceAPIUsageRequest(Message):
     __tablename__ = "inference_api_usage_requests"
 
