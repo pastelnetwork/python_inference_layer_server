@@ -276,9 +276,11 @@ class PastelMessagingClient:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
-        signature = challenge_result["signature"]
+        challenge_signature = challenge_result["signature"]
+
         # Sign the message body using the local RPC client
         message_signature = await sign_message_with_pastelid_func(self.pastelid, message_body, self.passphrase)
+
         # Prepare the user message
         user_message = {
             "from_pastelid": self.pastelid,
@@ -286,14 +288,15 @@ class PastelMessagingClient:
             "message_body": message_body,
             "message_signature": message_signature
         }
+
         # Send the user message
         payload = {
             "user_message": user_message,
             "challenge": challenge,
             "challenge_id": challenge_id,
-            "challenge_signature": signature
+            "challenge_signature": challenge_signature
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=Timeout(20)) as client:
             response = await client.post(f"{supernode_url}/send_user_message", json=payload)
             response.raise_for_status()
             result = response.json()

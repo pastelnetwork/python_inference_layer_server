@@ -14,6 +14,7 @@ import html
 import warnings
 from datetime import datetime, timedelta
 import pandas as pd
+import httpx
 from httpx import AsyncClient, Limits, Timeout
 import urllib.parse as urlparse
 from logger_config import setup_logger
@@ -637,8 +638,11 @@ async def create_user_message(from_pastelid: str, to_pastelid: str, message_body
 
 async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_pastelid: str, user_message: UserMessage) -> SupernodeUserMessage:
     supernode_user_message = SupernodeUserMessage(
+        message=user_message.message_body,
+        message_type="user_message",
         sending_sn_pastelid=sending_sn_pastelid,
         receiving_sn_pastelid=receiving_sn_pastelid,
+        timestamp=datetime.utcnow(),
         user_message_id=user_message.id
     )
     async with AsyncSessionLocal() as db:
@@ -659,7 +663,7 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
     signed_message_to_send = json.dumps({
         'message': user_message.message_body,
         'message_type': 'user_message',
-        'signature': user_message.signature,
+        'signature': user_message.message_signature,
         'from_pastelid': user_message.from_pastelid,
         'to_pastelid': user_message.to_pastelid
     }, ensure_ascii=False)
@@ -929,9 +933,9 @@ def check_if_ip_address_is_valid_func(ip_address_string):
 
 
 def get_external_ip_func():
-    output = os.popen('curl ifconfig.me')
-    ip_address = output.read()
-    return ip_address
+    response = httpx.get("https://ipinfo.io/ip")
+    response.raise_for_status()
+    return response.text.strip()
 
 
 def safe_highlight_func(text, pattern, replacement):
