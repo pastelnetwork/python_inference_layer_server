@@ -41,6 +41,13 @@ CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_
 LOCAL_PASTEL_ID_PASSPHRASE = config.get("LOCAL_PASTEL_ID_PASSPHRASE")
 challenge_store = {}
 
+def parse_datetime(timestamp_str):
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            return pd.to_datetime(datetime.strptime(timestamp_str, fmt))
+        except ValueError:
+            continue
+    raise ValueError(f"time data {timestamp_str} does not match expected formats")
 
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
@@ -358,7 +365,7 @@ async def list_sn_messages_func():
             if sending_pastelid is None or receiving_pastelid is None:
                 logger.warning(f"Skipping message due to missing PastelID for txid_vout: {sending_sn_txid_vout} or {receiving_sn_txid_vout}")
                 continue
-            message_timestamp = pd.to_datetime(datetime.fromtimestamp(message['Timestamp']))
+            message_timestamp = parse_datetime(message['Timestamp'])
             # Check if the message already exists in the database
             if not db_messages_df.empty:
                 existing_message = db_messages_df[
@@ -507,9 +514,11 @@ async def monitor_new_messages():
             async with AsyncSessionLocal() as db:
                 if last_processed_timestamp is None:
                     result = await db.execute(select(Message.timestamp).order_by(Message.timestamp.desc()).limit(1))
-                    last_processed_timestamp = result.scalar_one_or_none()
-                    if last_processed_timestamp is None:
+                    last_processed_timestamp_raw = result.scalar_one_or_none()
+                    if last_processed_timestamp_raw is None:
                         last_processed_timestamp = pd.Timestamp.min
+                    else:
+                        last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw)
                 new_messages_df = await list_sn_messages_func()
                 if new_messages_df is not None and not new_messages_df.empty:
                     new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
@@ -638,7 +647,7 @@ async def create_user_message(from_pastelid: str, to_pastelid: str, message_body
 
 async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_pastelid: str, user_message: UserMessage) -> SupernodeUserMessage:
     supernode_user_message = SupernodeUserMessage(
-        message=user_message.message_body,
+        message_body=user_message.message_body,
         message_type="user_message",
         sending_sn_pastelid=sending_sn_pastelid,
         receiving_sn_pastelid=receiving_sn_pastelid,
@@ -663,7 +672,7 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
     signed_message_to_send = json.dumps({
         'message': user_message.message_body,
         'message_type': 'user_message',
-        'signature': user_message.message_signature,
+        'signature': user_message.signature,
         'from_pastelid': user_message.from_pastelid,
         'to_pastelid': user_message.to_pastelid
     }, ensure_ascii=False)

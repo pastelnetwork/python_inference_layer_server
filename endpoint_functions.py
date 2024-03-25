@@ -397,10 +397,10 @@ async def send_user_message(
             user_message.from_pastelid, user_message.to_pastelid, user_message.message_body, user_message.message_signature
         )
         return db.SupernodeUserMessageModel(
-            message=supernode_user_message.user_message.message_body,
+            message=supernode_user_message.message_body,
             message_type="user_message",
             sending_sn_pastelid=supernode_user_message.sending_sn_pastelid,
-            timestamp=supernode_user_message.user_message.timestamp,
+            timestamp=supernode_user_message.timestamp,
             id=supernode_user_message.id,
             user_message=db.UserMessageModel(
                 from_pastelid=supernode_user_message.user_message.from_pastelid,
