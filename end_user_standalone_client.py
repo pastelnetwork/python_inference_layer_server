@@ -213,6 +213,8 @@ async def check_supernode_list_func():
             masternode_list_full_df.loc[current_row[0], 'extAddress'] = current_extra['extAddress']
             masternode_list_full_df.loc[current_row[0], 'extP2P'] = current_extra['extP2P']
             masternode_list_full_df.loc[current_row[0], 'extKey'] = current_extra['extKey']
+    masternode_list_full_df['lastseentime'] = pd.to_numeric(masternode_list_full_df['lastseentime'], downcast='integer')            
+    masternode_list_full_df['lastpaidtime'] = pd.to_numeric(masternode_list_full_df['lastpaidtime'], downcast='integer')            
     masternode_list_full_df['lastseentime'] = pd.to_datetime(masternode_list_full_df['lastseentime'], unit='s')
     masternode_list_full_df['lastpaidtime'] = pd.to_datetime(masternode_list_full_df['lastpaidtime'], unit='s')
     masternode_list_full_df['activeseconds'] = masternode_list_full_df['activeseconds'].astype(int)
@@ -256,7 +258,7 @@ class PastelMessagingClient:
 
     async def request_and_sign_challenge(self, supernode_url: str) -> Dict[str, str]:
         async with httpx.AsyncClient() as client:
-            response = await client.post(f"{supernode_url}/request_challenge", json={"pastelid": self.pastelid})
+            response = await client.get(f"{supernode_url}/request_challenge/{self.pastelid}")
             response.raise_for_status()
             result = response.json()
             challenge = result["challenge"]
@@ -268,7 +270,7 @@ class PastelMessagingClient:
                 "challenge_id": challenge_id,
                 "signature": signature
             }
-                
+                    
     async def send_user_message(self, supernode_url: str, to_pastelid: str, message_body: str) -> Dict[str, Any]:
         # Request and sign a challenge
         challenge_result = await self.request_and_sign_challenge(supernode_url)
@@ -329,7 +331,6 @@ async def main():
 
     # Get the list of Supernodes
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
-    logger.info(f"Supernode list: {supernode_list_df}")
 
     # Request a challenge from a Supernode
     supernode_url = get_top_supernode_url(supernode_list_df)

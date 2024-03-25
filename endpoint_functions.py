@@ -324,9 +324,9 @@ async def broadcast_message_to_all_sns(
         return db.SendMessageResponse(status="error", message=f"Error broadcasting message: {str(e)}")
 
 
-@router.post("/request_challenge")
+@router.get("/request_challenge/{pastelid}")
 async def request_challenge(
-    pastelid: str = Body(..., description="The PastelID requesting the challenge"),
+    pastelid: str,
     rpc_connection=Depends(get_rpc_connection),
 ):
     """
