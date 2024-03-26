@@ -10,6 +10,7 @@ import base64
 import urllib.parse as urlparse
 import decimal
 import pandas as pd
+from datetime import datetime
 from typing import List, Dict, Any
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from httpx import AsyncClient, Limits, Timeout
@@ -236,6 +237,18 @@ def get_top_supernode_url(supernode_list_df):
             return supernode_url
     return None
 
+def get_closest_supernode_to_pastelid_url(input_pastelid, supernode_list_df):  
+    if not supernode_list_df.empty:
+        list_of_supernode_pastelids = supernode_list_df['extKey'].values.tolist()
+        xor_distance_to_supernodes = [int(input_pastelid, 16) ^ int(x, 16) for x in list_of_supernode_pastelids]
+        closest_supernode_index = xor_distance_to_supernodes.index(min(xor_distance_to_supernodes))
+        closest_supernode_pastelid = list_of_supernode_pastelids[closest_supernode_index]
+        closest_supernode_ipaddress_port = supernode_list_df.loc[supernode_list_df['extKey'] == list_of_supernode_pastelids[closest_supernode_index]]['ipaddress:port'].values[0]
+        ipaddress = closest_supernode_ipaddress_port.split(':')[0]
+        supernode_url = f"http://{ipaddress}:7123"
+        return supernode_url, closest_supernode_pastelid
+    return None, None
+
 async def compress_data_with_zstd_func(input_data):
     zstd_compression_level = 20
     zstandard_compressor = zstd.ZstdCompressor(level=zstd_compression_level, write_content_size=True, write_checksum=True)
@@ -253,6 +266,66 @@ async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase)
     results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
     return results_dict['signature']
 
+class InferenceCreditPackMockup:
+    def __init__(self, credit_pack_identifier: str, authorized_pastelids: List[str], psl_cost_per_credit: float, total_psl_cost_for_pack: float, initial_credit_balance: float, credit_usage_tracking_psl_address: str):
+        self.credit_pack_identifier = credit_pack_identifier
+        self.authorized_pastelids = authorized_pastelids
+        self.psl_cost_per_credit = psl_cost_per_credit
+        self.total_psl_cost_for_pack = total_psl_cost_for_pack
+        self.current_credit_balance = initial_credit_balance
+        self.initial_credit_balance = initial_credit_balance
+        self.credit_usage_tracking_psl_address = credit_usage_tracking_psl_address
+        self.version = 1
+        self.purchase_height = 0
+        self.timestamp = datetime.utcnow()
+
+    def is_authorized(self, pastelid: str) -> bool:
+        return pastelid in self.authorized_pastelids
+
+    def has_sufficient_credits(self, requested_credits: float) -> bool:
+        return self.current_credit_balance >= requested_credits
+
+    def deduct_credits(self, credits_to_deduct: float):
+        if self.has_sufficient_credits(credits_to_deduct):
+            self.current_credit_balance -= credits_to_deduct
+        else:
+            raise ValueError("Insufficient credits in the pack.")
+
+    def to_dict(self):
+        return {
+            "credit_pack_identifier": self.credit_pack_identifier,
+            "authorized_pastelids": self.authorized_pastelids,
+            "psl_cost_per_credit": self.psl_cost_per_credit,
+            "total_psl_cost_for_pack": self.total_psl_cost_for_pack,
+            "initial_credit_balance": self.initial_credit_balance,
+            "current_credit_balance": self.current_credit_balance,
+            "credit_usage_tracking_psl_address": self.credit_usage_tracking_psl_address,
+            "version": self.version,
+            "purchase_height": self.purchase_height,
+            "timestamp": self.timestamp.isoformat()
+        }
+        
+    @classmethod
+    def load_from_json(cls, file_path):
+        try:
+            with open(file_path, "r") as file:
+                data = json.load(file)
+                return cls(
+                    credit_pack_identifier=data["credit_pack_identifier"],
+                    authorized_pastelids=data["authorized_pastelids"],
+                    psl_cost_per_credit=data["psl_cost_per_credit"],
+                    total_psl_cost_for_pack=data["total_psl_cost_for_pack"],
+                    initial_credit_balance=data["initial_credit_balance"],
+                    credit_usage_tracking_psl_address=data["credit_usage_tracking_psl_address"]
+                )
+        except FileNotFoundError:
+            return None
+
+    def save_to_json(self, file_path):
+        data = self.to_dict()
+        with open(file_path, "w") as file:
+            json.dump(data, file, indent=2)      
+            
 class PastelMessagingClient:
     def __init__(self, pastelid: str, passphrase: str):
         self.pastelid = pastelid
@@ -383,6 +456,24 @@ async def main():
     rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
     rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
     
+    local_credit_tracking_psl_address = '44oVQrU5Hda9gLWR2ZGrLMiwsb31wkQFNajb'
+    
+    # Load or create the global InferenceCreditPackMockup instance
+    CREDIT_PACK_FILE = "credit_pack.json"
+    credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
+
+    if credit_pack is None:
+        # Create a new credit pack if the file doesn't exist or is invalid
+        credit_pack = InferenceCreditPackMockup(
+            credit_pack_identifier="pack_123",
+            authorized_pastelids=["jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"],
+            psl_cost_per_credit=10.0,
+            total_psl_cost_for_pack=10000.0,
+            initial_credit_balance=100000.0,
+            credit_usage_tracking_psl_address=local_credit_tracking_psl_address
+        )
+        credit_pack.save_to_json(CREDIT_PACK_FILE)
+        
     # Replace with your own values
     my_local_pastelid = "jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"
     my_passphrase = "5QcX9nX67buxyeC"
@@ -402,14 +493,87 @@ async def main():
     logger.info(f"Signed challenge with signature: {signature}")
 
     # Send a user message
+    logger.info("Sending user message...")
     to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"
+    logger.info(f"Recipient pastelid: {to_pastelid}")
+    #Lookup the closest supernode to the recipient pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the recipient since it is closest to the recipient's pastelid:
+    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(to_pastelid, supernode_list_df)
+    logger.info(f"Closest Supernode to recipient pastelid: {supernode_pastelid}")
+    
     message_body = "Hello, this is a brand 🍉 NEW test message from a regular user!"
     send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body)
     logger.info(f"Sent user message: {send_result}")
 
     # Get user messages
+    logger.info("Retrieving user messages...")
+    logger.info(f"My local pastelid: {my_local_pastelid}")
+    # Lookup the closest supernode to the local pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the local user since it is closest to the local pastelid:
+    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(my_local_pastelid, supernode_list_df)
+    logger.info(f"Closest Supernode to local pastelid: {supernode_pastelid}")
     messages = await messaging_client.get_user_messages(supernode_url)
     logger.info(f"Retrieved user messages: {messages}")
+
+    #________________________________________________________
+
+    # Create a mock credit pack
+    credit_pack = InferenceCreditPackMockup(
+        credit_pack_identifier="pack_123",
+        authorized_pastelids=[my_local_pastelid],
+        psl_cost_per_credit=0.01,
+        total_psl_cost_for_pack=100.0,
+        initial_credit_balance=1000.0,
+        credit_usage_tracking_psl_address="psl_address_123"
+    )
+
+    # Prepare the inference API usage request
+    request_data = InferenceAPIUsageRequestModel(
+        requesting_pastelid=my_local_pastelid,
+        credit_pack_identifier=credit_pack.credit_pack_identifier,
+        requested_model_canonical_string="llama-7b",
+        model_parameters_json='{"max_length": 100, "temperature": 0.7}',
+        model_input_data_json_b64="base64_encoded_input_data"
+    )
+
+    # Send the inference API usage request
+    usage_request_result = await messaging_client.send_inference_api_usage_request(supernode_url, request_data)
+    logger.info(f"Sent inference API usage request: {usage_request_result}")
+
+    # Extract the relevant information from the response
+    inference_request_id = usage_request_result["inference_request_id"]
+    proposed_cost_in_credits = usage_request_result["proposed_cost_of_request_in_inference_credits"]
+    credit_usage_tracking_psl_address = usage_request_result["credit_usage_tracking_psl_address"]
+    request_confirmation_message_amount_in_patoshis = usage_request_result["request_confirmation_message_amount_in_patoshis"]
+
+    # Check if the credit pack has sufficient credits
+    if credit_pack.has_sufficient_credits(proposed_cost_in_credits):
+        # Deduct the credits from the credit pack
+        credit_pack.deduct_credits(proposed_cost_in_credits)
+        logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
+        
+        # Save the updated credit pack state to the JSON file
+        credit_pack.save_to_json(CREDIT_PACK_FILE)
+        
+        # Send the required PSL coins to authorize the request
+        # TODO: Implement the logic to send the required PSL coins from the tracking address to the burn address
+        # You can use the `request_confirmation_message_amount_in_patoshis` and `credit_usage_tracking_psl_address` from the response
+        # This step may require interaction with the Pastel blockchain and wallet
+
+        # Prepare the inference confirmation
+        confirmation_data = InferenceConfirmationModel(
+            inference_request_id=inference_request_id,
+            confirmation_transaction={"transaction_details": "details_of_the_confirmation_transaction"}
+        )
+
+        # Send the inference confirmation
+        confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data)
+        logger.info(f"Sent inference confirmation: {confirmation_result}")
+
+        # Get the inference output results
+        inference_response_id = confirmation_result["inference_response_id"]
+        output_results = await messaging_client.get_inference_output_results(supernode_url, inference_request_id, inference_response_id)
+        logger.info(f"Retrieved inference output results: {output_results}")
+    else:
+        logger.warning("Insufficient credits in the credit pack.")
 
 if __name__ == "__main__":
     asyncio.run(main())

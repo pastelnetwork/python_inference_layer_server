@@ -181,7 +181,66 @@ class AsyncAuthServiceProxy:
                     'code': -343, 'message': 'missing JSON-RPC result'})
             else:
                 return response_json['result']
+class InferenceCreditPackMockup:
+    def __init__(self, credit_pack_identifier: str, authorized_pastelids: List[str], psl_cost_per_credit: float, total_psl_cost_for_pack: float, initial_credit_balance: float, credit_usage_tracking_psl_address: str):
+        self.credit_pack_identifier = credit_pack_identifier
+        self.authorized_pastelids = authorized_pastelids
+        self.psl_cost_per_credit = psl_cost_per_credit
+        self.total_psl_cost_for_pack = total_psl_cost_for_pack
+        self.current_credit_balance = initial_credit_balance
+        self.initial_credit_balance = initial_credit_balance
+        self.credit_usage_tracking_psl_address = credit_usage_tracking_psl_address
+        self.version = 1
+        self.purchase_height = 0
+        self.timestamp = datetime.utcnow()
+
+    def is_authorized(self, pastelid: str) -> bool:
+        return pastelid in self.authorized_pastelids
+
+    def has_sufficient_credits(self, requested_credits: float) -> bool:
+        return self.current_credit_balance >= requested_credits
+
+    def deduct_credits(self, credits_to_deduct: float):
+        if self.has_sufficient_credits(credits_to_deduct):
+            self.current_credit_balance -= credits_to_deduct
+        else:
+            raise ValueError("Insufficient credits in the pack.")
+
+    def to_dict(self):
+        return {
+            "credit_pack_identifier": self.credit_pack_identifier,
+            "authorized_pastelids": self.authorized_pastelids,
+            "psl_cost_per_credit": self.psl_cost_per_credit,
+            "total_psl_cost_for_pack": self.total_psl_cost_for_pack,
+            "initial_credit_balance": self.initial_credit_balance,
+            "current_credit_balance": self.current_credit_balance,
+            "credit_usage_tracking_psl_address": self.credit_usage_tracking_psl_address,
+            "version": self.version,
+            "purchase_height": self.purchase_height,
+            "timestamp": self.timestamp.isoformat()
+        }
         
+    @classmethod
+    def load_from_json(cls, file_path):
+        try:
+            with open(file_path, "r") as file:
+                data = json.load(file)
+                return cls(
+                    credit_pack_identifier=data["credit_pack_identifier"],
+                    authorized_pastelids=data["authorized_pastelids"],
+                    psl_cost_per_credit=data["psl_cost_per_credit"],
+                    total_psl_cost_for_pack=data["total_psl_cost_for_pack"],
+                    initial_credit_balance=data["initial_credit_balance"],
+                    credit_usage_tracking_psl_address=data["credit_usage_tracking_psl_address"]
+                )
+        except FileNotFoundError:
+            return None
+
+    def save_to_json(self, file_path):
+        data = self.to_dict()
+        with open(file_path, "w") as file:
+            json.dump(data, file, indent=2)        
+                
 async def get_current_pastel_block_height_func():
     global rpc_connection
     best_block_hash = await rpc_connection.getbestblockhash()
@@ -757,6 +816,7 @@ async def get_inference_model_menu():
         else:
             raise
         
+
 async def validate_inference_api_usage_request(request_data: dict):
     try:
         requesting_pastelid = request_data["requesting_pastelid"]
@@ -765,19 +825,13 @@ async def validate_inference_api_usage_request(request_data: dict):
         model_parameters = request_data["model_parameters_json"]
         input_data = request_data["model_input_data_json_b64"]
 
-        # Retrieve the credit pack from the database
-        async with AsyncSessionLocal() as db:
-            credit_pack = await db.execute(
-                select(InferenceCreditPack).where(InferenceCreditPack.credit_pack_identifier == credit_pack_identifier)
-            )
-            credit_pack = credit_pack.scalar_one_or_none()
-
-        if credit_pack is None:
+        # Check if the credit pack identifier matches the global credit pack
+        if credit_pack_identifier != credit_pack.credit_pack_identifier:
             logger.warning(f"Invalid credit pack identifier: {credit_pack_identifier}")
             return False
 
         # Check if the requesting PastelID is authorized to use the credit pack
-        if requesting_pastelid not in credit_pack.authorized_pastelids:
+        if not credit_pack.is_authorized(requesting_pastelid):
             logger.warning(f"Unauthorized PastelID: {requesting_pastelid}")
             return False
 
@@ -798,6 +852,7 @@ async def validate_inference_api_usage_request(request_data: dict):
         logger.error(f"Error validating inference API usage request: {str(e)}")
         raise
 
+
 async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: dict):
     try:
         # Retrieve the inference API usage request from the database
@@ -810,6 +865,14 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
         if inference_request is None:
             logger.warning(f"Invalid inference request ID: {inference_request_id}")
             return False
+
+        # Deduct the credits from the global credit pack
+        proposed_cost_in_credits = inference_request.proposed_cost_of_request_in_inference_credits
+        credit_pack.deduct_credits(proposed_cost_in_credits)
+        logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
+
+        # Save the updated credit pack state to the JSON file
+        credit_pack.save_to_json(CREDIT_PACK_FILE)
 
         # TODO: Validate the confirmation transaction against the blockchain
 
@@ -827,7 +890,7 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
     except Exception as e:
         logger.error(f"Error processing inference confirmation: {str(e)}")
         raise
-
+    
 async def execute_inference_request(inference_request_id: str):
     try:
         # Retrieve the inference API usage request from the database
@@ -1088,4 +1151,19 @@ def highlight_rules_func(text):
 rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
 rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
 
+# Load or create the global InferenceCreditPackMockup instance
+CREDIT_PACK_FILE = "credit_pack.json"
+credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
+
+if credit_pack is None:
+    # Create a new credit pack if the file doesn't exist or is invalid
+    credit_pack = InferenceCreditPackMockup(
+        credit_pack_identifier="pack_123",
+        authorized_pastelids=["jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"],
+        psl_cost_per_credit=0.01,
+        total_psl_cost_for_pack=100.0,
+        initial_credit_balance=1000.0,
+        credit_usage_tracking_psl_address="psl_address_123"
+    )
+    credit_pack.save_to_json(CREDIT_PACK_FILE)
 
