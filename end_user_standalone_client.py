@@ -15,6 +15,7 @@ from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from httpx import AsyncClient, Limits, Timeout
 
 logger = logging.getLogger("pastel_supernode_messaging_client")
+MESSAGING_TIMEOUT_IN_SECONDS = 30
 
 def setup_logger():
     if logger.handlers:
@@ -257,7 +258,7 @@ class PastelMessagingClient:
         self.passphrase = passphrase
 
     async def request_and_sign_challenge(self, supernode_url: str) -> Dict[str, str]:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.get(f"{supernode_url}/request_challenge/{self.pastelid}")
             response.raise_for_status()
             result = response.json()
@@ -296,7 +297,7 @@ class PastelMessagingClient:
             "challenge_id": challenge_id,
             "challenge_signature": challenge_signature
         }
-        async with httpx.AsyncClient(timeout=Timeout(30)) as client:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(f"{supernode_url}/send_user_message", json=payload)
             response.raise_for_status()
             result = response.json()
@@ -315,7 +316,7 @@ class PastelMessagingClient:
             "challenge_id": challenge_id,
             "challenge_signature": signature
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.get(f"{supernode_url}/get_user_messages", params=params)
             response.raise_for_status()
             result = response.json()
@@ -346,7 +347,7 @@ async def main():
 
     # Send a user message
     to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"
-    message_body = "Hello, this is a NEW test message from a regular user!"
+    message_body = "Hello, this is a brand 🍉NEW test message from a regular user!"
     send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body)
     logger.info(f"Sent user message: {send_result}")
 
