@@ -39,6 +39,10 @@ NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = config.get("NUMBER_OF_D
 GITHUB_MODEL_MENU_URL = config.get("GITHUB_MODEL_MENU_URL")
 CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_SECONDS", default=300, cast=int)
 LOCAL_PASTEL_ID_PASSPHRASE = config.get("LOCAL_PASTEL_ID_PASSPHRASE")
+BURN_ADDRESS = config.get("BURN_ADDRESS")
+credit_usage_to_tracking_amount_multiplier = 0.0001
+
+
 challenge_store = {}
 
 def parse_timestamp(timestamp_str):
@@ -364,7 +368,7 @@ async def get_local_machine_supernode_data_func():
         logger.error('Local machine is not a supernode!')
         return 0, 0, 0, 0
     else:
-        logger.info('Local machine is a supernode!')
+        # logger.info('Local machine is a supernode!')
         local_sn_rank = local_machine_supernode_data['rank'].values[0]
         local_sn_pastelid = local_machine_supernode_data['extKey'].values[0]
     return local_machine_supernode_data, local_sn_rank, local_sn_pastelid, local_machine_ip_with_proper_port
@@ -781,7 +785,6 @@ async def get_user_messages_for_pastelid(pastelid: str) -> List[UserMessage]:
 #________________________________________________________________________________________________________________            
 
 
-
 async def get_inference_model_menu():
     try:
         # Check if the model menu file exists locally
@@ -790,24 +793,19 @@ async def get_inference_model_menu():
                 local_model_menu = json.load(file)
         else:
             local_model_menu = None
-
         # Fetch the latest model menu from GitHub
         async with httpx.AsyncClient() as client:
             response = await client.get(GITHUB_MODEL_MENU_URL)
             response.raise_for_status()
             github_model_menu = response.json()
-
         # Compare the local and GitHub model menus
         if local_model_menu != github_model_menu:
             # Update the local model menu file
             with open("model_menu.json", "w") as file:
                 json.dump(github_model_menu, file, indent=2)
-
         # Use the updated model menu
         model_menu = github_model_menu
-
         return model_menu
-
     except Exception as e:
         logger.error(f"Error retrieving inference model menu: {str(e)}")
         # Fallback to the local model menu if available
@@ -815,7 +813,6 @@ async def get_inference_model_menu():
             return local_model_menu
         else:
             raise
-        
 
 async def validate_inference_api_usage_request(request_data: dict):
     try:
@@ -824,17 +821,14 @@ async def validate_inference_api_usage_request(request_data: dict):
         requested_model = request_data["requested_model_canonical_string"]
         model_parameters = request_data["model_parameters_json"]
         input_data = request_data["model_input_data_json_b64"]
-
         # Check if the credit pack identifier matches the global credit pack
         if credit_pack_identifier != credit_pack.credit_pack_identifier:
             logger.warning(f"Invalid credit pack identifier: {credit_pack_identifier}")
             return False
-
         # Check if the requesting PastelID is authorized to use the credit pack
         if not credit_pack.is_authorized(requesting_pastelid):
             logger.warning(f"Unauthorized PastelID: {requesting_pastelid}")
             return False
-
         # Validate the requested model and parameters against the model menu
         model_menu = await get_inference_model_menu()
         requested_model_data = next(
@@ -844,14 +838,11 @@ async def validate_inference_api_usage_request(request_data: dict):
         if requested_model_data is None:
             logger.warning(f"Invalid model requested: {requested_model}")
             return False
-
         # TODO: Validate the model parameters against the model's supported parameters
-
         return True
     except Exception as e:
         logger.error(f"Error validating inference API usage request: {str(e)}")
         raise
-
 
 async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: dict):
     try:
@@ -861,31 +852,24 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
                 select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
             )
             inference_request = inference_request.scalar_one_or_none()
-
         if inference_request is None:
             logger.warning(f"Invalid inference request ID: {inference_request_id}")
             return False
-
         # Deduct the credits from the global credit pack
         proposed_cost_in_credits = inference_request.proposed_cost_of_request_in_inference_credits
         credit_pack.deduct_credits(proposed_cost_in_credits)
         logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
-
         # Save the updated credit pack state to the JSON file
         credit_pack.save_to_json(CREDIT_PACK_FILE)
-
         # TODO: Validate the confirmation transaction against the blockchain
-
         # Update the inference request status to "confirmed"
         inference_request.status = "confirmed"
         async with AsyncSessionLocal() as db:
             db.add(inference_request)
             await db.commit()
             await db.refresh(inference_request)
-
         # Trigger the inference request processing
         asyncio.create_task(execute_inference_request(inference_request_id))
-
         return True
     except Exception as e:
         logger.error(f"Error processing inference confirmation: {str(e)}")
@@ -899,33 +883,29 @@ async def execute_inference_request(inference_request_id: str):
                 select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
             )
             inference_request = inference_request.scalar_one_or_none()
-
         if inference_request is None:
             logger.warning(f"Invalid inference request ID: {inference_request_id}")
             return
-
         # TODO: Integrate with the Swiss Army Llama project or other inference libraries to perform the inference task
         # For now, let's assume the inference is executed successfully and the output results are generated
         output_results = {
             "output_text": "This is the generated output text.",
             "output_files": []
         }
-
+        _, _, local_supernode_pastelid, _ = await get_local_machine_supernode_data_func()
         # Create an inference response record
         inference_response = InferenceAPIUsageResponse(
             inference_request_id=inference_request_id,
             inference_response_id=str(uuid.uuid4()),
-            responding_supernode_pastelid="your_supernode_pastelid",
+            responding_supernode_pastelid=local_supernode_pastelid,
             output_results=output_results
         )
         async with AsyncSessionLocal() as db:
             db.add(inference_response)
             await db.commit()
             await db.refresh(inference_response)
-
         # Send the inference output results to the requesting party
         await send_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results)
-
     except Exception as e:
         logger.error(f"Error executing inference request: {str(e)}")
         raise
@@ -938,11 +918,9 @@ async def send_inference_output_results(inference_request_id: str, inference_res
                 select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
             )
             inference_request = inference_request.scalar_one_or_none()
-
         if inference_request is None:
             logger.warning(f"Invalid inference request ID: {inference_request_id}")
             return
-
         # Create an inference output result record
         inference_output_result = InferenceAPIOutputResult(
             inference_request_id=inference_request_id,
@@ -955,7 +933,6 @@ async def send_inference_output_results(inference_request_id: str, inference_res
             db.add(inference_output_result)
             await db.commit()
             await db.refresh(inference_output_result)
-
         # Send a notification to the requesting party (e.g., via a message or callback URL)
         notification_message = {
             "type": "inference_result_notification",
@@ -964,7 +941,6 @@ async def send_inference_output_results(inference_request_id: str, inference_res
             "message": "Your inference request has been processed. You can retrieve the results using the provided inference_response_id."
         }
         await send_notification(inference_request.requesting_pastelid, notification_message)
-
     except Exception as e:
         logger.error(f"Error sending inference output results: {str(e)}")
         raise
@@ -978,7 +954,6 @@ async def update_inference_sn_reputation_score(supernode_pastelid: str, reputati
     except Exception as e:
         logger.error(f"Error updating inference SN reputation score: {str(e)}")
         raise
-    
         
 # ________________________________________________________________________________________________________________________________
 

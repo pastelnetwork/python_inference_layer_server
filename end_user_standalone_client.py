@@ -249,6 +249,94 @@ def get_closest_supernode_to_pastelid_url(input_pastelid, supernode_list_df):
         return supernode_url, closest_supernode_pastelid
     return None, None
 
+async def send_to_address_func(address, amount, comment="", comment_to="", subtract_fee_from_amount=False):
+    """
+    Send an amount to a given Pastel address.
+
+    Args:
+        address (str): The Pastel address to send to.
+        amount (float): The amount in PSL to send.
+        comment (str, optional): A comment used to store what the transaction is for.
+                                    This is not part of the transaction, just kept in your wallet.
+                                    Defaults to an empty string.
+        comment_to (str, optional): A comment to store the name of the person or organization
+                                    to which you're sending the transaction. This is not part of
+                                    the transaction, just kept in your wallet. Defaults to an empty string.
+        subtract_fee_from_amount (bool, optional): Whether to deduct the fee from the amount being sent.
+                                                    If True, the recipient will receive less Pastel than you enter
+                                                    in the amount field. Defaults to False.
+
+    Returns:
+        str: The transaction ID if successful, None otherwise.
+
+    Example:
+        send_to_address_func("PtczsZ91Bt3oDPDQotzUsrx1wjmsFVgf28n", 0.1, "donation", "seans outpost", True)
+    """
+    global rpc_connection
+    try:
+        result = await rpc_connection.sendtoaddress(address, amount, comment, comment_to, subtract_fee_from_amount)
+        return result
+    except Exception as e:
+        logger.error(f"Error in send_to_address_func: {e}")
+        return None
+
+async def z_send_many_with_change_to_sender_func(from_address, amounts, min_conf=1, fee=0.1):
+    """
+    Send multiple amounts from a given address to multiple recipients.
+
+    Args:
+        from_address (str): The taddr or zaddr to send the funds from.
+        amounts (list): A list of dictionaries representing the amounts to send.
+                        Each dictionary should have the following keys:
+                        - "address" (str): The taddr or zaddr to send funds to.
+                        - "amount" (float): The amount in PSL to send.
+                        - "memo" (str, optional): If the address is a zaddr, raw data represented in hexadecimal string format.
+        min_conf (int, optional): The minimum number of confirmations required for the funds to be used. Defaults to 1.
+        fee (float, optional): The fee amount to attach to the transaction. Defaults to 0.1.
+
+    Returns:
+        str: The operation ID if successful, None otherwise.
+
+    Example:
+        amounts = [
+            {"address": "PzSSk8QJFqjo133DoFZvn9wwcCxt5RYeeLFJZRgws6xgJ3LroqRgXKNkhkG3ENmC8oe82UTr3PHcQB9mw7DSLXhyP6atQQ5", "amount": 5.0},
+            {"address": "PzXFZjHx6KzqNpAaMewvrUj8x1fvj7UZLFZYEuN8jJJuQhSfPYaVoAF1qrFSh3q2zUmCg7QkfQr4nAVrdovwKA4KDwPp5g", "amount": 10.0, "memo": "0xabcd"}
+        ]
+        z_send_many_with_change_to_sender_func("PtczsZ91Bt3oDPDQotzUsrx1wjmsFVgf28n", amounts, min_conf=2, fee=0.05)
+    """
+    global rpc_connection
+    try:
+        result = await rpc_connection.z_sendmanywithchangetosender(from_address, amounts, min_conf, fee)
+        return result
+    except Exception as e:
+        logger.error(f"Error in z_send_many_with_change_to_sender_func: {e}")
+        return None
+
+async def z_get_operation_status_func(operation_ids=None):
+    """
+    Get the status of one or more operations.
+
+    Args:
+        operation_ids (list, optional): A list of operation IDs to query the status for.
+                                        If not provided, all known operations will be examined.
+
+    Returns:
+        list: A list of JSON objects containing the operation status and any associated result or error data.
+
+    Example:
+        operation_ids = ["opid-1234", "opid-5678"]
+        z_get_operation_status_func(operation_ids)
+    """
+    global rpc_connection
+    try:
+        if operation_ids is None:
+            operation_ids = []
+        result = await rpc_connection.z_getoperationstatus(operation_ids)
+        return result
+    except Exception as e:
+        logger.error(f"Error in z_get_operation_status_func: {e}")
+        return None
+
 async def compress_data_with_zstd_func(input_data):
     zstd_compression_level = 20
     zstandard_compressor = zstd.ZstdCompressor(level=zstd_compression_level, write_content_size=True, write_checksum=True)
@@ -457,6 +545,7 @@ async def main():
     rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
     
     local_credit_tracking_psl_address = '44oVQrU5Hda9gLWR2ZGrLMiwsb31wkQFNajb'
+    burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
     
     # Load or create the global InferenceCreditPackMockup instance
     CREDIT_PACK_FILE = "credit_pack.json"
@@ -465,7 +554,7 @@ async def main():
     if credit_pack is None:
         # Create a new credit pack if the file doesn't exist or is invalid
         credit_pack = InferenceCreditPackMockup(
-            credit_pack_identifier="pack_123",
+            credit_pack_identifier="credit_pack_123",
             authorized_pastelids=["jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"],
             psl_cost_per_credit=10.0,
             total_psl_cost_for_pack=10000.0,
@@ -542,6 +631,8 @@ async def main():
     inference_request_id = usage_request_result["inference_request_id"]
     proposed_cost_in_credits = usage_request_result["proposed_cost_of_request_in_inference_credits"]
     credit_usage_tracking_psl_address = usage_request_result["credit_usage_tracking_psl_address"]
+    credit_usage_to_tracking_amount_multiplier = 0.0001
+    credit_usage_tracking_amount = proposed_cost_in_credits * credit_usage_to_tracking_amount_multiplier
     request_confirmation_message_amount_in_patoshis = usage_request_result["request_confirmation_message_amount_in_patoshis"]
 
     # Check if the credit pack has sufficient credits
