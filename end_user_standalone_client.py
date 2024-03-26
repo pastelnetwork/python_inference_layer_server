@@ -346,7 +346,7 @@ async def main():
 
     # Send a user message
     to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"
-    message_body = "Hello, this is a test message from a regular user!"
+    message_body = "Hello, this is a NEW test message from a regular user!"
     send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body)
     logger.info(f"Sent user message: {send_result}")
 

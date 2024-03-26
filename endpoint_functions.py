@@ -379,7 +379,7 @@ async def send_user_message(
             - `from_pastelid` (str): The PastelID of the sender.
             - `to_pastelid` (str): The PastelID of the recipient.
             - `message_body` (str): The content of the message.
-            - `signature` (str): The signature of the message by the sender's PastelID.
+            - `message_signature` (str): The signature of the message by the sender's PastelID.
             - `id` (int): The unique identifier of the user message.
             - `timestamp` (datetime): The timestamp of when the user message was created.
 

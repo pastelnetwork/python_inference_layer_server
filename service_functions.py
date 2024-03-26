@@ -460,7 +460,7 @@ async def send_message_to_sn_using_pastelid_func(message_to_send, message_type, 
     receiving_sn_pubkey = specified_machine_supernode_data['pubkey'].values.tolist()[0]
     logger.info(f"Now sending message to SN with PastelID: {receiving_sn_pastelid} and SN pubkey: {receiving_sn_pubkey}: {message_to_send}")
     await rpc_connection.masternode('message','send', receiving_sn_pubkey, compressed_message_base64)
-    return signed_message_to_send
+    return signed_message_to_send, pastelid_signature_on_message
 
 async def broadcast_message_to_list_of_sns_using_pastelid_func(message_to_send, message_type, list_of_receiving_sn_pastelids, pastelid_passphrase, verbose=0):
     global rpc_connection
@@ -637,9 +637,9 @@ async def monitor_new_messages():
             logger.error(f"Error while monitoring new messages: {str(e)}")
             await asyncio.sleep(5)
             
-async def create_user_message(from_pastelid: str, to_pastelid: str, message_body: str, signature: str) -> dict:
+async def create_user_message(from_pastelid: str, to_pastelid: str, message_body: str, message_signature: str) -> dict:
     async with AsyncSessionLocal() as db:
-        user_message = UserMessage(from_pastelid=from_pastelid, to_pastelid=to_pastelid, message_body=message_body, signature=signature)
+        user_message = UserMessage(from_pastelid=from_pastelid, to_pastelid=to_pastelid, message_body=message_body, message_signature=message_signature)
         db.add(user_message)
         await db.commit()
         await db.refresh(user_message)
@@ -652,6 +652,7 @@ async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_p
             message_type="user_message",
             sending_sn_pastelid=sending_sn_pastelid,
             receiving_sn_pastelid=receiving_sn_pastelid,
+            signature=user_message_data['message_signature'],
             timestamp=datetime.utcnow(),
             user_message_id=user_message_data['id']
         )
@@ -674,13 +675,30 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
     signed_message_to_send = json.dumps({
         'message': user_message_data['message_body'],
         'message_type': 'user_message',
-        'signature': user_message_data['signature'],
+        'signature': user_message_data['message_signature'],
         'from_pastelid': user_message_data['from_pastelid'],
         'to_pastelid': user_message_data['to_pastelid']
     }, ensure_ascii=False)
     # Send the message to the supernode.
-    signed_message = await send_message_to_sn_using_pastelid_func(signed_message_to_send, 'user_message', receiving_sn_pastelid, LOCAL_PASTEL_ID_PASSPHRASE)
-    return signed_message
+    signed_message, pastelid_signature_on_message = await send_message_to_sn_using_pastelid_func(signed_message_to_send, 'user_message', receiving_sn_pastelid, LOCAL_PASTEL_ID_PASSPHRASE)
+    message_dict = {
+            "message": user_message_data['message_body'],  # The content of the message
+            "message_type": "user_message",  # Static type as per your design
+            "sending_sn_pastelid": sending_sn_pastelid,  # From local machine supernode data
+            "timestamp": datetime.utcnow().isoformat(),  # Current UTC timestamp
+            "id": supernode_user_message_data['id'],  # ID from the supernode user message record
+            "signature": pastelid_signature_on_message,
+            "user_message": {
+                # Details from the user_message_data
+                "from_pastelid": from_pastelid,
+                "to_pastelid": to_pastelid,
+                "message_body": message_body,
+                "message_signature": user_message_data['message_signature'],
+                "id": user_message_data['id'],  # Assuming these fields are included in your dictionary
+                "timestamp": user_message_data['timestamp']
+            }
+        }    
+    return message_dict
 
 async def process_received_user_message(supernode_user_message: SupernodeUserMessage):
     async with AsyncSessionLocal() as db:

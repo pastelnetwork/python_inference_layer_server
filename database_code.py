@@ -48,7 +48,7 @@ class UserMessage(Base):
     from_pastelid = Column(String, index=True)
     to_pastelid = Column(String, index=True)
     message_body = Column(Text)
-    signature = Column(String)
+    message_signature = Column(String)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
 
 class SupernodeUserMessage(Message):
@@ -57,7 +57,7 @@ class SupernodeUserMessage(Message):
     id = Column(Integer, ForeignKey("messages.id"), primary_key=True)
     user_message_id = Column(Integer, ForeignKey("user_messages.id"), index=True)
     user_message = relationship("UserMessage", backref="supernode_user_messages")
-
+    
     __mapper_args__ = {
         "polymorphic_identity": "supernode_user_message",
     }
