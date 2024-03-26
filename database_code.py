@@ -27,11 +27,6 @@ class Message(Base):
     signature = Column(String)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
 
-    __mapper_args__ = {
-        'polymorphic_identity': 'message',
-        'polymorphic_on': message_type
-    }
-
     def __repr__(self):
         return f"<Message(id={self.id}, sending_sn_pastelid='{self.sending_sn_pastelid}', receiving_sn_pastelid='{self.receiving_sn_pastelid}', message_type='{self.message_type}', timestamp='{self.timestamp}')>"
 
@@ -75,7 +70,7 @@ class UserMessageCreate(BaseModel):
     from_pastelid: str
     to_pastelid: str
     message_body: str
-    signature: str
+    message_signature: str
 
 class UserMessageModel(UserMessageCreate):
     id: int
@@ -281,6 +276,8 @@ def to_dict(self):
     return d
 
 Message.to_dict = to_dict
+UserMessage.to_dict = to_dict
+SupernodeUserMessage.to_dict = to_dict
 
 async def get_db():
     db = AsyncSessionLocal()

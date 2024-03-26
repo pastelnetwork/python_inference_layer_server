@@ -296,7 +296,7 @@ class PastelMessagingClient:
             "challenge_id": challenge_id,
             "challenge_signature": challenge_signature
         }
-        async with httpx.AsyncClient(timeout=Timeout(20)) as client:
+        async with httpx.AsyncClient(timeout=Timeout(30)) as client:
             response = await client.post(f"{supernode_url}/send_user_message", json=payload)
             response.raise_for_status()
             result = response.json()

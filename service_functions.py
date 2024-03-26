@@ -41,13 +41,13 @@ CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_
 LOCAL_PASTEL_ID_PASSPHRASE = config.get("LOCAL_PASTEL_ID_PASSPHRASE")
 challenge_store = {}
 
-def parse_datetime(timestamp_str):
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
-        try:
-            return pd.to_datetime(datetime.strptime(timestamp_str, fmt))
-        except ValueError:
-            continue
-    raise ValueError(f"time data {timestamp_str} does not match expected formats")
+def parse_timestamp(timestamp_str):
+    try:
+        # Attempt to parse with fractional seconds
+        return pd.to_datetime(timestamp_str, format='%Y-%m-%dT%H:%M:%S.%f')
+    except ValueError:
+        # Fall back to parsing without fractional seconds
+        return pd.to_datetime(timestamp_str, format='%Y-%m-%dT%H:%M:%S')
 
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
@@ -351,7 +351,7 @@ async def list_sn_messages_func():
         result = await db.execute(select(Message).where(Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages).order_by(Message.timestamp.desc()))
         db_messages_df = pd.DataFrame([message.to_dict() for message in result.scalars().all()])
         if not db_messages_df.empty:
-            db_messages_df['timestamp'] = pd.to_datetime(db_messages_df['timestamp'])
+            db_messages_df['timestamp'] = pd.to_datetime(db_messages_df['timestamp'], errors='coerce')
         # Retrieve new messages from the RPC interface
         new_messages = await rpc_connection.masternode('message', 'list')
         new_messages_data = []
@@ -365,7 +365,7 @@ async def list_sn_messages_func():
             if sending_pastelid is None or receiving_pastelid is None:
                 logger.warning(f"Skipping message due to missing PastelID for txid_vout: {sending_sn_txid_vout} or {receiving_sn_txid_vout}")
                 continue
-            message_timestamp = parse_datetime(message['Timestamp'])
+            message_timestamp = parse_timestamp(datetime.fromtimestamp(message['Timestamp']).isoformat())
             # Check if the message already exists in the database
             if not db_messages_df.empty:
                 existing_message = db_messages_df[
@@ -637,47 +637,50 @@ async def monitor_new_messages():
             logger.error(f"Error while monitoring new messages: {str(e)}")
             await asyncio.sleep(5)
             
-async def create_user_message(from_pastelid: str, to_pastelid: str, message_body: str, signature: str) -> UserMessage:
-    user_message = UserMessage(from_pastelid=from_pastelid, to_pastelid=to_pastelid, message_body=message_body, signature=signature)
+async def create_user_message(from_pastelid: str, to_pastelid: str, message_body: str, signature: str) -> dict:
     async with AsyncSessionLocal() as db:
+        user_message = UserMessage(from_pastelid=from_pastelid, to_pastelid=to_pastelid, message_body=message_body, signature=signature)
         db.add(user_message)
         await db.commit()
         await db.refresh(user_message)
-    return user_message
+        return user_message.to_dict()  # Assuming you have a to_dict method or similar to serialize your model
 
-async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_pastelid: str, user_message: UserMessage) -> SupernodeUserMessage:
-    supernode_user_message = SupernodeUserMessage(
-        message_body=user_message.message_body,
-        message_type="user_message",
-        sending_sn_pastelid=sending_sn_pastelid,
-        receiving_sn_pastelid=receiving_sn_pastelid,
-        timestamp=datetime.utcnow(),
-        user_message_id=user_message.id
-    )
+async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_pastelid: str, user_message_data: dict) -> dict:
     async with AsyncSessionLocal() as db:
+        supernode_user_message = SupernodeUserMessage(
+            message_body=user_message_data['message_body'],
+            message_type="user_message",
+            sending_sn_pastelid=sending_sn_pastelid,
+            receiving_sn_pastelid=receiving_sn_pastelid,
+            timestamp=datetime.utcnow(),
+            user_message_id=user_message_data['id']
+        )
         db.add(supernode_user_message)
         await db.commit()
         await db.refresh(supernode_user_message)
-    return supernode_user_message
+        return supernode_user_message.to_dict() 
 
-async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str, message_body: str, message_signature: str):
-    user_message = await create_user_message(from_pastelid, to_pastelid, message_body, message_signature)
+async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str, message_body: str, message_signature: str) -> dict:
+    user_message_data = await create_user_message(from_pastelid, to_pastelid, message_body, message_signature)
     local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
-    sending_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
+    sending_sn_pastelid = local_machine_supernode_data['extKey'][0]  # Assuming this is a list
     receiving_sn_data = await get_sn_data_from_pastelid_func(to_pastelid)
-    if receiving_sn_data.empty:
-        raise ValueError(f"No Supernode found for PastelID: {to_pastelid}")
-    receiving_sn_pastelid = receiving_sn_data['extKey'].values.tolist()[0]
-    supernode_user_message = await create_supernode_user_message(sending_sn_pastelid, receiving_sn_pastelid, user_message)
+    if len(receiving_sn_data['extKey']) == 0:
+        raise ValueError(f"No Supernode found for PastelID: {to_pastelid}.")
+    receiving_sn_pastelid = receiving_sn_data['extKey'][0]  # Assuming this is also a list
+    # Now that we have user_message_data, let's create the supernode user message.
+    supernode_user_message_data = await create_supernode_user_message(sending_sn_pastelid, receiving_sn_pastelid, user_message_data)
+    # Preparing the message to be sent to the supernode.
     signed_message_to_send = json.dumps({
-        'message': user_message.message_body,
+        'message': user_message_data['message_body'],
         'message_type': 'user_message',
-        'signature': user_message.signature,
-        'from_pastelid': user_message.from_pastelid,
-        'to_pastelid': user_message.to_pastelid
+        'signature': user_message_data['signature'],
+        'from_pastelid': user_message_data['from_pastelid'],
+        'to_pastelid': user_message_data['to_pastelid']
     }, ensure_ascii=False)
-    await send_message_to_sn_using_pastelid_func(signed_message_to_send, 'user_message', receiving_sn_pastelid, LOCAL_PASTEL_ID_PASSPHRASE)
-    return supernode_user_message
+    # Send the message to the supernode.
+    signed_message = await send_message_to_sn_using_pastelid_func(signed_message_to_send, 'user_message', receiving_sn_pastelid, LOCAL_PASTEL_ID_PASSPHRASE)
+    return signed_message
 
 async def process_received_user_message(supernode_user_message: SupernodeUserMessage):
     async with AsyncSessionLocal() as db:

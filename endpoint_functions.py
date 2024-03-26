@@ -396,21 +396,7 @@ async def send_user_message(
         supernode_user_message = await service_functions.send_user_message_via_supernodes(
             user_message.from_pastelid, user_message.to_pastelid, user_message.message_body, user_message.message_signature
         )
-        return db.SupernodeUserMessageModel(
-            message=supernode_user_message.message_body,
-            message_type="user_message",
-            sending_sn_pastelid=supernode_user_message.sending_sn_pastelid,
-            timestamp=supernode_user_message.timestamp,
-            id=supernode_user_message.id,
-            user_message=db.UserMessageModel(
-                from_pastelid=supernode_user_message.user_message.from_pastelid,
-                to_pastelid=supernode_user_message.user_message.to_pastelid,
-                message_body=supernode_user_message.user_message.message_body,
-                signature=supernode_user_message.user_message.signature,
-                id=supernode_user_message.user_message.id,
-                timestamp=supernode_user_message.user_message.timestamp
-            )
-        )
+        return supernode_user_message 
     except Exception as e:
         logger.error(f"Error sending user message: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error sending user message: {str(e)}")
