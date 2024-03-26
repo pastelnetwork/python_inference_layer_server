@@ -427,7 +427,7 @@ async def get_user_messages(
         - `from_pastelid` (str): The PastelID of the sender.
         - `to_pastelid` (str): The PastelID of the recipient.
         - `message_body` (str): The content of the message.
-        - `signature` (str): The signature of the message by the sender's PastelID.
+        - `message_signature` (str): The signature of the message by the sender's PastelID.
         - `id` (int): The unique identifier of the user message.
         - `timestamp` (datetime): The timestamp of when the user message was created.
 
@@ -447,7 +447,7 @@ async def get_user_messages(
                 from_pastelid=message.from_pastelid,
                 to_pastelid=message.to_pastelid,
                 message_body=message.message_body,
-                signature=message.signature,
+                message_signature=message.message_signature,
                 id=message.id,
                 timestamp=message.timestamp
             )
