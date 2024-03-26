@@ -13,6 +13,7 @@ import pandas as pd
 from typing import List, Dict, Any
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from httpx import AsyncClient, Limits, Timeout
+from database_code import InferenceAPIUsageRequestModel, InferenceConfirmationModel
 
 logger = logging.getLogger("pastel_supernode_messaging_client")
 MESSAGING_TIMEOUT_IN_SECONDS = 30
@@ -321,6 +322,61 @@ class PastelMessagingClient:
             response.raise_for_status()
             result = response.json()
             return result
+
+    async def send_inference_api_usage_request(self, supernode_url: str, request_data: InferenceAPIUsageRequestModel) -> Dict[str, Any]:
+        challenge_result = await self.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        challenge_id = challenge_result["challenge_id"]
+        challenge_signature = challenge_result["signature"]
+
+        payload = {
+            "inference_api_usage_request": request_data.dict(),
+            "challenge": challenge,
+            "challenge_id": challenge_id,
+            "challenge_signature": challenge_signature
+        }
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            response = await client.post(f"{supernode_url}/send_inference_api_usage_request", json=payload)
+            response.raise_for_status()
+            result = response.json()
+            return result
+
+    async def send_inference_confirmation(self, supernode_url: str, confirmation_data: InferenceConfirmationModel) -> Dict[str, Any]:
+        challenge_result = await self.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        challenge_id = challenge_result["challenge_id"]
+        challenge_signature = challenge_result["signature"]
+
+        payload = {
+            "inference_confirmation": confirmation_data.dict(),
+            "challenge": challenge,
+            "challenge_id": challenge_id,
+            "challenge_signature": challenge_signature
+        }
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            response = await client.post(f"{supernode_url}/send_inference_confirmation", json=payload)
+            response.raise_for_status()
+            result = response.json()
+            return result
+
+    async def get_inference_output_results(self, supernode_url: str, inference_request_id: str, inference_response_id: str) -> Dict[str, Any]:
+        challenge_result = await self.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        challenge_id = challenge_result["challenge_id"]
+        challenge_signature = challenge_result["signature"]
+
+        params = {
+            "inference_request_id": inference_request_id,
+            "inference_response_id": inference_response_id,
+            "challenge": challenge,
+            "challenge_id": challenge_id,
+            "challenge_signature": challenge_signature
+        }
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            response = await client.get(f"{supernode_url}/get_inference_output_results", params=params)
+            response.raise_for_status()
+            result = response.json()
+            return result
         
 async def main():
     global rpc_connection
@@ -347,7 +403,7 @@ async def main():
 
     # Send a user message
     to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"
-    message_body = "Hello, this is a brand 🍉NEW test message from a regular user!"
+    message_body = "Hello, this is a brand 🍉 NEW test message from a regular user!"
     send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body)
     logger.info(f"Sent user message: {send_result}")
 

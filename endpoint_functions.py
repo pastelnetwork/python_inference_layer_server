@@ -457,7 +457,114 @@ async def get_user_messages(
         logger.error(f"Error retrieving user messages: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving user messages: {str(e)}")
     
+@router.post("/send_inference_api_usage_request", response_model=db.InferenceAPIUsageRequest)
+async def send_inference_api_usage_request_endpoint(
+    inference_api_usage_request: db.InferenceAPIUsageRequestModel = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            inference_api_usage_request.requesting_pastelid, challenge_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        
+        # Validate the inference API usage request
+        is_valid_request = await service_functions.validate_inference_api_usage_request(inference_api_usage_request.dict())
+        if not is_valid_request:
+            raise HTTPException(status_code=400, detail="Invalid inference API usage request")
+        
+        # Save the inference API usage request to the database
+        db_inference_api_usage_request = db.InferenceAPIUsageRequest(
+            requesting_pastelid=inference_api_usage_request.requesting_pastelid,
+            credit_pack_identifier=inference_api_usage_request.credit_pack_identifier,
+            requested_model_canonical_string=inference_api_usage_request.requested_model_canonical_string,
+            model_parameters_json=inference_api_usage_request.model_parameters_json,
+            model_input_data_json_b64=inference_api_usage_request.model_input_data_json_b64
+        )
+        async with db.AsyncSessionLocal() as db_session:
+            db_session.add(db_inference_api_usage_request)
+            await db_session.commit()
+            await db_session.refresh(db_inference_api_usage_request)
+        
+        return db_inference_api_usage_request
+    except Exception as e:
+        logger.error(f"Error sending inference API usage request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error sending inference API usage request: {str(e)}")
 
+
+@router.post("/send_inference_confirmation", response_model=bool)
+async def send_inference_confirmation_endpoint(
+    inference_confirmation: db.InferenceConfirmationModel = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            inference_confirmation.inference_request_id, challenge_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        
+        # Process the inference confirmation
+        is_processed = await service_functions.process_inference_confirmation(
+            inference_confirmation.inference_request_id, inference_confirmation.confirmation_transaction
+        )
+        return is_processed
+    except Exception as e:
+        logger.error(f"Error sending inference confirmation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error sending inference confirmation: {str(e)}")
+
+
+@router.get("/get_inference_output_results/{inference_response_id}")
+async def get_inference_output_results_endpoint(
+    inference_response_id: str,
+    pastelid: str = Query(..., description="The PastelID of the requesting party"),
+    challenge: str = Query(..., description="The challenge string"),
+    challenge_id: str = Query(..., description="The ID of the challenge string"),
+    challenge_signature: str = Query(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await verify_challenge_signature(pastelid, challenge_signature, challenge_id)
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+
+        # Retrieve the inference output results from the database
+        async with AsyncSessionLocal() as db:
+            inference_output_result = await db.execute(
+                select(InferenceAPIOutputResult).where(InferenceAPIOutputResult.inference_response_id == inference_response_id)
+            )
+            inference_output_result = inference_output_result.scalar_one_or_none()
+
+        if inference_output_result is None:
+            raise HTTPException(status_code=404, detail="Inference output results not found")
+
+        # Verify that the requesting PastelID matches the original requesting PastelID
+        async with AsyncSessionLocal() as db:
+            inference_request = await db.execute(
+                select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_output_result.inference_request_id)
+            )
+            inference_request = inference_request.scalar_one_or_none()
+
+        if inference_request.requesting_pastelid != pastelid:
+            raise HTTPException(status_code=403, detail="Unauthorized access to inference output results")
+
+        # Decode the inference output results
+        inference_result_json = base64.b64decode(inference_output_result.inference_result_json_base64).decode("utf-8")
+        inference_result = json.loads(inference_result_json)
+        return inference_result
+
+    except Exception as e:
+        logger.error(f"Error retrieving inference output results: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving inference output results: {str(e)}")    
+    
+    
 @router.get("/get_inference_model_menu")
 async def get_inference_model_menu_endpoint(
     rpc_connection=Depends(get_rpc_connection),

@@ -721,6 +721,8 @@ async def get_user_messages_for_pastelid(pastelid: str) -> List[UserMessage]:
             
 #________________________________________________________________________________________________________________            
 
+
+
 async def get_inference_model_menu():
     try:
         # Check if the model menu file exists locally
@@ -754,40 +756,43 @@ async def get_inference_model_menu():
             return local_model_menu
         else:
             raise
-
-async def get_inference_model_menu():
-    try:
-        # TODO: Implement the logic to retrieve the latest inference model menu from the configured source
-        # For now, let's assume the model menu is a static dictionary
-        model_menu = {
-            "models": [
-                {
-                    "model_name": "llama-7b",
-                    "model_url": "https://huggingface.co/decapoda-research/llama-7b-hf",
-                    "input_fields": ["text"],
-                    "output_fields": ["text"],
-                    "model_parameters": {
-                        "max_length": 100,
-                        "temperature": 0.7
-                    },
-                    "credit_costs": {
-                        "input_tokens": 1.5,
-                        "output_tokens": 1.1
-                    }
-                },
-                # Add more models as needed
-            ]
-        }
-        return model_menu
-    except Exception as e:
-        logger.error(f"Error retrieving inference model menu: {str(e)}")
-        raise
-
+        
 async def validate_inference_api_usage_request(request_data: dict):
     try:
-        # TODO: Implement the validation logic for the inference API usage request
-        # Check the credit pack balance, verify the user's PastelID signature, and ensure that the requested model and parameters are valid based on the model menu
-        # For now, let's assume the request is valid
+        requesting_pastelid = request_data["requesting_pastelid"]
+        credit_pack_identifier = request_data["credit_pack_identifier"]
+        requested_model = request_data["requested_model_canonical_string"]
+        model_parameters = request_data["model_parameters_json"]
+        input_data = request_data["model_input_data_json_b64"]
+
+        # Retrieve the credit pack from the database
+        async with AsyncSessionLocal() as db:
+            credit_pack = await db.execute(
+                select(InferenceCreditPack).where(InferenceCreditPack.credit_pack_identifier == credit_pack_identifier)
+            )
+            credit_pack = credit_pack.scalar_one_or_none()
+
+        if credit_pack is None:
+            logger.warning(f"Invalid credit pack identifier: {credit_pack_identifier}")
+            return False
+
+        # Check if the requesting PastelID is authorized to use the credit pack
+        if requesting_pastelid not in credit_pack.authorized_pastelids:
+            logger.warning(f"Unauthorized PastelID: {requesting_pastelid}")
+            return False
+
+        # Validate the requested model and parameters against the model menu
+        model_menu = await get_inference_model_menu()
+        requested_model_data = next(
+            (model for model in model_menu["models"] if model["model_name"] == requested_model),
+            None
+        )
+        if requested_model_data is None:
+            logger.warning(f"Invalid model requested: {requested_model}")
+            return False
+
+        # TODO: Validate the model parameters against the model's supported parameters
+
         return True
     except Exception as e:
         logger.error(f"Error validating inference API usage request: {str(e)}")
@@ -795,9 +800,29 @@ async def validate_inference_api_usage_request(request_data: dict):
 
 async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: dict):
     try:
-        # TODO: Implement the logic to process the inference confirmation
-        # Check if the confirmation transaction is valid and trigger the inference request processing
-        # For now, let's assume the confirmation is valid and the inference request is processed
+        # Retrieve the inference API usage request from the database
+        async with AsyncSessionLocal() as db:
+            inference_request = await db.execute(
+                select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
+            )
+            inference_request = inference_request.scalar_one_or_none()
+
+        if inference_request is None:
+            logger.warning(f"Invalid inference request ID: {inference_request_id}")
+            return False
+
+        # TODO: Validate the confirmation transaction against the blockchain
+
+        # Update the inference request status to "confirmed"
+        inference_request.status = "confirmed"
+        async with AsyncSessionLocal() as db:
+            db.add(inference_request)
+            await db.commit()
+            await db.refresh(inference_request)
+
+        # Trigger the inference request processing
+        asyncio.create_task(execute_inference_request(inference_request_id))
+
         return True
     except Exception as e:
         logger.error(f"Error processing inference confirmation: {str(e)}")
@@ -805,40 +830,86 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
 
 async def execute_inference_request(inference_request_id: str):
     try:
-        # TODO: Implement the logic to execute the inference request
-        # Integrate with the Swiss Army Llama project or other inference libraries to perform the inference task and generate the output results
+        # Retrieve the inference API usage request from the database
+        async with AsyncSessionLocal() as db:
+            inference_request = await db.execute(
+                select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
+            )
+            inference_request = inference_request.scalar_one_or_none()
+
+        if inference_request is None:
+            logger.warning(f"Invalid inference request ID: {inference_request_id}")
+            return
+
+        # TODO: Integrate with the Swiss Army Llama project or other inference libraries to perform the inference task
         # For now, let's assume the inference is executed successfully and the output results are generated
         output_results = {
             "output_text": "This is the generated output text.",
             "output_files": []
         }
-        return output_results
+
+        # Create an inference response record
+        inference_response = InferenceAPIUsageResponse(
+            inference_request_id=inference_request_id,
+            inference_response_id=str(uuid.uuid4()),
+            responding_supernode_pastelid="your_supernode_pastelid",
+            output_results=output_results
+        )
+        async with AsyncSessionLocal() as db:
+            db.add(inference_response)
+            await db.commit()
+            await db.refresh(inference_response)
+
+        # Send the inference output results to the requesting party
+        await send_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results)
+
     except Exception as e:
         logger.error(f"Error executing inference request: {str(e)}")
         raise
 
 async def send_inference_output_results(inference_request_id: str, inference_response_id: str, output_results: dict):
     try:
+        # Retrieve the inference API usage request from the database
         async with AsyncSessionLocal() as db:
-            inference_output_result = InferenceAPIOutputResult(
-                inference_request_id=inference_request_id,
-                inference_response_id=inference_response_id,
-                responding_supernode_pastelid="your_supernode_pastelid",
-                inference_result_json_base64="base64_encoded_output_results",
-                responding_supernode_signature_on_inference_result_id="your_signature"
+            inference_request = await db.execute(
+                select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
             )
+            inference_request = inference_request.scalar_one_or_none()
+
+        if inference_request is None:
+            logger.warning(f"Invalid inference request ID: {inference_request_id}")
+            return
+
+        # Create an inference output result record
+        inference_output_result = InferenceAPIOutputResult(
+            inference_request_id=inference_request_id,
+            inference_response_id=inference_response_id,
+            responding_supernode_pastelid="your_supernode_pastelid",
+            inference_result_json_base64=base64.b64encode(json.dumps(output_results).encode("utf-8")).decode("utf-8"),
+            responding_supernode_signature_on_inference_result_id="your_signature"
+        )
+        async with AsyncSessionLocal() as db:
             db.add(inference_output_result)
             await db.commit()
             await db.refresh(inference_output_result)
-            return inference_output_result
+
+        # Send a notification to the requesting party (e.g., via a message or callback URL)
+        notification_message = {
+            "type": "inference_result_notification",
+            "inference_request_id": inference_request_id,
+            "inference_response_id": inference_response_id,
+            "message": "Your inference request has been processed. You can retrieve the results using the provided inference_response_id."
+        }
+        await send_notification(inference_request.requesting_pastelid, notification_message)
+
     except Exception as e:
         logger.error(f"Error sending inference output results: {str(e)}")
         raise
-
+    
 async def update_inference_sn_reputation_score(supernode_pastelid: str, reputation_score: float):
     try:
         # TODO: Implement the logic to update the inference SN reputation score
-        # Update the reputation score of the supernode based on its performance in the inference request process
+        # This could involve storing the reputation score in a database or broadcasting it to other supernodes
         # For now, let's assume the reputation score is updated successfully
         return True
     except Exception as e:
