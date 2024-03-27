@@ -7,6 +7,7 @@ import shutil
 import queue
 import zstandard as zstd
 import base64
+import hashlib
 import urllib.parse as urlparse
 import decimal
 import pandas as pd
@@ -237,13 +238,27 @@ def get_top_supernode_url(supernode_list_df):
             return supernode_url
     return None
 
-def get_closest_supernode_to_pastelid_url(input_pastelid, supernode_list_df):  
+def compute_sha3_256_hexdigest(input_str):
+    """Compute the SHA3-256 hash of the input string and return the hexadecimal digest."""
+    return hashlib.sha3_256(input_str.encode()).hexdigest()
+
+def get_closest_supernode_to_pastelid_url(input_pastelid, supernode_list_df):
     if not supernode_list_df.empty:
+        # Compute SHA3-256 hash of the input_pastelid
+        input_pastelid_hash = compute_sha3_256_hexdigest(input_pastelid)
+        input_pastelid_int = int(input_pastelid_hash, 16)
         list_of_supernode_pastelids = supernode_list_df['extKey'].values.tolist()
-        xor_distance_to_supernodes = [int(input_pastelid, 16) ^ int(x, 16) for x in list_of_supernode_pastelids]
+        xor_distance_to_supernodes = []
+        for x in list_of_supernode_pastelids:
+            # Compute SHA3-256 hash of each supernode_pastelid
+            supernode_pastelid_hash = compute_sha3_256_hexdigest(x)
+            supernode_pastelid_int = int(supernode_pastelid_hash, 16)
+            # Compute XOR distance
+            distance = input_pastelid_int ^ supernode_pastelid_int
+            xor_distance_to_supernodes.append(distance)
         closest_supernode_index = xor_distance_to_supernodes.index(min(xor_distance_to_supernodes))
         closest_supernode_pastelid = list_of_supernode_pastelids[closest_supernode_index]
-        closest_supernode_ipaddress_port = supernode_list_df.loc[supernode_list_df['extKey'] == list_of_supernode_pastelids[closest_supernode_index]]['ipaddress:port'].values[0]
+        closest_supernode_ipaddress_port = supernode_list_df.loc[supernode_list_df['extKey'] == closest_supernode_pastelid]['ipaddress:port'].values[0]
         ipaddress = closest_supernode_ipaddress_port.split(':')[0]
         supernode_url = f"http://{ipaddress}:7123"
         return supernode_url, closest_supernode_pastelid
@@ -544,6 +559,51 @@ async def main():
     rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
     rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
     
+
+        
+    # Replace with your own values
+    my_local_pastelid = "jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"
+    my_passphrase = "5QcX9nX67buxyeC"
+
+    messaging_client = PastelMessagingClient(my_local_pastelid, my_passphrase)
+
+    # Get the list of Supernodes
+    supernode_list_df, supernode_list_json = await check_supernode_list_func()
+
+    # Request a challenge from a Supernode
+    supernode_url = get_top_supernode_url(supernode_list_df)
+    supernode_url = 'http://154.38.164.75:7123' #Temporary override for debugging
+    challenge_result = await messaging_client.request_and_sign_challenge(supernode_url)
+    challenge = challenge_result["challenge"]
+    signature = challenge_result["signature"]
+    logger.info(f"Received challenge: {challenge}")
+    logger.info(f"Signed challenge with signature: {signature}")
+
+    # Send a user message
+    logger.info("Sending user message...")
+    to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"
+    logger.info(f"Recipient pastelid: {to_pastelid}")
+    #Lookup the closest supernode to the recipient pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the recipient since it is closest to the recipient's pastelid:
+    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(to_pastelid, supernode_list_df)
+    supernode_url = 'http://154.38.164.75:7123' #Temporary override for debugging
+    logger.info(f"Closest Supernode to recipient pastelid: {supernode_pastelid}")
+    
+    message_body = "Hello, this is a brand 🍉 NEW test message from a regular user!"
+    send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body)
+    logger.info(f"Sent user message: {send_result}")
+
+    # Get user messages
+    logger.info("Retrieving user messages...")
+    logger.info(f"My local pastelid: {my_local_pastelid}")
+    # Lookup the closest supernode to the local pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the local user since it is closest to the local pastelid:
+    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(my_local_pastelid, supernode_list_df)
+    supernode_url = 'http://154.38.164.75:7123' #Temporary override for debugging
+    logger.info(f"Closest Supernode to local pastelid: {supernode_pastelid}")
+    messages = await messaging_client.get_user_messages(supernode_url)
+    logger.info(f"Retrieved user messages: {messages}")
+
+    #________________________________________________________
+
     local_credit_tracking_psl_address = '44oVQrU5Hda9gLWR2ZGrLMiwsb31wkQFNajb'
     burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
     
@@ -562,57 +622,6 @@ async def main():
             credit_usage_tracking_psl_address=local_credit_tracking_psl_address
         )
         credit_pack.save_to_json(CREDIT_PACK_FILE)
-        
-    # Replace with your own values
-    my_local_pastelid = "jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"
-    my_passphrase = "5QcX9nX67buxyeC"
-
-    messaging_client = PastelMessagingClient(my_local_pastelid, my_passphrase)
-
-    # Get the list of Supernodes
-    supernode_list_df, supernode_list_json = await check_supernode_list_func()
-
-    # Request a challenge from a Supernode
-    supernode_url = get_top_supernode_url(supernode_list_df)
-    supernode_url = 'http://154.38.164.75:7123'
-    challenge_result = await messaging_client.request_and_sign_challenge(supernode_url)
-    challenge = challenge_result["challenge"]
-    signature = challenge_result["signature"]
-    logger.info(f"Received challenge: {challenge}")
-    logger.info(f"Signed challenge with signature: {signature}")
-
-    # Send a user message
-    logger.info("Sending user message...")
-    to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"
-    logger.info(f"Recipient pastelid: {to_pastelid}")
-    #Lookup the closest supernode to the recipient pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the recipient since it is closest to the recipient's pastelid:
-    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(to_pastelid, supernode_list_df)
-    logger.info(f"Closest Supernode to recipient pastelid: {supernode_pastelid}")
-    
-    message_body = "Hello, this is a brand 🍉 NEW test message from a regular user!"
-    send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body)
-    logger.info(f"Sent user message: {send_result}")
-
-    # Get user messages
-    logger.info("Retrieving user messages...")
-    logger.info(f"My local pastelid: {my_local_pastelid}")
-    # Lookup the closest supernode to the local pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the local user since it is closest to the local pastelid:
-    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(my_local_pastelid, supernode_list_df)
-    logger.info(f"Closest Supernode to local pastelid: {supernode_pastelid}")
-    messages = await messaging_client.get_user_messages(supernode_url)
-    logger.info(f"Retrieved user messages: {messages}")
-
-    #________________________________________________________
-
-    # Create a mock credit pack
-    credit_pack = InferenceCreditPackMockup(
-        credit_pack_identifier="pack_123",
-        authorized_pastelids=[my_local_pastelid],
-        psl_cost_per_credit=0.01,
-        total_psl_cost_for_pack=100.0,
-        initial_credit_balance=1000.0,
-        credit_usage_tracking_psl_address="psl_address_123"
-    )
 
     # Prepare the inference API usage request
     request_data = InferenceAPIUsageRequestModel(

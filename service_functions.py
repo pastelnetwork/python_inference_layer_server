@@ -1133,12 +1133,13 @@ credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
 if credit_pack is None:
     # Create a new credit pack if the file doesn't exist or is invalid
     credit_pack = InferenceCreditPackMockup(
-        credit_pack_identifier="pack_123",
+        credit_pack_identifier="credit_pack_123",
         authorized_pastelids=["jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"],
-        psl_cost_per_credit=0.01,
-        total_psl_cost_for_pack=100.0,
-        initial_credit_balance=1000.0,
-        credit_usage_tracking_psl_address="psl_address_123"
+        psl_cost_per_credit=10.0,
+        total_psl_cost_for_pack=10000.0,
+        initial_credit_balance=100000.0,
+        credit_usage_tracking_psl_address=local_credit_tracking_psl_address
     )
     credit_pack.save_to_json(CREDIT_PACK_FILE)
+
 
