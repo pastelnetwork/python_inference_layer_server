@@ -1129,6 +1129,7 @@ rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_h
 # Load or create the global InferenceCreditPackMockup instance
 CREDIT_PACK_FILE = "credit_pack.json"
 credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
+users_credit_tracking_psl_address = '44oVQrU5Hda9gLWR2ZGrLMiwsb31wkQFNajb'
 
 if credit_pack is None:
     # Create a new credit pack if the file doesn't exist or is invalid
@@ -1138,7 +1139,7 @@ if credit_pack is None:
         psl_cost_per_credit=10.0,
         total_psl_cost_for_pack=10000.0,
         initial_credit_balance=100000.0,
-        credit_usage_tracking_psl_address=local_credit_tracking_psl_address
+        credit_usage_tracking_psl_address=users_credit_tracking_psl_address
     )
     credit_pack.save_to_json(CREDIT_PACK_FILE)
 
