@@ -1,7 +1,7 @@
 import service_functions
 import database_code as db
 from logger_config import setup_logger
-from fastapi import APIRouter, Depends, Query, Request, Body, Path
+from fastapi import APIRouter, Depends, Query, Request, Body
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.exceptions import HTTPException
 from json import JSONEncoder
@@ -457,7 +457,8 @@ async def get_user_messages(
         logger.error(f"Error retrieving user messages: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving user messages: {str(e)}")
     
-@router.post("/send_inference_api_usage_request", response_model=db.InferenceAPIUsageRequest)
+    
+@router.post("/send_inference_api_usage_request", response_model=db.InferenceAPIUsageRequestResponse)
 async def send_inference_api_usage_request_endpoint(
     inference_api_usage_request: db.InferenceAPIUsageRequestModel = Body(...),
     challenge: str = Body(..., description="The challenge string"),
@@ -477,20 +478,10 @@ async def send_inference_api_usage_request_endpoint(
         if not is_valid_request:
             raise HTTPException(status_code=400, detail="Invalid inference API usage request")
         
-        # Save the inference API usage request to the database
-        db_inference_api_usage_request = db.InferenceAPIUsageRequest(
-            requesting_pastelid=inference_api_usage_request.requesting_pastelid,
-            credit_pack_identifier=inference_api_usage_request.credit_pack_identifier,
-            requested_model_canonical_string=inference_api_usage_request.requested_model_canonical_string,
-            model_parameters_json=inference_api_usage_request.model_parameters_json,
-            model_input_data_json_b64=inference_api_usage_request.model_input_data_json_b64
-        )
-        async with db.AsyncSessionLocal() as db_session:
-            db_session.add(db_inference_api_usage_request)
-            await db_session.commit()
-            await db_session.refresh(db_inference_api_usage_request)
-        
-        return db_inference_api_usage_request
+        # Delegate the saving of the inference API usage request to the service function
+        saved_request = await service_functions.save_inference_api_usage_request(inference_api_usage_request)
+        saved_request_dict = saved_request.to_dict()  # Assuming you have a to_dict() method in InferenceAPIUsageRequest
+        return saved_request_dict
     except Exception as e:
         logger.error(f"Error sending inference API usage request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error sending inference API usage request: {str(e)}")
@@ -510,7 +501,6 @@ async def send_inference_confirmation_endpoint(
         )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        
         # Process the inference confirmation
         is_processed = await service_functions.process_inference_confirmation(
             inference_confirmation.inference_request_id, inference_confirmation.confirmation_transaction
@@ -531,39 +521,16 @@ async def get_inference_output_results_endpoint(
     rpc_connection=Depends(get_rpc_connection),
 ):
     try:
-        is_valid_signature = await verify_challenge_signature(pastelid, challenge_signature, challenge_id)
+        is_valid_signature = await service_functions.verify_challenge_signature(pastelid, challenge_signature, challenge_id)
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-
-        # Retrieve the inference output results from the database
-        async with AsyncSessionLocal() as db:
-            inference_output_result = await db.execute(
-                select(InferenceAPIOutputResult).where(InferenceAPIOutputResult.inference_response_id == inference_response_id)
-            )
-            inference_output_result = inference_output_result.scalar_one_or_none()
-
-        if inference_output_result is None:
-            raise HTTPException(status_code=404, detail="Inference output results not found")
-
-        # Verify that the requesting PastelID matches the original requesting PastelID
-        async with AsyncSessionLocal() as db:
-            inference_request = await db.execute(
-                select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_output_result.inference_request_id)
-            )
-            inference_request = inference_request.scalar_one_or_none()
-
-        if inference_request.requesting_pastelid != pastelid:
-            raise HTTPException(status_code=403, detail="Unauthorized access to inference output results")
-
-        # Decode the inference output results
-        inference_result_json = base64.b64decode(inference_output_result.inference_result_json_base64).decode("utf-8")
-        inference_result = json.loads(inference_result_json)
+        inference_result = await service_functions.get_inference_output_results_and_verify_authorization(
+            inference_response_id, pastelid)
         return inference_result
-
     except Exception as e:
         logger.error(f"Error retrieving inference output results: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving inference output results: {str(e)}")    
-    
+        raise HTTPException(status_code=500, detail=f"Error retrieving inference output results: {str(e)}")
+
     
 @router.get("/get_inference_model_menu")
 async def get_inference_model_menu_endpoint(

@@ -137,7 +137,21 @@ class InferenceOutputResultsModel(BaseModel):
 class ReputationScoreUpdateModel(BaseModel):
     supernode_pastelid: str
     reputation_score: float    
+    
+class InferenceAPIUsageRequestResponse(BaseModel):
+    inference_request_id: str
+    requesting_pastelid: str
+    credit_pack_identifier: str
+    requested_model_canonical_string: str
+    model_parameters_json: str
+    model_input_data_json_b64: str
+    total_psl_cost_for_pack: float
+    initial_credit_balance: float
+    requesting_pastelid_signature: str    
 
+    class Config:
+        protected_namespaces = ()
+        
 class InferenceAPIUsageRequestModel(BaseModel):
     requesting_pastelid: str
     credit_pack_identifier: str
@@ -278,6 +292,8 @@ def to_dict(self):
 Message.to_dict = to_dict
 UserMessage.to_dict = to_dict
 SupernodeUserMessage.to_dict = to_dict
+InferenceAPIUsageRequest.to_dict = to_dict
+
 
 async def get_db():
     db = AsyncSessionLocal()

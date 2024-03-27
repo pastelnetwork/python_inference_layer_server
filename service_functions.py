@@ -20,7 +20,7 @@ import urllib.parse as urlparse
 from logger_config import setup_logger
 import zstandard as zstd
 from database_code import AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata
-from database_code import InferenceCreditPack, InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage
+from database_code import InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage, InferenceAPIUsageRequestModel, InferenceConfirmationModel
 from sqlalchemy import select, func
 from typing import List, Tuple
 from decouple import Config as DecoupleConfig, RepositoryEnv
@@ -93,6 +93,32 @@ def write_rpc_settings_to_env_file_func(rpc_host, rpc_port, rpc_user, rpc_passwo
                 logger.error(f"Error writing to .env file: {e}")
                 pass
     return
+
+def compute_sha3_256_hexdigest(input_str):
+    """Compute the SHA3-256 hash of the input string and return the hexadecimal digest."""
+    return hashlib.sha3_256(input_str.encode()).hexdigest()
+
+def get_closest_supernode_to_pastelid_url(input_pastelid, supernode_list_df):
+    if not supernode_list_df.empty:
+        # Compute SHA3-256 hash of the input_pastelid
+        input_pastelid_hash = compute_sha3_256_hexdigest(input_pastelid)
+        input_pastelid_int = int(input_pastelid_hash, 16)
+        list_of_supernode_pastelids = supernode_list_df['extKey'].values.tolist()
+        xor_distance_to_supernodes = []
+        for x in list_of_supernode_pastelids:
+            # Compute SHA3-256 hash of each supernode_pastelid
+            supernode_pastelid_hash = compute_sha3_256_hexdigest(x)
+            supernode_pastelid_int = int(supernode_pastelid_hash, 16)
+            # Compute XOR distance
+            distance = input_pastelid_int ^ supernode_pastelid_int
+            xor_distance_to_supernodes.append(distance)
+        closest_supernode_index = xor_distance_to_supernodes.index(min(xor_distance_to_supernodes))
+        closest_supernode_pastelid = list_of_supernode_pastelids[closest_supernode_index]
+        closest_supernode_ipaddress_port = supernode_list_df.loc[supernode_list_df['extKey'] == closest_supernode_pastelid]['ipaddress:port'].values[0]
+        ipaddress = closest_supernode_ipaddress_port.split(':')[0]
+        supernode_url = f"http://{ipaddress}:7123"
+        return supernode_url, closest_supernode_pastelid
+    return None, None
 
 class JSONRPCException(Exception):
     def __init__(self, rpc_error):
@@ -407,7 +433,6 @@ async def list_sn_messages_func():
     global rpc_connection
     datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
     supernode_list_df, _ = await check_supernode_list_func()
-    pastelid_to_txid_vout_dict = dict(zip(supernode_list_df['extKey'], supernode_list_df.index))
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
     async with AsyncSessionLocal() as db:
         # Retrieve messages from the database
@@ -437,7 +462,7 @@ async def list_sn_messages_func():
                     (db_messages_df['timestamp'] == message_timestamp)
                 ]
                 if not existing_message.empty:
-                    logger.debug(f"Message already exists in the database. Skipping...")
+                    logger.debug("Message already exists in the database. Skipping...")
                     continue
             message_body = base64.b64decode(message['Message'].encode('utf-8'))
             verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
@@ -728,11 +753,12 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
     user_message_data = await create_user_message(from_pastelid, to_pastelid, message_body, message_signature)
     local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
     sending_sn_pastelid = local_machine_supernode_data['extKey'][0]  # Assuming this is a list
-    receiving_sn_data = await get_sn_data_from_pastelid_func(to_pastelid)
-    if len(receiving_sn_data['extKey']) == 0:
+    # Find the closest Supernode to the receiving end user's PastelID
+    supernode_list_df, _ = await check_supernode_list_func()
+    closest_supernode_url, receiving_sn_pastelid = get_closest_supernode_to_pastelid_url(to_pastelid, supernode_list_df)
+    if receiving_sn_pastelid is None:
         raise ValueError(f"No Supernode found for PastelID: {to_pastelid}.")
-    receiving_sn_pastelid = receiving_sn_data['extKey'][0]  # Assuming this is also a list
-    # Now that we have user_message_data, let's create the supernode user message.
+    # Now that we have user_message_data and the receiving Supernode PastelID, let's create the supernode user message.
     supernode_user_message_data = await create_supernode_user_message(sending_sn_pastelid, receiving_sn_pastelid, user_message_data)
     # Preparing the message to be sent to the supernode.
     signed_message_to_send = json.dumps({
@@ -742,25 +768,25 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
         'from_pastelid': user_message_data['from_pastelid'],
         'to_pastelid': user_message_data['to_pastelid']
     }, ensure_ascii=False)
-    # Send the message to the supernode.
+    # Send the message to the receiving Supernode.
     signed_message, pastelid_signature_on_message = await send_message_to_sn_using_pastelid_func(signed_message_to_send, 'user_message', receiving_sn_pastelid, LOCAL_PASTEL_ID_PASSPHRASE)
     message_dict = {
-            "message": user_message_data['message_body'],  # The content of the message
-            "message_type": "user_message",  # Static type as per your design
-            "sending_sn_pastelid": sending_sn_pastelid,  # From local machine supernode data
-            "timestamp": datetime.utcnow().isoformat(),  # Current UTC timestamp
-            "id": supernode_user_message_data['id'],  # ID from the supernode user message record
-            "signature": pastelid_signature_on_message,
-            "user_message": {
-                # Details from the user_message_data
-                "from_pastelid": from_pastelid,
-                "to_pastelid": to_pastelid,
-                "message_body": message_body,
-                "message_signature": user_message_data['message_signature'],
-                "id": user_message_data['id'],  # Assuming these fields are included in your dictionary
-                "timestamp": user_message_data['timestamp']
-            }
-        }    
+        "message": user_message_data['message_body'],  # The content of the message
+        "message_type": "user_message",  # Static type as per your design
+        "sending_sn_pastelid": sending_sn_pastelid,  # From local machine supernode data
+        "timestamp": datetime.utcnow().isoformat(),  # Current UTC timestamp
+        "id": supernode_user_message_data['id'],  # ID from the supernode user message record
+        "signature": pastelid_signature_on_message,
+        "user_message": {
+            # Details from the user_message_data
+            "from_pastelid": from_pastelid,
+            "to_pastelid": to_pastelid,
+            "message_body": message_body,
+            "message_signature": user_message_data['message_signature'],
+            "id": user_message_data['id'],  # Assuming these fields are included in your dictionary
+            "timestamp": user_message_data['timestamp']
+        }
+    }    
     return message_dict
 
 async def process_received_user_message(supernode_user_message: SupernodeUserMessage):
@@ -814,13 +840,27 @@ async def get_inference_model_menu():
         else:
             raise
 
-async def validate_inference_api_usage_request(request_data: dict):
+async def save_inference_api_usage_request(inference_request_model: InferenceAPIUsageRequestModel) -> InferenceAPIUsageRequest:
+    db_inference_api_usage_request = InferenceAPIUsageRequest(
+        requesting_pastelid=inference_request_model.requesting_pastelid,
+        credit_pack_identifier=inference_request_model.credit_pack_identifier,
+        requested_model_canonical_string=inference_request_model.requested_model_canonical_string,
+        model_parameters_json=inference_request_model.model_parameters_json,
+        model_input_data_json_b64=inference_request_model.model_input_data_json_b64
+    )
+    async with AsyncSessionLocal() as db_session:
+        db_session.add(db_inference_api_usage_request)
+        await db_session.commit()
+        await db_session.refresh(db_inference_api_usage_request)
+    return db_inference_api_usage_request
+
+async def validate_inference_api_usage_request(request_data: InferenceAPIUsageRequestModel) -> bool:
     try:
-        requesting_pastelid = request_data["requesting_pastelid"]
-        credit_pack_identifier = request_data["credit_pack_identifier"]
-        requested_model = request_data["requested_model_canonical_string"]
-        model_parameters = request_data["model_parameters_json"]
-        input_data = request_data["model_input_data_json_b64"]
+        requesting_pastelid = request_data.requesting_pastelid
+        credit_pack_identifier = request_data.credit_pack_identifier
+        requested_model = request_data.requested_model_canonical_string
+        model_parameters = request_data.model_parameters_json
+        input_data = request_data.model_input_data_json_b64
         # Check if the credit pack identifier matches the global credit pack
         if credit_pack_identifier != credit_pack.credit_pack_identifier:
             logger.warning(f"Invalid credit pack identifier: {credit_pack_identifier}")
@@ -844,7 +884,7 @@ async def validate_inference_api_usage_request(request_data: dict):
         logger.error(f"Error validating inference API usage request: {str(e)}")
         raise
 
-async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: dict):
+async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: InferenceConfirmationModel) -> bool:
     try:
         # Retrieve the inference API usage request from the database
         async with AsyncSessionLocal() as db:
@@ -875,7 +915,7 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
         logger.error(f"Error processing inference confirmation: {str(e)}")
         raise
     
-async def execute_inference_request(inference_request_id: str):
+async def execute_inference_request(inference_request_id: str) -> None:
     try:
         # Retrieve the inference API usage request from the database
         async with AsyncSessionLocal() as db:
@@ -910,7 +950,53 @@ async def execute_inference_request(inference_request_id: str):
         logger.error(f"Error executing inference request: {str(e)}")
         raise
 
-async def send_inference_output_results(inference_request_id: str, inference_response_id: str, output_results: dict):
+async def get_inference_output_results_and_verify_authorization(inference_response_id: str, requesting_pastelid: str) -> dict:
+    async with AsyncSessionLocal() as db_session:
+        # Retrieve the inference output result
+        inference_output_result = await db_session.execute(
+            select(InferenceAPIOutputResult).where(InferenceAPIOutputResult.inference_response_id == inference_response_id)
+        )
+        inference_output_result = inference_output_result.scalar_one_or_none()
+        if inference_output_result is None:
+            raise ValueError("Inference output results not found")
+        # Retrieve the inference request to verify requesting PastelID
+        inference_request = await db_session.execute(
+            select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_output_result.inference_request_id)
+        )
+        inference_request = inference_request.scalar_one_or_none()
+        if inference_request is None or inference_request.requesting_pastelid != requesting_pastelid:
+            raise ValueError("Unauthorized access to inference output results")
+        # Decode the inference output results
+        inference_result_json = base64.b64decode(inference_output_result.inference_result_json_base64).decode("utf-8")
+        inference_result = json.loads(inference_result_json)
+        return inference_result
+
+async def send_notification(pastelid: str, notification_message: dict) -> None:
+    try:
+        # Retrieve the closest Supernode to the receiving PastelID
+        supernode_list_df, _ = await check_supernode_list_func()
+        closest_supernode_url, closest_supernode_pastelid = get_closest_supernode_to_pastelid_url(pastelid, supernode_list_df)
+        if closest_supernode_pastelid is None:
+            logger.warning(f"No Supernode found for PastelID: {pastelid}")
+            return
+        # Prepare the notification message
+        notification_message_str = json.dumps(notification_message, ensure_ascii=False)
+        # Sign the notification message with the local Supernode's PastelID
+        _, _, local_supernode_pastelid, _ = await get_local_machine_supernode_data_func()
+        notification_signature = await sign_message_with_pastelid_func(local_supernode_pastelid, notification_message_str, LOCAL_PASTEL_ID_PASSPHRASE)
+        # Send the notification message via the closest Supernode
+        _ = await send_user_message_via_supernodes(
+            from_pastelid=local_supernode_pastelid,
+            to_pastelid=pastelid,
+            message_body=notification_message_str,
+            message_signature=notification_signature
+        )
+        logger.info(f"Notification sent to PastelID: {pastelid}")
+    except Exception as e:
+        logger.error(f"Error sending notification: {str(e)}")
+        raise
+    
+async def send_inference_output_results(inference_request_id: str, inference_response_id: str, output_results: dict) -> None:
     try:
         # Retrieve the inference API usage request from the database
         async with AsyncSessionLocal() as db:
@@ -945,7 +1031,7 @@ async def send_inference_output_results(inference_request_id: str, inference_res
         logger.error(f"Error sending inference output results: {str(e)}")
         raise
     
-async def update_inference_sn_reputation_score(supernode_pastelid: str, reputation_score: float):
+async def update_inference_sn_reputation_score(supernode_pastelid: str, reputation_score: float) -> bool:
     try:
         # TODO: Implement the logic to update the inference SN reputation score
         # This could involve storing the reputation score in a database or broadcasting it to other supernodes
