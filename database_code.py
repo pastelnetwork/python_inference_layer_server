@@ -171,7 +171,7 @@ class InferenceAPIUsageResponse(Base):
     credit_usage_tracking_psl_address = Column(String, index=True)
     request_confirmation_message_amount_in_patoshis = Column(Integer)
     max_block_height_to_include_confirmation_transaction = Column(Integer)
-    supernode_pastelids_and_signatures_pack_on_inference_response_id = Column(String)
+    supernode_pastelid_and_signature_on_inference_response_id = Column(String)
     
 class InferenceAPIUsageResponseModel(BaseModel):
     inference_response_id: str
@@ -181,7 +181,7 @@ class InferenceAPIUsageResponseModel(BaseModel):
     credit_usage_tracking_psl_address: str
     request_confirmation_message_amount_in_patoshis: int
     max_block_height_to_include_confirmation_transaction: int
-    supernode_pastelids_and_signatures_pack_on_inference_response_id: str
+    supernode_pastelid_and_signature_on_inference_response_id: str
         
 class InferenceAPIOutputResult(Base):
     __tablename__ = "inference_api_output_results"

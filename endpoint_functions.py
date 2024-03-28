@@ -483,15 +483,15 @@ async def make_inference_api_usage_request_endpoint(
             credit_usage_tracking_psl_address=inference_response.credit_usage_tracking_psl_address,
             request_confirmation_message_amount_in_patoshis=inference_response.request_confirmation_message_amount_in_patoshis,
             max_block_height_to_include_confirmation_transaction=inference_response.max_block_height_to_include_confirmation_transaction,
-            supernode_pastelids_and_signatures_pack_on_inference_response_id=inference_response.supernode_pastelids_and_signatures_pack_on_inference_response_id
+            supernode_pastelid_and_signature_on_inference_response_id=inference_response.supernode_pastelid_and_signature_on_inference_response_id
         )
     except Exception as e:
         logger.error(f"Error sending inference API usage request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error sending inference API usage request: {str(e)}")
     
 
-@router.post("/send_inference_confirmation", response_model=bool)
-async def send_inference_confirmation_endpoint(
+@router.post("/confirm_inference_request", response_model=bool)
+async def confirm_inference_request_endpoint(
     inference_confirmation: db.InferenceConfirmationModel = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
@@ -499,7 +499,7 @@ async def send_inference_confirmation_endpoint(
     rpc_connection=Depends(get_rpc_connection),
 ):
     try:
-        is_valid_signature = await service_functions.verify_challenge_signature(
+        is_valid_signature = await service_functions.verify_challenge_signature_from_inference_request_id(
             inference_confirmation.inference_request_id, challenge_signature, challenge_id
         )
         if not is_valid_signature:

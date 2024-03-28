@@ -292,9 +292,22 @@ async def get_last_block_data_func():
     block_data = await rpc_connection.getblock(str(current_block_height))
     return block_data
 
+async def check_psl_address_balance_alternative_func(address_to_check):
+    global rpc_connection
+    address_amounts_dict = await rpc_connection.listaddressamounts()
+    # Convert the dictionary into a list of dictionaries, each representing a row
+    data = [{'address': address, 'amount': amount} for address, amount in address_amounts_dict.items()]
+    # Create the DataFrame from the list of dictionaries
+    address_amounts_df = pd.DataFrame(data)
+    # Filter the DataFrame for the specified address
+    address_amounts_df_filtered = address_amounts_df[address_amounts_df['address'] == address_to_check]
+    # Calculate the sum of the 'amount' column for the filtered DataFrame
+    balance_at_address = address_amounts_df_filtered['amount'].sum()
+    return balance_at_address
+
 async def check_psl_address_balance_func(address_to_check):
     global rpc_connection
-    balance_at_address = await rpc_connection.z_getbalance(address_to_check) 
+    balance_at_address = await rpc_connection.z_getbalance(address_to_check)
     return balance_at_address
 
 async def get_raw_transaction_func(txid):
@@ -347,6 +360,17 @@ async def verify_challenge_signature(pastelid: str, signature: str, challenge_id
         return True
     else:
         return False
+    
+async def verify_challenge_signature_from_inference_request_id(inference_request_id: str, challenge_signature: str, challenge_id: str) -> bool:
+    # Retrieve the inference API usage request from the database
+    async with AsyncSessionLocal() as db:
+        inference_request = await db.execute(
+            select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
+        )
+        inference_request = inference_request.scalar_one_or_none()    
+    requesting_pastelid = inference_request.requesting_pastelid
+    is_valid_signature = await verify_challenge_signature(requesting_pastelid, challenge_signature, challenge_id)
+    return is_valid_signature
 
 async def check_masternode_top_func():
     global rpc_connection
@@ -932,6 +956,9 @@ async def create_and_save_inference_api_usage_response(saved_request: InferenceA
     # Generate a unique identifier for the inference response
     inference_response_id = str(uuid.uuid4())
     # Create an InferenceAPIUsageResponse instance
+    _, _, local_supernode_pastelid, _ = await get_local_machine_supernode_data_func()
+    confirmation_signature = await sign_message_with_pastelid_func(local_supernode_pastelid, inference_response_id, LOCAL_PASTEL_ID_PASSPHRASE)
+    supernode_pastelid_and_signature_on_inference_response_id = json.dumps({'signing_sn_pastelid': local_supernode_pastelid, 'sn_signature_on_response_id': confirmation_signature})
     inference_response = InferenceAPIUsageResponse(
         inference_response_id=inference_response_id,
         inference_request_id=saved_request.inference_request_id,
@@ -940,7 +967,7 @@ async def create_and_save_inference_api_usage_response(saved_request: InferenceA
         credit_usage_tracking_psl_address=credit_pack.credit_usage_tracking_psl_address,
         request_confirmation_message_amount_in_patoshis=int(proposed_cost_in_credits * credit_usage_to_tracking_amount_multiplier),
         max_block_height_to_include_confirmation_transaction=await get_current_pastel_block_height_func() + 10,  # Adjust as needed
-        supernode_pastelids_and_signatures_pack_on_inference_response_id="placeholder_signatures_pack"  # Replace with actual signatures pack
+        supernode_pastelid_and_signature_on_inference_response_id=supernode_pastelid_and_signature_on_inference_response_id
     )
     # Save the InferenceAPIUsageResponse to the database
     async with AsyncSessionLocal() as db_session:
@@ -960,22 +987,39 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
         if inference_request is None:
             logger.warning(f"Invalid inference request ID: {inference_request_id}")
             return False
-        # Deduct the credits from the global credit pack
-        proposed_cost_in_credits = inference_request.proposed_cost_of_request_in_inference_credits
-        credit_pack.deduct_credits(proposed_cost_in_credits)
-        logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
-        # Save the updated credit pack state to the JSON file
-        credit_pack.save_to_json(CREDIT_PACK_FILE)
-        # TODO: Validate the confirmation transaction against the blockchain
-        # Update the inference request status to "confirmed"
-        inference_request.status = "confirmed"
+        # Retrieve the inference API usage request response from the database
         async with AsyncSessionLocal() as db:
-            db.add(inference_request)
-            await db.commit()
-            await db.refresh(inference_request)
-        # Trigger the inference request processing
-        asyncio.create_task(execute_inference_request(inference_request_id))
-        return True
+            inference_response = await db.execute(
+                select(InferenceAPIUsageResponse).where(InferenceAPIUsageResponse.inference_request_id == inference_request_id)
+            )
+            inference_response = inference_response.scalar_one_or_none()
+        # Ensure burn address is tracked by local wallet:
+        burn_address_already_imported = await check_if_address_is_already_imported_in_local_wallet(burn_address)
+        if not burn_address_already_imported:
+            await import_address_func(burn_address, "burn_address", True)        
+        # Check burn address for tracking transaction:
+        confirmation_transaction_txid = confirmation_transaction['txid']
+        credit_usage_tracking_amount_in_psl = float(inference_response.request_confirmation_message_amount_in_patoshis)/(10**5) # Divide by number of Patoshis per PSL
+        transaction_found = await check_burn_address_for_tracking_transaction(burn_address, inference_response.credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, confirmation_transaction_txid, inference_response.max_block_height_to_include_confirmation_transaction)
+        if transaction_found:
+            logger.info(f"Found correct inference request confirmation tracking transaction in burn address! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};") 
+            # Deduct the credits from the global credit pack
+            proposed_cost_in_credits = inference_request.proposed_cost_of_request_in_inference_credits
+            credit_pack.deduct_credits(proposed_cost_in_credits)
+            logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
+            # Save the updated credit pack state to the JSON file
+            credit_pack.save_to_json(CREDIT_PACK_FILE)
+            # Update the inference request status to "confirmed"
+            inference_request.status = "confirmed"
+            async with AsyncSessionLocal() as db:
+                db.add(inference_request)
+                await db.commit()
+                await db.refresh(inference_request)
+            # Trigger the inference request processing
+            asyncio.create_task(execute_inference_request(inference_request_id))
+            return True
+        else:
+            logger.error(f"Did not find correct inference request confirmation tracking transaction in burn address! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};") 
     except Exception as e:
         logger.error(f"Error processing inference confirmation: {str(e)}")
         raise
@@ -1200,7 +1244,67 @@ async def import_address_func(address: str, label: str = "", rescan: bool = Fals
         logger.info(f"Imported address: {address}")
     except Exception as e:
         logger.error(f"Error importing address: {address}. Error: {e}")
-        
+
+async def check_if_address_is_already_imported_in_local_wallet(address_to_check):
+    global rpc_connection
+    address_amounts_dict = await rpc_connection.listaddressamounts()
+    # Convert the dictionary into a list of dictionaries, each representing a row
+    data = [{'address': address, 'amount': amount} for address, amount in address_amounts_dict.items()]
+    # Create the DataFrame from the list of dictionaries
+    address_amounts_df = pd.DataFrame(data)        
+    # Filter the DataFrame for the specified address
+    address_amounts_df_filtered = address_amounts_df[address_amounts_df['address'] == address_to_check]
+    if address_amounts_df_filtered.empty:
+        return False
+    return True
+
+async def check_burn_address_for_tracking_transaction(
+    burn_address: str,
+    tracking_address: str,
+    expected_amount: float,
+    tx_identifier: str,
+    max_block_height: int,
+    max_retries: int = 10,
+    retry_delay: int = 5
+) -> bool:
+    """
+    Repeatedly checks the burn address for a transaction with the correct identifier, amount,
+    and originating address before a specified block height.
+
+    Args:
+        burn_address (str): The burn address to check for the transaction.
+        tracking_address (str): The address expected to have sent the transaction.
+        expected_amount (float): The exact amount of PSL expected in the transaction.
+        tx_identifier (str): The transaction identifier to look for.
+        max_block_height (int): The maximum block height to include the confirmation transaction.
+        max_retries (int, optional): Maximum number of retries for checking the transaction. Defaults to 10.
+        retry_delay (int, optional): Delay between retries in seconds. Defaults to 5.
+
+    Returns:
+        bool: True if a matching transaction is found, False otherwise.
+    """
+    global rpc_connection
+    try_count = 0
+    while try_count < max_retries:
+        transactions = await rpc_connection.listtransactions("*", 100, 0, True)
+        for transaction in transactions:
+            # Check if the transaction matches the specified criteria
+            if (transaction.get("txid") == tx_identifier and
+                transaction.get("amount") == expected_amount and
+                transaction.get("address") == burn_address and
+                "blockindex" in transaction and
+                transaction.get("blockindex") <= max_block_height and
+                transaction.get("category") in ["send", "receive"]):
+                    logger.info(f"Matching transaction found: {transaction}")
+                    return True
+        # If the transaction is not found, wait before retrying
+        await asyncio.sleep(retry_delay)
+        try_count += 1
+        retry_delay *= 1.1  # Optional: increase delay between retries
+    logger.info(f"Transaction not found after {max_retries} attempts.")
+    return False
+
+
 #Misc helper functions:
 class MyTimer():
     def __init__(self):
@@ -1308,13 +1412,13 @@ elif rpc_port == '19932':
 elif rpc_port == '29932':
     burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
 
-# await import_address_func(burn_address, "burn_address", False)
+
 
 
 # Load or create the global InferenceCreditPackMockup instance
 CREDIT_PACK_FILE = "credit_pack.json"
 credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
-users_credit_tracking_psl_address = '44oVQrU5Hda9gLWR2ZGrLMiwsb31wkQFNajb'
+users_credit_tracking_psl_address = '44oSueBgdMaAnGxrbTNZwQeDnxvPJg4dGAR3'
 
 if credit_pack is None:
     # Create a new credit pack if the file doesn't exist or is invalid
