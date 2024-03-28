@@ -24,6 +24,8 @@ from database_code import InferenceAPIUsageRequest, InferenceAPIUsageResponse, I
 from sqlalchemy import select, func
 from typing import List, Tuple
 from decouple import Config as DecoupleConfig, RepositoryEnv
+from magika import Magika
+magika = Magika()
 
 # Logger setup
 logger = setup_logger()
@@ -846,7 +848,11 @@ async def save_inference_api_usage_request(inference_request_model: InferenceAPI
         credit_pack_identifier=inference_request_model.credit_pack_identifier,
         requested_model_canonical_string=inference_request_model.requested_model_canonical_string,
         model_parameters_json=inference_request_model.model_parameters_json,
-        model_input_data_json_b64=inference_request_model.model_input_data_json_b64
+        model_input_data_json_b64=inference_request_model.model_input_data_json_b64,
+        inference_request_id=str(uuid.uuid4()),  # Generate a unique inference request ID
+        total_psl_cost_for_pack=credit_pack.total_psl_cost_for_pack,
+        initial_credit_balance=credit_pack.initial_credit_balance,
+        requesting_pastelid_signature="placeholder_signature"  # Set a placeholder signature for now
     )
     async with AsyncSessionLocal() as db_session:
         db_session.add(db_inference_api_usage_request)
@@ -854,21 +860,33 @@ async def save_inference_api_usage_request(inference_request_model: InferenceAPI
         await db_session.refresh(db_inference_api_usage_request)
     return db_inference_api_usage_request
 
-async def validate_inference_api_usage_request(request_data: InferenceAPIUsageRequestModel) -> bool:
+async def calculate_proposed_cost(requested_model_data: dict, model_parameters: dict, input_data: str) -> float:
+    # Extract relevant information from the requested_model_data
+    base_cost = requested_model_data.get("base_cost", 1.0)
+    cost_per_token = requested_model_data.get("cost_per_token", 0.001)
+    # Extract relevant information from the model_parameters
+    max_tokens = model_parameters.get("max_tokens", 100)
+    # Calculate the input data size
+    input_data_size = len(input_data) 
+    # Calculate the proposed cost based on the extracted information
+    proposed_cost_in_credits = round(base_cost + (cost_per_token * max_tokens) + (input_data_size * 0.0001), 1)
+    return proposed_cost_in_credits
+
+async def validate_inference_api_usage_request(request_data: dict) -> Tuple[bool, float, float]:
     try:
-        requesting_pastelid = request_data.requesting_pastelid
-        credit_pack_identifier = request_data.credit_pack_identifier
-        requested_model = request_data.requested_model_canonical_string
-        model_parameters = request_data.model_parameters_json
-        input_data = request_data.model_input_data_json_b64
+        requesting_pastelid = request_data["requesting_pastelid"]
+        credit_pack_identifier = request_data["credit_pack_identifier"]
+        requested_model = request_data["requested_model_canonical_string"]
+        model_parameters = request_data["model_parameters_json"]
+        input_data = request_data["model_input_data_json_b64"]
         # Check if the credit pack identifier matches the global credit pack
         if credit_pack_identifier != credit_pack.credit_pack_identifier:
             logger.warning(f"Invalid credit pack identifier: {credit_pack_identifier}")
-            return False
+            return False, 0, credit_pack.current_credit_balance
         # Check if the requesting PastelID is authorized to use the credit pack
         if not credit_pack.is_authorized(requesting_pastelid):
             logger.warning(f"Unauthorized PastelID: {requesting_pastelid}")
-            return False
+            return False, 0, credit_pack.current_credit_balance
         # Validate the requested model and parameters against the model menu
         model_menu = await get_inference_model_menu()
         requested_model_data = next(
@@ -877,12 +895,59 @@ async def validate_inference_api_usage_request(request_data: InferenceAPIUsageRe
         )
         if requested_model_data is None:
             logger.warning(f"Invalid model requested: {requested_model}")
-            return False
+            return False, 0, credit_pack.current_credit_balance
         # TODO: Validate the model parameters against the model's supported parameters
-        return True
+        # Calculate the proposed cost in credits based on the requested model and input data
+        model_parameters_dict = json.loads(model_parameters)
+        input_data_binary = base64.b64decode(input_data)
+        result = magika.identify_bytes(input_data_binary)
+        detected_data_type = result.output.ct_label
+        if detected_data_type == "txt":
+            input_data = input_data_binary.decode("utf-8")
+        proposed_cost_in_credits = await calculate_proposed_cost(requested_model_data, model_parameters_dict, input_data)
+        # Check if the credit pack has sufficient credits for the request
+        if not credit_pack.has_sufficient_credits(proposed_cost_in_credits):
+            logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {credit_pack.current_credit_balance}")
+            return False, proposed_cost_in_credits, credit_pack.current_credit_balance
+        # Calculate the remaining credits after the request
+        remaining_credits_after_request = credit_pack.current_credit_balance - proposed_cost_in_credits
+        if remaining_credits_after_request < 0:
+            logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {credit_pack.current_credit_balance}")
+            return False, proposed_cost_in_credits, credit_pack.current_credit_balance
+        return True, proposed_cost_in_credits, remaining_credits_after_request
     except Exception as e:
         logger.error(f"Error validating inference API usage request: {str(e)}")
-        raise
+        raise    
+
+async def process_inference_api_usage_request(inference_api_usage_request: InferenceAPIUsageRequestModel) -> InferenceAPIUsageResponse: 
+    # Validate the inference API usage request
+    request_data = inference_api_usage_request.dict()
+    is_valid_request, proposed_cost_in_credits, remaining_credits_after_request = await validate_inference_api_usage_request(request_data)        
+    logger.info(f"Received inference API usage request: {request_data}")
+    # Save the inference API usage request
+    saved_request = await save_inference_api_usage_request(inference_api_usage_request)
+    # Create and save the InferenceAPIUsageResponse
+    inference_response = await create_and_save_inference_api_usage_response(saved_request, proposed_cost_in_credits, remaining_credits_after_request)
+    return inference_response
+
+async def create_and_save_inference_api_usage_response(saved_request: InferenceAPIUsageRequest, proposed_cost_in_credits: float, remaining_credits_after_request: float) -> InferenceAPIUsageResponse:
+    # Create an InferenceAPIUsageResponse instance
+    inference_response = InferenceAPIUsageResponse(
+        inference_request_id=saved_request.inference_request_id,
+        proposed_cost_of_request_in_inference_credits=proposed_cost_in_credits,
+        remaining_credits_in_pack_after_request_processed=remaining_credits_after_request,
+        credit_usage_tracking_psl_address=credit_pack.credit_usage_tracking_psl_address,
+        request_confirmation_message_amount_in_patoshis=int(proposed_cost_in_credits * credit_usage_to_tracking_amount_multiplier * 10**8),  # Convert to Patoshis
+        max_block_height_to_include_confirmation_transaction=await get_current_pastel_block_height_func() + 10,  # Adjust as needed
+        supernode_pastelids_and_signatures_pack_on_inference_response_id="placeholder_signatures_pack"  # Replace with actual signatures pack
+    )
+    # Save the InferenceAPIUsageResponse to the database
+    async with AsyncSessionLocal() as db_session:
+        db_session.add(inference_response)
+        await db_session.commit()
+        await db_session.refresh(inference_response)
+    
+    return inference_response
 
 async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: InferenceConfirmationModel) -> bool:
     try:

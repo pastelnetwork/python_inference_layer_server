@@ -456,10 +456,10 @@ async def get_user_messages(
     except Exception as e:
         logger.error(f"Error retrieving user messages: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving user messages: {str(e)}")
-    
-    
-@router.post("/send_inference_api_usage_request", response_model=db.InferenceAPIUsageRequestResponse)
-async def send_inference_api_usage_request_endpoint(
+
+
+@router.post("/make_inference_api_usage_request", response_model=db.InferenceAPIUsageResponseModel)
+async def make_inference_api_usage_request_endpoint(
     inference_api_usage_request: db.InferenceAPIUsageRequestModel = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
@@ -472,20 +472,23 @@ async def send_inference_api_usage_request_endpoint(
         )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        
-        # Validate the inference API usage request
-        is_valid_request = await service_functions.validate_inference_api_usage_request(inference_api_usage_request.dict())
-        if not is_valid_request:
-            raise HTTPException(status_code=400, detail="Invalid inference API usage request")
-        
-        # Delegate the saving of the inference API usage request to the service function
-        saved_request = await service_functions.save_inference_api_usage_request(inference_api_usage_request)
-        saved_request_dict = saved_request.to_dict()  # Assuming you have a to_dict() method in InferenceAPIUsageRequest
-        return saved_request_dict
+        # Validate and process the inference API usage request
+        inference_response = await service_functions.process_inference_api_usage_request(inference_api_usage_request)
+        # Return the InferenceAPIUsageResponse as the API response
+        return db.InferenceAPIUsageResponseModel(
+            inference_response_id=inference_response.inference_response_id,
+            inference_request_id=inference_response.inference_request_id,
+            proposed_cost_of_request_in_inference_credits=inference_response.proposed_cost_of_request_in_inference_credits,
+            remaining_credits_in_pack_after_request_processed=inference_response.remaining_credits_in_pack_after_request_processed,
+            credit_usage_tracking_psl_address=inference_response.credit_usage_tracking_psl_address,
+            request_confirmation_message_amount_in_patoshis=inference_response.request_confirmation_message_amount_in_patoshis,
+            max_block_height_to_include_confirmation_transaction=inference_response.max_block_height_to_include_confirmation_transaction,
+            supernode_pastelids_and_signatures_pack_on_inference_response_id=inference_response.supernode_pastelids_and_signatures_pack_on_inference_response_id
+        )
     except Exception as e:
         logger.error(f"Error sending inference API usage request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error sending inference API usage request: {str(e)}")
-
+    
 
 @router.post("/send_inference_confirmation", response_model=bool)
 async def send_inference_confirmation_endpoint(

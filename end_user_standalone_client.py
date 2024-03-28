@@ -499,7 +499,7 @@ class PastelMessagingClient:
             result = response.json()
             return result
 
-    async def send_inference_api_usage_request(self, supernode_url: str, request_data: InferenceAPIUsageRequestModel) -> Dict[str, Any]:
+    async def make_inference_api_usage_request(self, supernode_url: str, request_data: InferenceAPIUsageRequestModel) -> Dict[str, Any]:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
@@ -512,10 +512,19 @@ class PastelMessagingClient:
             "challenge_signature": challenge_signature
         }
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.post(f"{supernode_url}/send_inference_api_usage_request", json=payload)
+            response = await client.post(f"{supernode_url}/make_inference_api_usage_request", json=payload)
             response.raise_for_status()
             result = response.json()
-            return result
+            return {
+                "inference_response_id": result.get("inference_response_id"),
+                "inference_request_id": result.get("inference_request_id"),
+                "proposed_cost_of_request_in_inference_credits": result.get("proposed_cost_of_request_in_inference_credits"),
+                "remaining_credits_in_pack_after_request_processed": result.get("remaining_credits_in_pack_after_request_processed"),
+                "credit_usage_tracking_psl_address": result.get("credit_usage_tracking_psl_address"),
+                "request_confirmation_message_amount_in_patoshis": result.get("request_confirmation_message_amount_in_patoshis"),
+                "max_block_height_to_include_confirmation_transaction": result.get("max_block_height_to_include_confirmation_transaction"),
+                "supernode_pastelids_and_signatures_pack_on_inference_response_id": result.get("supernode_pastelids_and_signatures_pack_on_inference_response_id")
+            }
 
     async def send_inference_confirmation(self, supernode_url: str, confirmation_data: InferenceConfirmationModel) -> Dict[str, Any]:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
@@ -559,7 +568,7 @@ async def main():
     rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
     rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
     
-
+    use_test_messaging_functionality = 0
         
     # Replace with your own values
     my_local_pastelid = "jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"
@@ -569,38 +578,39 @@ async def main():
 
     # Get the list of Supernodes
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
-
-    # Request a challenge from a Supernode
     supernode_url = get_top_supernode_url(supernode_list_df)
     supernode_url = 'http://154.38.164.75:7123' #Temporary override for debugging
-    challenge_result = await messaging_client.request_and_sign_challenge(supernode_url)
-    challenge = challenge_result["challenge"]
-    signature = challenge_result["signature"]
-    logger.info(f"Received challenge: {challenge}")
-    logger.info(f"Signed challenge with signature: {signature}")
-
-    # Send a user message
-    logger.info("Sending user message...")
-    to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"
-    logger.info(f"Recipient pastelid: {to_pastelid}")
-    #Lookup the closest supernode to the recipient pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the recipient since it is closest to the recipient's pastelid:
-    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(to_pastelid, supernode_list_df)
-    supernode_url = 'http://154.38.164.75:7123' #Temporary override for debugging
-    logger.info(f"Closest Supernode to recipient pastelid: {supernode_pastelid}")
     
-    message_body = "Hello, this is a brand 🍉 NEW test message from a regular user!"
-    send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body)
-    logger.info(f"Sent user message: {send_result}")
+    if use_test_messaging_functionality:
+        # Request a challenge from a Supernode
+        challenge_result = await messaging_client.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        signature = challenge_result["signature"]
+        logger.info(f"Received challenge: {challenge}")
+        logger.info(f"Signed challenge with signature: {signature}")
 
-    # Get user messages
-    logger.info("Retrieving user messages...")
-    logger.info(f"My local pastelid: {my_local_pastelid}")
-    # Lookup the closest supernode to the local pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the local user since it is closest to the local pastelid:
-    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(my_local_pastelid, supernode_list_df)
-    supernode_url = 'http://154.38.164.75:7123' #Temporary override for debugging
-    logger.info(f"Closest Supernode to local pastelid: {supernode_pastelid}")
-    messages = await messaging_client.get_user_messages(supernode_url)
-    logger.info(f"Retrieved user messages: {messages}")
+        # Send a user message
+        logger.info("Sending user message...")
+        to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"
+        logger.info(f"Recipient pastelid: {to_pastelid}")
+        #Lookup the closest supernode to the recipient pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the recipient since it is closest to the recipient's pastelid:
+        supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(to_pastelid, supernode_list_df)
+        supernode_url = 'http://154.38.164.75:7123' #Temporary override for debugging
+        logger.info(f"Closest Supernode to recipient pastelid: {supernode_pastelid}")
+        
+        message_body = "Hello, this is a brand 🍉 NEW test message from a regular user!"
+        send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body)
+        logger.info(f"Sent user message: {send_result}")
+
+        # Get user messages
+        logger.info("Retrieving user messages...")
+        logger.info(f"My local pastelid: {my_local_pastelid}")
+        # Lookup the closest supernode to the local pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the local user since it is closest to the local pastelid:
+        supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(my_local_pastelid, supernode_list_df)
+        supernode_url = 'http://154.38.164.75:7123' #Temporary override for debugging
+        logger.info(f"Closest Supernode to local pastelid: {supernode_pastelid}")
+        messages = await messaging_client.get_user_messages(supernode_url)
+        logger.info(f"Retrieved user messages: {messages}")
 
     #________________________________________________________
 
@@ -623,26 +633,30 @@ async def main():
         )
         credit_pack.save_to_json(CREDIT_PACK_FILE)
 
+    sample_text_completion = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
+    sample_text_completion__base64_encoded = base64.b64encode(sample_text_completion.encode()).decode('utf-8')
+    model_parameters = {"max_length": 100, "temperature": 0.7}
+
     # Prepare the inference API usage request
     request_data = InferenceAPIUsageRequestModel(
         requesting_pastelid=my_local_pastelid,
         credit_pack_identifier=credit_pack.credit_pack_identifier,
         requested_model_canonical_string="llama-7b",
-        model_parameters_json='{"max_length": 100, "temperature": 0.7}',
-        model_input_data_json_b64="base64_encoded_input_data"
+        model_parameters_json=json.dumps(model_parameters),
+        model_input_data_json_b64=sample_text_completion__base64_encoded
     )
 
     # Send the inference API usage request
-    usage_request_result = await messaging_client.send_inference_api_usage_request(supernode_url, request_data)
-    logger.info(f"Sent inference API usage request: {usage_request_result}")
+    usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, request_data)
+    logger.info(f"Received inference API usage request response: {usage_request_response}")
 
     # Extract the relevant information from the response
-    inference_request_id = usage_request_result["inference_request_id"]
-    proposed_cost_in_credits = usage_request_result["proposed_cost_of_request_in_inference_credits"]
-    credit_usage_tracking_psl_address = usage_request_result["credit_usage_tracking_psl_address"]
+    inference_request_id = usage_request_response["inference_request_id"]
+    proposed_cost_in_credits = usage_request_response["proposed_cost_of_request_in_inference_credits"]
+    credit_usage_tracking_psl_address = usage_request_response["credit_usage_tracking_psl_address"]
     credit_usage_to_tracking_amount_multiplier = 0.0001
     credit_usage_tracking_amount = proposed_cost_in_credits * credit_usage_to_tracking_amount_multiplier
-    request_confirmation_message_amount_in_patoshis = usage_request_result["request_confirmation_message_amount_in_patoshis"]
+    request_confirmation_message_amount_in_patoshis = usage_request_response["request_confirmation_message_amount_in_patoshis"]
 
     # Check if the credit pack has sufficient credits
     if credit_pack.has_sufficient_credits(proposed_cost_in_credits):
