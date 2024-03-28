@@ -1264,25 +1264,83 @@ async def check_if_address_is_already_imported_in_local_wallet(address_to_check)
         return False
     return True
 
+async def get_and_decode_raw_transaction(txid: str, blockhash: str = None) -> dict:
+    """
+    Retrieves and decodes detailed information about a specified transaction
+    from the Pastel network using the RPC calls.
+
+    Args:
+        txid (str): The transaction id to fetch and decode.
+        blockhash (str, optional): The block hash to specify which block to search for the transaction.
+
+    Returns:
+        dict: A dictionary containing detailed decoded information about the transaction.
+    """
+    global rpc_connection
+    try:
+        # Retrieve the raw transaction data
+        raw_tx_data = await rpc_connection.getrawtransaction(txid, 0, blockhash)
+        if not raw_tx_data:
+            logger.error(f"Failed to retrieve raw transaction data for {txid}")
+            return {}
+
+        # Decode the raw transaction data
+        decoded_tx_data = await rpc_connection.decoderawtransaction(raw_tx_data)
+        if not decoded_tx_data:
+            logger.error(f"Failed to decode raw transaction data for {txid}")
+            return {}
+
+        # Log the decoded transaction details
+        logger.info(f"Decoded transaction details for {txid}: {decoded_tx_data}")
+
+        return decoded_tx_data
+    except Exception as e:
+        logger.error(f"Error in get_and_decode_transaction for {txid}: {e}")
+        return {}
+
+async def get_transaction_details(txid: str, include_watchonly: bool = False) -> dict:
+    """
+    Fetches detailed information about a specified transaction from the Pastel network using the RPC call.
+
+    Args:
+        txid (str): The transaction id to fetch details for.
+        include_watchonly (bool, optional): Whether to include watchonly addresses in the details. Defaults to False.
+
+    Returns:
+        dict: A dictionary containing detailed information about the transaction.
+    """
+    global rpc_connection
+    try:
+        # Call the 'gettransaction' RPC method with the provided txid and includeWatchonly flag
+        transaction_details = await rpc_connection.gettransaction(txid, include_watchonly)
+        
+        # Log the retrieved transaction details
+        logger.info(f"Retrieved transaction details for {txid}: {transaction_details}")
+
+        return transaction_details
+    except Exception as e:
+        logger.error(f"Error retrieving transaction details for {txid}: {e}")
+        return {}
+
 async def check_burn_address_for_tracking_transaction(
     burn_address: str,
     tracking_address: str,
     expected_amount: float,
-    tx_identifier: str,
+    txid: str,
     max_block_height: int,
     max_retries: int = 10,
     retry_delay: int = 5
-
 ) -> bool:
     """
     Repeatedly checks the burn address for a transaction with the correct identifier, amount,
-    and originating address before a specified block height.
+    and originating address before a specified block height using the get_and_decode_raw_transaction function
+    and also checks the mempool using the getrawmempool RPC method.
 
     Args:
         burn_address (str): The burn address to check for the transaction.
         tracking_address (str): The address expected to have sent the transaction.
         expected_amount (float): The exact amount of PSL expected in the transaction.
-        tx_identifier (str): The transaction identifier to look for.
+        txid (str): The transaction identifier to look for.
         max_block_height (int): The maximum block height to include the confirmation transaction.
         max_retries (int, optional): Maximum number of retries for checking the transaction. Defaults to 10.
         retry_delay (int, optional): Delay between retries in seconds. Defaults to 5.
@@ -1290,27 +1348,67 @@ async def check_burn_address_for_tracking_transaction(
     Returns:
         bool: True if a matching transaction is found, False otherwise.
     """
-    global rpc_connection
     try_count = 0
     while try_count < max_retries:
-        transactions = await rpc_connection.listtransactions("*", 100, 0, True)
-        for transaction in transactions:
-            # Check if the transaction matches the specified criteria
-            if (transaction.get("txid") == tx_identifier and
-                transaction.get("amount") == expected_amount and
-                transaction.get("address") == burn_address and
-                "blockindex" in transaction and
-                transaction.get("blockindex") <= max_block_height and
-                transaction.get("category") in ["send", "receive"]):
-                    logger.info(f"Matching transaction found: {transaction}")
-                    return True
-        # If the transaction is not found, wait before retrying
-        await asyncio.sleep(retry_delay)
-        try_count += 1
-        retry_delay *= 1.1  # Optional: increase delay between retries
-    logger.info(f"Transaction not found after {max_retries} attempts.")
+        # Retrieve and decode the transaction details using the txid
+        if len(txid) > 0:
+            decoded_tx_data = await get_and_decode_raw_transaction(txid)
+            if decoded_tx_data:
+                # Check if the transaction matches the specified criteria
+                logger.info(f"Decoded transaction details for {txid}: {decoded_tx_data}")
+                if (
+                    any(vout["scriptPubKey"].get("addresses", [None])[0] == burn_address for vout in decoded_tx_data["vout"]) and
+                    any(vin["txid"] == txid for vin in decoded_tx_data["vin"]) and
+                    decoded_tx_data.get("confirmations", 0) >= 0 and
+                    decoded_tx_data.get("blockheight", max_block_height + 1) <= max_block_height
+                ):
+                    # Calculate the total amount sent to the burn address in the transaction
+                    total_amount_to_burn_address = sum(
+                        vout["value"] for vout in decoded_tx_data["vout"]
+                        if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address
+                    )
+                    if total_amount_to_burn_address == expected_amount:
+                        logger.info(f"Matching transaction found: {decoded_tx_data}")
+                        return True
+                    else:
+                        logger.warning(f"Transaction {txid} found, but the amount sent to the burn address ({total_amount_to_burn_address}) does not match the expected amount ({expected_amount})")
+                else:
+                    logger.warning(f"Transaction {txid} does not match the specified criteria")
+            else:
+                # If the transaction is not found in the blockchain, check the mempool
+                mempool_txids = await rpc_connection.getrawmempool(True)
+                if txid in mempool_txids:
+                    mempool_tx_data = mempool_txids[txid]
+                    logger.info(f"Transaction {txid} found in the mempool: {mempool_tx_data}")
+                    # Check if the transaction in the mempool matches the specified criteria
+                    vin = mempool_tx_data.get("vin", [])
+                    vout = mempool_tx_data.get("vout", [])
+                    if (
+                        any(output.get("scriptPubKey", {}).get("addresses", [None])[0] == burn_address for output in vout) and
+                        any(input.get("txid") == txid for input in vin)
+                    ):
+                        # Calculate the total amount sent to the burn address in the mempool transaction
+                        total_amount_to_burn_address = sum(
+                            output["value"] for output in vout
+                            if output.get("scriptPubKey", {}).get("addresses", [None])[0] == burn_address
+                        )
+                        if total_amount_to_burn_address == expected_amount:
+                            logger.info(f"Matching transaction found in the mempool: {mempool_tx_data}")
+                            return True
+                        else:
+                            logger.warning(f"Transaction {txid} found in the mempool, but the amount sent to the burn address ({total_amount_to_burn_address}) does not match the expected amount ({expected_amount})")
+                    else:
+                        logger.warning(f"Transaction {txid} found in the mempool, but it does not match the specified criteria")
+                else:
+                    logger.warning(f"Transaction {txid} not found in the mempool")
+            # If the transaction is not found or does not match the criteria, wait before retrying
+            await asyncio.sleep(retry_delay)
+            try_count += 1
+            retry_delay *= 1.1  # Optional: increase delay between retries
+        else:
+            logger.error(f"Invalid txid for tracking transaction: {txid}")
+    logger.info(f"Transaction not found or did not match the criteria after {max_retries} attempts.")
     return False
-
 
 #Misc helper functions:
 class MyTimer():

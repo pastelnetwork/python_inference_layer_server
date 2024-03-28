@@ -297,6 +297,40 @@ async def send_to_address_func(address, amount, comment="", comment_to="", subtr
         logger.error(f"Error in send_to_address_func: {e}")
         return None
 
+async def send_many_func(amounts, min_conf=1, comment="", subtract_fee_from_amount=None):
+    """
+    Send multiple amounts to multiple recipients.
+
+    Args:
+        amounts (dict): A dictionary representing the amounts to send.
+                        Each key is the Pastel address, and the corresponding value is the amount in PSL to send.
+        min_conf (int, optional): The minimum number of confirmations required for the funds to be used. Defaults to 1.
+        comment (str, optional): A comment to include with the transaction. Defaults to an empty string.
+        subtract_fee_from_amount (list, optional): A list of addresses from which to subtract the fee.
+                                                    If not provided, the sender pays the fee. Defaults to None.
+
+    Returns:
+        str: The transaction ID if successful, None otherwise.
+
+    Example:
+        amounts = {
+            "PtczsZ91Bt3oDPDQotzUsrx1wjmsFVgf28n": 0.01,
+            "PtczsZ91Bt3oDPDQotzUsrx1wjmsFVgf28n": 0.02
+        }
+        send_many_func(amounts, min_conf=6, comment="testing", subtract_fee_from_amount=["PtczsZ91Bt3oDPDQotzUsrx1wjmsFVgf28n"])
+    """
+    global rpc_connection
+    try:
+        # Set the 'fromaccount' parameter to an empty string
+        from_account = ""
+
+        # Call the 'sendmany' RPC method
+        result = await rpc_connection.sendmany(from_account, amounts, min_conf, comment, subtract_fee_from_amount)
+        return result
+    except Exception as e:
+        logger.error(f"Error in send_many_func: {e}")
+        return None
+
 async def z_send_many_with_change_to_sender_func(from_address, amounts, min_conf=1, fee=0.1):
     """
     Send multiple amounts from a given address to multiple recipients.
@@ -384,16 +418,70 @@ async def check_if_address_is_already_imported_in_local_wallet(address_to_check)
     if address_amounts_df_filtered.empty:
         return False
     return True
+
+async def get_and_decode_raw_transaction(txid: str, blockhash: str = None) -> dict:
+    """
+    Retrieves and decodes detailed information about a specified transaction
+    from the Pastel network using the RPC calls.
+
+    Args:
+        txid (str): The transaction id to fetch and decode.
+        blockhash (str, optional): The block hash to specify which block to search for the transaction.
+
+    Returns:
+        dict: A dictionary containing detailed decoded information about the transaction.
+    """
+    global rpc_connection
+    try:
+        # Retrieve the raw transaction data
+        raw_tx_data = await rpc_connection.getrawtransaction(txid, 0, blockhash)
+        if not raw_tx_data:
+            logger.error(f"Failed to retrieve raw transaction data for {txid}")
+            return {}
+
+        # Decode the raw transaction data
+        decoded_tx_data = await rpc_connection.decoderawtransaction(raw_tx_data)
+        if not decoded_tx_data:
+            logger.error(f"Failed to decode raw transaction data for {txid}")
+            return {}
+
+        # Log the decoded transaction details
+        logger.info(f"Decoded transaction details for {txid}: {decoded_tx_data}")
+
+        return decoded_tx_data
+    except Exception as e:
+        logger.error(f"Error in get_and_decode_transaction for {txid}: {e}")
+        return {}
+
+async def get_transaction_details(txid: str, include_watchonly: bool = False) -> dict:
+    """
+    Fetches detailed information about a specified transaction from the Pastel network using the RPC call.
+
+    Args:
+        txid (str): The transaction id to fetch details for.
+        include_watchonly (bool, optional): Whether to include watchonly addresses in the details. Defaults to False.
+
+    Returns:
+        dict: A dictionary containing detailed information about the transaction.
+    """
+    global rpc_connection
+    try:
+        # Call the 'gettransaction' RPC method with the provided txid and includeWatchonly flag
+        transaction_details = await rpc_connection.gettransaction(txid, include_watchonly)
+        
+        # Log the retrieved transaction details
+        logger.info(f"Retrieved transaction details for {txid}: {transaction_details}")
+
+        return transaction_details
+    except Exception as e:
+        logger.error(f"Error retrieving transaction details for {txid}: {e}")
+        return {}
     
 async def send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(
     inference_request_id: str,
     credit_usage_tracking_psl_address: str,
     credit_usage_tracking_amount_in_psl: float,
     burn_address: str,
-    min_conf: int = 1,
-    fee: float = 0.001,
-    max_retries: int = 10,
-    initial_retry_delay: int = 5
 ):
     """
     Send the tracking amount from the control address to the burn address to confirm an inference request.
@@ -403,72 +491,42 @@ async def send_tracking_amount_from_control_address_to_burn_address_to_confirm_i
         credit_usage_tracking_psl_address (str): The control address to send the tracking amount from.
         credit_usage_tracking_amount_in_psl (float): The tracking amount in PSL to send.
         burn_address (str): The burn address to send the tracking amount to.
-        min_conf (int, optional): The minimum number of confirmations required for the funds to be used. Defaults to 1.
-        fee (float, optional): The fee amount to attach to the transaction. Defaults to 0.1.
-        max_retries (int, optional): The maximum number of retries to check the operation status. Defaults to 10.
-        initial_retry_delay (int, optional): The delay in seconds between each retry. Defaults to 5.
 
     Returns:
-        dict: The result of the z_send_many_with_change_to_sender_func call, including the 'txid' if the operation is successful.
-
-    Raises:
-        Exception: If the opid status is 'failed', an exception is raised with the error details.
+        str: The transaction ID (txid) if the transaction is successfully confirmed, None otherwise.
 
     Example:
         send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(
             inference_request_id="abc123",
             credit_usage_tracking_psl_address="PtczsZ91Bt3oDPDQotzUsrx1wjmsFVgf28n",
             credit_usage_tracking_amount_in_psl=0.5,
-            burn_address="PtpasteLBurnAddressXXXXXXXXXXbJ5ndd",
-            min_conf=2,
-            fee=0.05
+            burn_address="PtpasteLBurnAddressXXXXXXXXXXbJ5ndd"
         )
     """
     try:
-        amounts = [
-            {
-                "address": burn_address,
-                "amount": credit_usage_tracking_amount_in_psl
-            }
-        ]
-        result = await z_send_many_with_change_to_sender_func(
-            from_address=credit_usage_tracking_psl_address,
+        amounts = {
+            burn_address: credit_usage_tracking_amount_in_psl
+        }
+        txid = await send_many_func(
             amounts=amounts,
-            min_conf=min_conf,
-            fee=fee
+            min_conf=0,
+            comment="Confirmation tracking transaction for inference request with request_id " + inference_request_id, 
+            subtract_fee_from_amount=[credit_usage_tracking_psl_address]
         )
-        if result is not None:
-            opid = result
-            logger.info(f"Sent {credit_usage_tracking_amount_in_psl} PSL from {credit_usage_tracking_psl_address} to {burn_address} to confirm inference request {inference_request_id}. OPID: {opid}")
-            # Repeatedly check the operation status until it is successful, failed, or the maximum number of retries is reached
-            for i in range(max_retries):
-                next_retry_delay_in_seconds = initial_retry_delay*(1.1**i)
-                operation_status = await z_get_operation_status_func([opid])
-                if operation_status:
-                    status = operation_status[0]['status']
-                    if status == 'success':
-                        txid = operation_status[0]['result']['txid']
-                        logger.info(f"Successfully confirmed transaction with TXID: {txid}")
-                        return {'opid': opid, 'txid': txid}
-                    elif status == 'failed':
-                        error = operation_status[0]['error']
-                        error_message = f"Operation failed with error: {error}"
-                        logger.error(error_message)
-                        raise Exception(error_message)
-                    else:
-                        logger.info(f"Operation not yet successful. Retry {i+1}/{max_retries}. Waiting for {next_retry_delay_in_seconds} seconds...")
-                        await asyncio.sleep(next_retry_delay_in_seconds)
-                else:
-                    logger.warning(f"No operation status found for OPID: {opid}. Retry {i+1}/{max_retries}. Waiting for {next_retry_delay_in_seconds} seconds...")
-                    await asyncio.sleep(next_retry_delay_in_seconds)
-            logger.error(f"Failed to confirm transaction after {max_retries} retries.")
+        if txid is not None:
+            logger.info(f"Sent {credit_usage_tracking_amount_in_psl} PSL from {credit_usage_tracking_psl_address} to {burn_address} to confirm inference request {inference_request_id}. TXID: {txid}")
+            transaction_info = await rpc_connection.gettransaction(txid)
+            if transaction_info:
+                return txid
+            else:
+                logger.error(f"No transaction info found for TXID: {txid} to confirm inference request {inference_request_id}")
             return None
         else:
             logger.error(f"Failed to send {credit_usage_tracking_amount_in_psl} PSL from {credit_usage_tracking_psl_address} to {burn_address} to confirm inference request {inference_request_id}")
             return None
     except Exception as e:
         logger.error(f"Error in send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request: {e}")
-        raise
+        raise    
 
 async def import_address_func(address: str, label: str = "", rescan: bool = False) -> None:
     """
@@ -831,7 +889,7 @@ async def main():
         credit_usage_tracking_amount_in_psl = float(usage_request_response["request_confirmation_message_amount_in_patoshis"])/(10**5) # Divide by number of Patoshis per PSL
 
         # Check if tracking address contains enough PSL to send tracking amount:
-        tracking_address_balance = await check_psl_address_balance_func(credit_usage_tracking_psl_address)
+        tracking_address_balance = await check_psl_address_balance_alternative_func(credit_usage_tracking_psl_address)
         if tracking_address_balance < credit_usage_tracking_amount_in_psl:
             logger.error(f"Insufficient balance in tracking address: {credit_usage_tracking_psl_address}; amount needed: {credit_usage_tracking_amount_in_psl}; current balance: {tracking_address_balance}; shortfall: {credit_usage_tracking_amount_in_psl - tracking_address_balance}")
             return
@@ -846,12 +904,12 @@ async def main():
             credit_pack.save_to_json(CREDIT_PACK_FILE)
             
             # Send the required PSL coins to authorize the request
-            transaction_result = await send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(inference_request_id, credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, burn_address)
+            tracking_transaction_txid = await send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(inference_request_id, credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, burn_address)
             
             # Prepare the inference confirmation
             confirmation_data = InferenceConfirmationModel(
                 inference_request_id=inference_request_id,
-                confirmation_transaction={"txid": transaction_result["txid"]}
+                confirmation_transaction={"txid": tracking_transaction_txid}
             )
 
             # Send the inference confirmation
