@@ -11,11 +11,11 @@ import hashlib
 import urllib.parse as urlparse
 import decimal
 import pandas as pd
-from datetime import datetime
+from pydantic import BaseModel
+from datetime import datetime, timezone
 from typing import List, Dict, Any
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from httpx import AsyncClient, Limits, Timeout
-from database_code import InferenceAPIUsageRequestModel, InferenceConfirmationModel
 
 logger = logging.getLogger("pastel_supernode_messaging_client")
 MESSAGING_TIMEOUT_IN_SECONDS = 30
@@ -352,6 +352,121 @@ async def z_get_operation_status_func(operation_ids=None):
         logger.error(f"Error in z_get_operation_status_func: {e}")
         return None
 
+async def check_psl_address_balance_func(address_to_check):
+    global rpc_connection
+    balance_at_address = await rpc_connection.z_getbalance(address_to_check) 
+    return balance_at_address
+
+async def send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(
+    inference_request_id: str,
+    credit_usage_tracking_psl_address: str,
+    credit_usage_tracking_amount_in_psl: float,
+    burn_address: str,
+    min_conf: int = 1,
+    fee: float = 0.001,
+    max_retries: int = 10,
+    initial_retry_delay: int = 5
+):
+    """
+    Send the tracking amount from the control address to the burn address to confirm an inference request.
+
+    Args:
+        inference_request_id (str): The ID of the inference request.
+        credit_usage_tracking_psl_address (str): The control address to send the tracking amount from.
+        credit_usage_tracking_amount_in_psl (float): The tracking amount in PSL to send.
+        burn_address (str): The burn address to send the tracking amount to.
+        min_conf (int, optional): The minimum number of confirmations required for the funds to be used. Defaults to 1.
+        fee (float, optional): The fee amount to attach to the transaction. Defaults to 0.1.
+        max_retries (int, optional): The maximum number of retries to check the operation status. Defaults to 10.
+        initial_retry_delay (int, optional): The delay in seconds between each retry. Defaults to 5.
+
+    Returns:
+        dict: The result of the z_send_many_with_change_to_sender_func call, including the 'txid' if the operation is successful.
+
+    Raises:
+        Exception: If the opid status is 'failed', an exception is raised with the error details.
+
+    Example:
+        send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(
+            inference_request_id="abc123",
+            credit_usage_tracking_psl_address="PtczsZ91Bt3oDPDQotzUsrx1wjmsFVgf28n",
+            credit_usage_tracking_amount_in_psl=0.5,
+            burn_address="PtpasteLBurnAddressXXXXXXXXXXbJ5ndd",
+            min_conf=2,
+            fee=0.05
+        )
+    """
+    try:
+        amounts = [
+            {
+                "address": burn_address,
+                "amount": credit_usage_tracking_amount_in_psl
+            }
+        ]
+        result = await z_send_many_with_change_to_sender_func(
+            from_address=credit_usage_tracking_psl_address,
+            amounts=amounts,
+            min_conf=min_conf,
+            fee=fee
+        )
+        if result is not None:
+            opid = result
+            logger.info(f"Sent {credit_usage_tracking_amount_in_psl} PSL from {credit_usage_tracking_psl_address} to {burn_address} to confirm inference request {inference_request_id}. OPID: {opid}")
+            # Repeatedly check the operation status until it is successful, failed, or the maximum number of retries is reached
+            for i in range(max_retries):
+                next_retry_delay_in_seconds = initial_retry_delay*(1.1**i)
+                operation_status = await z_get_operation_status_func([opid])
+                if operation_status:
+                    status = operation_status[0]['status']
+                    if status == 'success':
+                        txid = operation_status[0]['result']['txid']
+                        logger.info(f"Successfully confirmed transaction with TXID: {txid}")
+                        return {'opid': opid, 'txid': txid}
+                    elif status == 'failed':
+                        error = operation_status[0]['error']
+                        error_message = f"Operation failed with error: {error}"
+                        logger.error(error_message)
+                        raise Exception(error_message)
+                    else:
+                        logger.info(f"Operation not yet successful. Retry {i+1}/{max_retries}. Waiting for {next_retry_delay_in_seconds} seconds...")
+                        await asyncio.sleep(next_retry_delay_in_seconds)
+                else:
+                    logger.warning(f"No operation status found for OPID: {opid}. Retry {i+1}/{max_retries}. Waiting for {next_retry_delay_in_seconds} seconds...")
+                    await asyncio.sleep(next_retry_delay_in_seconds)
+            logger.error(f"Failed to confirm transaction after {max_retries} retries.")
+            return None
+        else:
+            logger.error(f"Failed to send {credit_usage_tracking_amount_in_psl} PSL from {credit_usage_tracking_psl_address} to {burn_address} to confirm inference request {inference_request_id}")
+            return None
+    except Exception as e:
+        logger.error(f"Error in send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request: {e}")
+        raise
+
+async def import_address_func(address: str, label: str = "", rescan: bool = False) -> None:
+    """
+    Import an address or script (in hex) that can be watched as if it were in your wallet but cannot be used to spend.
+
+    Args:
+        address (str): The address to import.
+        label (str, optional): An optional label for the address. Defaults to an empty string.
+        rescan (bool, optional): Rescan the wallet for transactions. Defaults to False.
+
+    Returns:
+        None
+
+    Raises:
+        RPCError: If an error occurs during the RPC call.
+
+    Example:
+        import_address_func("myaddress", "testing", False)
+    """
+    global rpc_connection
+    try:
+        await rpc_connection.importaddress(address, label, rescan)
+        logger.info(f"Imported address: {address}")
+    except Exception as e:
+        logger.error(f"Error importing address: {address}. Error: {e}")
+    
 async def compress_data_with_zstd_func(input_data):
     zstd_compression_level = 20
     zstandard_compressor = zstd.ZstdCompressor(level=zstd_compression_level, write_content_size=True, write_checksum=True)
@@ -369,6 +484,20 @@ async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase)
     results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
     return results_dict['signature']
 
+class InferenceAPIUsageRequestModel(BaseModel):
+    requesting_pastelid: str
+    credit_pack_identifier: str
+    requested_model_canonical_string: str
+    model_parameters_json: str
+    model_input_data_json_b64: str
+
+    class Config:
+        protected_namespaces = ()
+
+class InferenceConfirmationModel(BaseModel):
+    inference_request_id: str
+    confirmation_transaction: dict
+
 class InferenceCreditPackMockup:
     def __init__(self, credit_pack_identifier: str, authorized_pastelids: List[str], psl_cost_per_credit: float, total_psl_cost_for_pack: float, initial_credit_balance: float, credit_usage_tracking_psl_address: str):
         self.credit_pack_identifier = credit_pack_identifier
@@ -380,7 +509,7 @@ class InferenceCreditPackMockup:
         self.credit_usage_tracking_psl_address = credit_usage_tracking_psl_address
         self.version = 1
         self.purchase_height = 0
-        self.timestamp = datetime.utcnow()
+        self.timestamp = datetime.now(timezone.utc)
 
     def is_authorized(self, pastelid: str) -> bool:
         return pastelid in self.authorized_pastelids
@@ -569,6 +698,7 @@ async def main():
     rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
     
     use_test_messaging_functionality = 0
+    use_test_inference_request_functionality = 1
         
     # Replace with your own values
     my_local_pastelid = "jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"
@@ -614,80 +744,91 @@ async def main():
 
     #________________________________________________________
 
-    local_credit_tracking_psl_address = '44oVQrU5Hda9gLWR2ZGrLMiwsb31wkQFNajb'
-    burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
-    
-    # Load or create the global InferenceCreditPackMockup instance
-    CREDIT_PACK_FILE = "credit_pack.json"
-    credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
-
-    if credit_pack is None:
-        # Create a new credit pack if the file doesn't exist or is invalid
-        credit_pack = InferenceCreditPackMockup(
-            credit_pack_identifier="credit_pack_123",
-            authorized_pastelids=["jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"],
-            psl_cost_per_credit=10.0,
-            total_psl_cost_for_pack=10000.0,
-            initial_credit_balance=100000.0,
-            credit_usage_tracking_psl_address=local_credit_tracking_psl_address
-        )
-        credit_pack.save_to_json(CREDIT_PACK_FILE)
-
-    sample_text_completion = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
-    sample_text_completion__base64_encoded = base64.b64encode(sample_text_completion.encode()).decode('utf-8')
-    model_parameters = {"max_length": 100, "temperature": 0.7}
-
-    # Prepare the inference API usage request
-    request_data = InferenceAPIUsageRequestModel(
-        requesting_pastelid=my_local_pastelid,
-        credit_pack_identifier=credit_pack.credit_pack_identifier,
-        requested_model_canonical_string="llama-7b",
-        model_parameters_json=json.dumps(model_parameters),
-        model_input_data_json_b64=sample_text_completion__base64_encoded
-    )
-
-    # Send the inference API usage request
-    usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, request_data)
-    logger.info(f"Received inference API usage request response: {usage_request_response}")
-
-    # Extract the relevant information from the response
-    inference_request_id = usage_request_response["inference_request_id"]
-    proposed_cost_in_credits = usage_request_response["proposed_cost_of_request_in_inference_credits"]
-    credit_usage_tracking_psl_address = usage_request_response["credit_usage_tracking_psl_address"]
-    credit_usage_to_tracking_amount_multiplier = 0.0001
-    credit_usage_tracking_amount = proposed_cost_in_credits * credit_usage_to_tracking_amount_multiplier
-    request_confirmation_message_amount_in_patoshis = usage_request_response["request_confirmation_message_amount_in_patoshis"]
-
-    # Check if the credit pack has sufficient credits
-    if credit_pack.has_sufficient_credits(proposed_cost_in_credits):
-        # Deduct the credits from the credit pack
-        credit_pack.deduct_credits(proposed_cost_in_credits)
-        logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
+    if use_test_inference_request_functionality:
+        local_credit_tracking_psl_address = '44oVQrU5Hda9gLWR2ZGrLMiwsb31wkQFNajb'
         
-        # Save the updated credit pack state to the JSON file
-        credit_pack.save_to_json(CREDIT_PACK_FILE)
+        if rpc_port == '9932':
+            burn_address = 'PtpasteLBurnAddressXXXXXXXXXXbJ5ndd'
+        elif rpc_port == '19932':
+            burn_address = 'tPpasteLBurnAddressXXXXXXXXXXX3wy7u'
+        elif rpc_port == '29932':
+            burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
         
-        # Send the required PSL coins to authorize the request
-        # TODO: Implement the logic to send the required PSL coins from the tracking address to the burn address
-        # You can use the `request_confirmation_message_amount_in_patoshis` and `credit_usage_tracking_psl_address` from the response
-        # This step may require interaction with the Pastel blockchain and wallet
+        await import_address_func(burn_address, "burn_address", False)
+        
+        # Load or create the global InferenceCreditPackMockup instance
+        CREDIT_PACK_FILE = "credit_pack.json"
+        credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
 
-        # Prepare the inference confirmation
-        confirmation_data = InferenceConfirmationModel(
-            inference_request_id=inference_request_id,
-            confirmation_transaction={"transaction_details": "details_of_the_confirmation_transaction"}
+        if credit_pack is None:
+            # Create a new credit pack if the file doesn't exist or is invalid
+            credit_pack = InferenceCreditPackMockup(
+                credit_pack_identifier="credit_pack_123",
+                authorized_pastelids=["jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"],
+                psl_cost_per_credit=10.0,
+                total_psl_cost_for_pack=10000.0,
+                initial_credit_balance=100000.0,
+                credit_usage_tracking_psl_address=local_credit_tracking_psl_address
+            )
+            credit_pack.save_to_json(CREDIT_PACK_FILE)
+
+        sample_text_completion = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
+        sample_text_completion__base64_encoded = base64.b64encode(sample_text_completion.encode()).decode('utf-8')
+        model_parameters = {"max_length": 100, "temperature": 0.7}
+
+        # Prepare the inference API usage request
+        request_data = InferenceAPIUsageRequestModel(
+            requesting_pastelid=my_local_pastelid,
+            credit_pack_identifier=credit_pack.credit_pack_identifier,
+            requested_model_canonical_string="llama-7b",
+            model_parameters_json=json.dumps(model_parameters),
+            model_input_data_json_b64=sample_text_completion__base64_encoded
         )
 
-        # Send the inference confirmation
-        confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data)
-        logger.info(f"Sent inference confirmation: {confirmation_result}")
+        # Send the inference API usage request
+        usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, request_data)
+        logger.info(f"Received inference API usage request response: {usage_request_response}")
 
-        # Get the inference output results
-        inference_response_id = confirmation_result["inference_response_id"]
-        output_results = await messaging_client.get_inference_output_results(supernode_url, inference_request_id, inference_response_id)
-        logger.info(f"Retrieved inference output results: {output_results}")
-    else:
-        logger.warning("Insufficient credits in the credit pack.")
+        # Extract the relevant information from the response
+        inference_request_id = usage_request_response["inference_request_id"]
+        proposed_cost_in_credits = float(usage_request_response["proposed_cost_of_request_in_inference_credits"])
+        credit_usage_tracking_psl_address = usage_request_response["credit_usage_tracking_psl_address"]
+        credit_usage_tracking_amount_in_psl = float(usage_request_response["request_confirmation_message_amount_in_patoshis"])/(10**5) # Divide by number of Patoshis per PSL
+
+        # Check if tracking address contains enough PSL to send tracking amount:
+        tracking_address_balance = await check_psl_address_balance_func(credit_usage_tracking_psl_address)
+        if tracking_address_balance < credit_usage_tracking_amount_in_psl:
+            logger.error(f"Insufficient balance in tracking address: {credit_usage_tracking_psl_address}; amount needed: {credit_usage_tracking_amount_in_psl}; current balance: {tracking_address_balance}; shortfall: {credit_usage_tracking_amount_in_psl - tracking_address_balance}")
+            return
+
+        # Check if the credit pack has sufficient credits
+        if credit_pack.has_sufficient_credits(proposed_cost_in_credits):
+            # Deduct the credits from the credit pack
+            credit_pack.deduct_credits(proposed_cost_in_credits)
+            logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
+            
+            # Save the updated credit pack state to the JSON file
+            credit_pack.save_to_json(CREDIT_PACK_FILE)
+            
+            # Send the required PSL coins to authorize the request
+            transaction_result = await send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(inference_request_id, credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, burn_address)
+            
+            # Prepare the inference confirmation
+            confirmation_data = InferenceConfirmationModel(
+                inference_request_id=inference_request_id,
+                confirmation_transaction={"transaction_details": "details_of_the_confirmation_transaction"}
+            )
+
+            # Send the inference confirmation
+            confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data)
+            logger.info(f"Sent inference confirmation: {confirmation_result}")
+
+            # Get the inference output results
+            inference_response_id = confirmation_result["inference_response_id"]
+            output_results = await messaging_client.get_inference_output_results(supernode_url, inference_request_id, inference_response_id)
+            logger.info(f"Retrieved inference output results: {output_results}")
+        else:
+            logger.error("Insufficient credits in the credit pack; request cannot be authorized.")
 
 if __name__ == "__main__":
     asyncio.run(main())

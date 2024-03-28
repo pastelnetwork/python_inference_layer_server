@@ -41,9 +41,7 @@ NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = config.get("NUMBER_OF_D
 GITHUB_MODEL_MENU_URL = config.get("GITHUB_MODEL_MENU_URL")
 CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_SECONDS", default=300, cast=int)
 LOCAL_PASTEL_ID_PASSPHRASE = config.get("LOCAL_PASTEL_ID_PASSPHRASE")
-BURN_ADDRESS = config.get("BURN_ADDRESS")
-credit_usage_to_tracking_amount_multiplier = 0.0001
-
+credit_usage_to_tracking_amount_multiplier = 10 # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis
 
 challenge_store = {}
 
@@ -931,13 +929,16 @@ async def process_inference_api_usage_request(inference_api_usage_request: Infer
     return inference_response
 
 async def create_and_save_inference_api_usage_response(saved_request: InferenceAPIUsageRequest, proposed_cost_in_credits: float, remaining_credits_after_request: float) -> InferenceAPIUsageResponse:
+    # Generate a unique identifier for the inference response
+    inference_response_id = str(uuid.uuid4())
     # Create an InferenceAPIUsageResponse instance
     inference_response = InferenceAPIUsageResponse(
+        inference_response_id=inference_response_id,
         inference_request_id=saved_request.inference_request_id,
         proposed_cost_of_request_in_inference_credits=proposed_cost_in_credits,
         remaining_credits_in_pack_after_request_processed=remaining_credits_after_request,
         credit_usage_tracking_psl_address=credit_pack.credit_usage_tracking_psl_address,
-        request_confirmation_message_amount_in_patoshis=int(proposed_cost_in_credits * credit_usage_to_tracking_amount_multiplier * 10**8),  # Convert to Patoshis
+        request_confirmation_message_amount_in_patoshis=int(proposed_cost_in_credits * credit_usage_to_tracking_amount_multiplier),
         max_block_height_to_include_confirmation_transaction=await get_current_pastel_block_height_func() + 10,  # Adjust as needed
         supernode_pastelids_and_signatures_pack_on_inference_response_id="placeholder_signatures_pack"  # Replace with actual signatures pack
     )
@@ -946,7 +947,6 @@ async def create_and_save_inference_api_usage_response(saved_request: InferenceA
         db_session.add(inference_response)
         await db_session.commit()
         await db_session.refresh(inference_response)
-    
     return inference_response
 
 async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: InferenceConfirmationModel) -> bool:
@@ -1176,7 +1176,31 @@ async def get_all_pastel_blockchain_tickets_func(verbose=0):
             tickets_obj[current_ticket_type] = await get_df_json_from_tickets_list_rpc_response_func(response)
     return tickets_obj
 
+async def import_address_func(address: str, label: str = "", rescan: bool = False) -> None:
+    """
+    Import an address or script (in hex) that can be watched as if it were in your wallet but cannot be used to spend.
 
+    Args:
+        address (str): The address to import.
+        label (str, optional): An optional label for the address. Defaults to an empty string.
+        rescan (bool, optional): Rescan the wallet for transactions. Defaults to False.
+
+    Returns:
+        None
+
+    Raises:
+        RPCError: If an error occurs during the RPC call.
+
+    Example:
+        import_address_func("myaddress", "testing", False)
+    """
+    global rpc_connection
+    try:
+        await rpc_connection.importaddress(address, label, rescan)
+        logger.info(f"Imported address: {address}")
+    except Exception as e:
+        logger.error(f"Error importing address: {address}. Error: {e}")
+        
 #Misc helper functions:
 class MyTimer():
     def __init__(self):
@@ -1276,6 +1300,16 @@ def highlight_rules_func(text):
 
 rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
 rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
+
+if rpc_port == '9932':
+    burn_address = 'PtpasteLBurnAddressXXXXXXXXXXbJ5ndd'
+elif rpc_port == '19932':
+    burn_address = 'tPpasteLBurnAddressXXXXXXXXXXX3wy7u'
+elif rpc_port == '29932':
+    burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
+
+# await import_address_func(burn_address, "burn_address", False)
+
 
 # Load or create the global InferenceCreditPackMockup instance
 CREDIT_PACK_FILE = "credit_pack.json"

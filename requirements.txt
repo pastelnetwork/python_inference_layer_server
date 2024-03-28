@@ -4,6 +4,7 @@ fastapi
 httpx
 pandas
 psutil
+magika
 python-decouple
 sqlalchemy
 starlette

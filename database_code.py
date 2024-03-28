@@ -129,29 +129,10 @@ class InferenceConfirmationModel(BaseModel):
     inference_request_id: str
     confirmation_transaction: dict
 
-class InferenceOutputResultsModel(BaseModel):
-    inference_request_id: str
-    inference_response_id: str
-    output_results: dict
-    
 class ReputationScoreUpdateModel(BaseModel):
     supernode_pastelid: str
     reputation_score: float    
-    
-class InferenceAPIUsageRequestResponse(BaseModel):
-    inference_request_id: str
-    requesting_pastelid: str
-    credit_pack_identifier: str
-    requested_model_canonical_string: str
-    model_parameters_json: str
-    model_input_data_json_b64: str
-    total_psl_cost_for_pack: float
-    initial_credit_balance: float
-    requesting_pastelid_signature: str    
 
-    class Config:
-        protected_namespaces = ()
-        
 class InferenceAPIUsageRequestModel(BaseModel):
     requesting_pastelid: str
     credit_pack_identifier: str
@@ -162,10 +143,10 @@ class InferenceAPIUsageRequestModel(BaseModel):
     class Config:
         protected_namespaces = ()
 
-class InferenceAPIUsageRequest(Message):
+class InferenceAPIUsageRequest(Base):
     __tablename__ = "inference_api_usage_requests"
 
-    id = Column(Integer, ForeignKey("messages.id"), primary_key=True)
+    id = Column(Integer, primary_key=True, index=True)
     inference_request_id = Column(String, unique=True, index=True)
     requesting_pastelid = Column(String, index=True)
     credit_pack_identifier = Column(String, index=True)
@@ -176,17 +157,13 @@ class InferenceAPIUsageRequest(Message):
     initial_credit_balance = Column(Numeric(precision=20, scale=8))
     requesting_pastelid_signature = Column(String)
 
-    __mapper_args__ = {
-        "polymorphic_identity": "inference_api_usage_request",
-    }
-
     class Config:
         protected_namespaces = ()
         
-class InferenceAPIUsageResponse(Message):
+class InferenceAPIUsageResponse(Base):
     __tablename__ = "inference_api_usage_responses"
 
-    id = Column(Integer, ForeignKey("messages.id"), primary_key=True)
+    id = Column(Integer, primary_key=True, index=True)
     inference_response_id = Column(String, unique=True, index=True)
     inference_request_id = Column(String, ForeignKey("inference_api_usage_requests.inference_request_id"), index=True)
     proposed_cost_of_request_in_inference_credits = Column(Numeric(precision=20, scale=8))
@@ -195,15 +172,21 @@ class InferenceAPIUsageResponse(Message):
     request_confirmation_message_amount_in_patoshis = Column(Integer)
     max_block_height_to_include_confirmation_transaction = Column(Integer)
     supernode_pastelids_and_signatures_pack_on_inference_response_id = Column(String)
-
-    __mapper_args__ = {
-        "polymorphic_identity": "inference_api_usage_response",
-    }
-
-class InferenceAPIOutputResult(Message):
+    
+class InferenceAPIUsageResponseModel(BaseModel):
+    inference_response_id: str
+    inference_request_id: str
+    proposed_cost_of_request_in_inference_credits: Decimal
+    remaining_credits_in_pack_after_request_processed: Decimal
+    credit_usage_tracking_psl_address: str
+    request_confirmation_message_amount_in_patoshis: int
+    max_block_height_to_include_confirmation_transaction: int
+    supernode_pastelids_and_signatures_pack_on_inference_response_id: str
+        
+class InferenceAPIOutputResult(Base):
     __tablename__ = "inference_api_output_results"
 
-    id = Column(Integer, ForeignKey("messages.id"), primary_key=True)
+    id = Column(Integer, primary_key=True, index=True)
     inference_result_id = Column(String, unique=True, index=True)
     inference_request_id = Column(String, ForeignKey("inference_api_usage_requests.inference_request_id"), index=True)
     inference_response_id = Column(String, ForeignKey("inference_api_usage_responses.inference_response_id"), index=True)
@@ -211,10 +194,14 @@ class InferenceAPIOutputResult(Message):
     inference_result_json_base64 = Column(String)
     responding_supernode_signature_on_inference_result_id = Column(String)
 
-    __mapper_args__ = {
-        "polymorphic_identity": "inference_api_output_result",
-    }
-
+class InferenceOutputResultsModel(BaseModel):
+    inference_result_id: str
+    inference_request_id: str
+    inference_response_id: str
+    responding_supernode_pastelid: str
+    inference_result_json_base64: str
+    responding_supernode_signature_on_inference_result_id: str
+    
 # Add a new model for storing inference credit packs
 class InferenceCreditPack(Base):
     __tablename__ = "inference_credit_packs"
