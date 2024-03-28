@@ -1035,6 +1035,12 @@ async def execute_inference_request(inference_request_id: str) -> None:
         if inference_request is None:
             logger.warning(f"Invalid inference request ID: {inference_request_id}")
             return
+        # Retrieve the inference API usage request response from the database
+        async with AsyncSessionLocal() as db:
+            inference_response = await db.execute(
+                select(InferenceAPIUsageResponse).where(InferenceAPIUsageResponse.inference_request_id == inference_request_id)
+            )
+            inference_response = inference_response.scalar_one_or_none()        
         # TODO: Integrate with the Swiss Army Llama project or other inference libraries to perform the inference task
         # For now, let's assume the inference is executed successfully and the output results are generated
         output_results = {
@@ -1045,7 +1051,7 @@ async def execute_inference_request(inference_request_id: str) -> None:
         # Create an inference response record
         inference_response = InferenceAPIUsageResponse(
             inference_request_id=inference_request_id,
-            inference_response_id=str(uuid.uuid4()),
+            inference_response_id=inference_response.inference_response_id,
             responding_supernode_pastelid=local_supernode_pastelid,
             output_results=output_results
         )
@@ -1266,6 +1272,7 @@ async def check_burn_address_for_tracking_transaction(
     max_block_height: int,
     max_retries: int = 10,
     retry_delay: int = 5
+
 ) -> bool:
     """
     Repeatedly checks the burn address for a transaction with the correct identifier, amount,

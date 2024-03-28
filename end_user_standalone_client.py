@@ -352,11 +352,37 @@ async def z_get_operation_status_func(operation_ids=None):
         logger.error(f"Error in z_get_operation_status_func: {e}")
         return None
 
-async def check_psl_address_balance_func(address_to_check):
+async def check_psl_address_balance_alternative_func(address_to_check):
     global rpc_connection
-    balance_at_address = await rpc_connection.z_getbalance(address_to_check) 
+    address_amounts_dict = await rpc_connection.listaddressamounts()
+    # Convert the dictionary into a list of dictionaries, each representing a row
+    data = [{'address': address, 'amount': amount} for address, amount in address_amounts_dict.items()]
+    # Create the DataFrame from the list of dictionaries
+    address_amounts_df = pd.DataFrame(data)
+    # Filter the DataFrame for the specified address
+    address_amounts_df_filtered = address_amounts_df[address_amounts_df['address'] == address_to_check]
+    # Calculate the sum of the 'amount' column for the filtered DataFrame
+    balance_at_address = address_amounts_df_filtered['amount'].sum()
     return balance_at_address
 
+async def check_psl_address_balance_func(address_to_check):
+    global rpc_connection
+    balance_at_address = await rpc_connection.z_getbalance(address_to_check)
+    return balance_at_address
+
+async def check_if_address_is_already_imported_in_local_wallet(address_to_check):
+    global rpc_connection
+    address_amounts_dict = await rpc_connection.listaddressamounts()
+    # Convert the dictionary into a list of dictionaries, each representing a row
+    data = [{'address': address, 'amount': amount} for address, amount in address_amounts_dict.items()]
+    # Create the DataFrame from the list of dictionaries
+    address_amounts_df = pd.DataFrame(data)        
+    # Filter the DataFrame for the specified address
+    address_amounts_df_filtered = address_amounts_df[address_amounts_df['address'] == address_to_check]
+    if address_amounts_df_filtered.empty:
+        return False
+    return True
+    
 async def send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(
     inference_request_id: str,
     credit_usage_tracking_psl_address: str,
@@ -652,7 +678,7 @@ class PastelMessagingClient:
                 "credit_usage_tracking_psl_address": result.get("credit_usage_tracking_psl_address"),
                 "request_confirmation_message_amount_in_patoshis": result.get("request_confirmation_message_amount_in_patoshis"),
                 "max_block_height_to_include_confirmation_transaction": result.get("max_block_height_to_include_confirmation_transaction"),
-                "supernode_pastelids_and_signatures_pack_on_inference_response_id": result.get("supernode_pastelids_and_signatures_pack_on_inference_response_id")
+                "supernode_pastelid_and_signature_on_inference_response_id": result.get("supernode_pastelid_and_signature_on_inference_response_id")
             }
 
     async def send_inference_confirmation(self, supernode_url: str, confirmation_data: InferenceConfirmationModel) -> Dict[str, Any]:
@@ -668,7 +694,7 @@ class PastelMessagingClient:
             "challenge_signature": challenge_signature
         }
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.post(f"{supernode_url}/send_inference_confirmation", json=payload)
+            response = await client.post(f"{supernode_url}/confirm_inference_request", json=payload)
             response.raise_for_status()
             result = response.json()
             return result
@@ -745,7 +771,7 @@ async def main():
     #________________________________________________________
 
     if use_test_inference_request_functionality:
-        local_credit_tracking_psl_address = '44oVQrU5Hda9gLWR2ZGrLMiwsb31wkQFNajb'
+        local_credit_tracking_psl_address = '44oSueBgdMaAnGxrbTNZwQeDnxvPJg4dGAR3'
         
         if rpc_port == '9932':
             burn_address = 'PtpasteLBurnAddressXXXXXXXXXXbJ5ndd'
@@ -754,7 +780,14 @@ async def main():
         elif rpc_port == '29932':
             burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
         
-        await import_address_func(burn_address, "burn_address", False)
+        burn_address_already_imported = await check_if_address_is_already_imported_in_local_wallet(burn_address)
+        if not burn_address_already_imported:
+            logger.info(f"Please wait, importing burn address {burn_address} into local wallet, which requires a reindexing...")
+            await import_address_func(burn_address, "burn_address", True)
+
+        local_tracking_address_already_imported = await check_if_address_is_already_imported_in_local_wallet(local_credit_tracking_psl_address)
+        if not local_tracking_address_already_imported:
+            logger.error(f"Error: Local tracking address does not exist in local wallet: {local_credit_tracking_psl_address}")
         
         # Load or create the global InferenceCreditPackMockup instance
         CREDIT_PACK_FILE = "credit_pack.json"
@@ -816,7 +849,7 @@ async def main():
             # Prepare the inference confirmation
             confirmation_data = InferenceConfirmationModel(
                 inference_request_id=inference_request_id,
-                confirmation_transaction={"transaction_details": "details_of_the_confirmation_transaction"}
+                confirmation_transaction={"txid": transaction_result["txid"]}
             )
 
             # Send the inference confirmation
