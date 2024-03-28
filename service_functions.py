@@ -1003,12 +1003,13 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
         transaction_found = await check_burn_address_for_tracking_transaction(burn_address, inference_response.credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, confirmation_transaction_txid, inference_response.max_block_height_to_include_confirmation_transaction)
         if transaction_found:
             logger.info(f"Found correct inference request confirmation tracking transaction in burn address! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};") 
-            # Deduct the credits from the global credit pack
-            proposed_cost_in_credits = inference_request.proposed_cost_of_request_in_inference_credits
-            credit_pack.deduct_credits(proposed_cost_in_credits)
-            logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
-            # Save the updated credit pack state to the JSON file
-            credit_pack.save_to_json(CREDIT_PACK_FILE)
+            computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address)
+            logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address} tracking transactions from tracking address to burn address.")       
+            # proposed_cost_in_credits = inference_response.proposed_cost_of_request_in_inference_credits
+            # credit_pack.deduct_credits(proposed_cost_in_credits)
+            # logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
+            # # Save the updated credit pack state to the JSON file
+            # credit_pack.save_to_json(CREDIT_PACK_FILE)
             # Update the inference request status to "confirmed"
             inference_request.status = "confirmed"
             async with AsyncSessionLocal() as db:
@@ -1146,6 +1147,44 @@ async def send_inference_output_results(inference_request_id: str, inference_res
         logger.error(f"Error sending inference output results: {str(e)}")
         raise
     
+async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address):
+    """
+    Determines the current credit balance of an inference credit pack based on the tracking transactions.
+
+    Args:
+        credit_pack: The inference credit pack object containing the initial credit balance and tracking PSL address.
+        burn_address: The burn address to which the tracking transactions are sent.
+
+    Returns:
+        float: The current credit balance of the inference credit pack.
+    """
+    initial_credit_balance = credit_pack.initial_credit_balance
+    credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
+    # Get all transactions sent from the credit_usage_tracking_psl_address to the burn address
+    transactions = await rpc_connection.listtransactions("*", 10000, 0, True)
+    tracking_transactions = [
+        tx for tx in transactions
+        if tx.get("address") == credit_usage_tracking_psl_address and tx.get("category") == "send" and tx.get("amount") < 1.0
+    ]
+    # Filter the tracking transactions to include only those sent to the burn address
+    burn_address_transactions = [
+        tx for tx in tracking_transactions
+        if any(details.get("address") == burn_address for details in tx.get("details", []))
+    ]
+    number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(burn_address_transactions)
+    # Calculate the total number of inference credits consumed
+    credit_usage_to_tracking_amount_multiplier = 10
+    total_credits_consumed = sum(
+        int(abs(tx["amount"]) * credit_usage_to_tracking_amount_multiplier)
+        for tx in burn_address_transactions
+    )
+    # Calculate the current credit balance
+    current_credit_balance = initial_credit_balance - total_credits_consumed
+    logger.info(f"Initial credit balance: {initial_credit_balance}")
+    logger.info(f"Total credits consumed: {total_credits_consumed}")
+    logger.info(f"Current credit balance: {current_credit_balance}")
+    return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
+    
 async def update_inference_sn_reputation_score(supernode_pastelid: str, reputation_score: float) -> bool:
     try:
         # TODO: Implement the logic to update the inference SN reputation score
@@ -1264,7 +1303,7 @@ async def check_if_address_is_already_imported_in_local_wallet(address_to_check)
         return False
     return True
 
-async def get_and_decode_raw_transaction(txid: str, blockhash: str = None) -> dict:
+async def get_and_decode_raw_transaction(txid: str) -> dict:
     """
     Retrieves and decodes detailed information about a specified transaction
     from the Pastel network using the RPC calls.
@@ -1279,20 +1318,15 @@ async def get_and_decode_raw_transaction(txid: str, blockhash: str = None) -> di
     global rpc_connection
     try:
         # Retrieve the raw transaction data
-        raw_tx_data = await rpc_connection.getrawtransaction(txid, 0, blockhash)
+        raw_tx_data = await rpc_connection.getrawtransaction(txid)
         if not raw_tx_data:
             logger.error(f"Failed to retrieve raw transaction data for {txid}")
             return {}
-
         # Decode the raw transaction data
         decoded_tx_data = await rpc_connection.decoderawtransaction(raw_tx_data)
         if not decoded_tx_data:
             logger.error(f"Failed to decode raw transaction data for {txid}")
             return {}
-
-        # Log the decoded transaction details
-        logger.info(f"Decoded transaction details for {txid}: {decoded_tx_data}")
-
         return decoded_tx_data
     except Exception as e:
         logger.error(f"Error in get_and_decode_transaction for {txid}: {e}")
@@ -1329,7 +1363,7 @@ async def check_burn_address_for_tracking_transaction(
     txid: str,
     max_block_height: int,
     max_retries: int = 10,
-    retry_delay: int = 5
+    initial_retry_delay: int = 25
 ) -> bool:
     """
     Repeatedly checks the burn address for a transaction with the correct identifier, amount,
@@ -1343,68 +1377,40 @@ async def check_burn_address_for_tracking_transaction(
         txid (str): The transaction identifier to look for.
         max_block_height (int): The maximum block height to include the confirmation transaction.
         max_retries (int, optional): Maximum number of retries for checking the transaction. Defaults to 10.
-        retry_delay (int, optional): Delay between retries in seconds. Defaults to 5.
+        initial_retry_delay (int, optional): Delay between retries in seconds. Defaults to 25. Increases by 15% each retry.
 
     Returns:
         bool: True if a matching transaction is found, False otherwise.
     """
     try_count = 0
+    retry_delay = initial_retry_delay
     while try_count < max_retries:
         # Retrieve and decode the transaction details using the txid
         if len(txid) > 0:
             decoded_tx_data = await get_and_decode_raw_transaction(txid)
             if decoded_tx_data:
                 # Check if the transaction matches the specified criteria
-                logger.info(f"Decoded transaction details for {txid}: {decoded_tx_data}")
-                if (
-                    any(vout["scriptPubKey"].get("addresses", [None])[0] == burn_address for vout in decoded_tx_data["vout"]) and
-                    any(vin["txid"] == txid for vin in decoded_tx_data["vin"]) and
-                    decoded_tx_data.get("confirmations", 0) >= 0 and
-                    decoded_tx_data.get("blockheight", max_block_height + 1) <= max_block_height
-                ):
+                if any(vout["scriptPubKey"].get("addresses", [None])[0] == burn_address for vout in decoded_tx_data["vout"]):
                     # Calculate the total amount sent to the burn address in the transaction
                     total_amount_to_burn_address = sum(
                         vout["value"] for vout in decoded_tx_data["vout"]
                         if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address
                     )
                     if total_amount_to_burn_address == expected_amount:
-                        logger.info(f"Matching transaction found: {decoded_tx_data}")
-                        return True
+                        if decoded_tx_data.get("confirmations", 0) >= 0 and decoded_tx_data.get("blockheight", max_block_height + 1) <= max_block_height:
+                            logger.info(f"Matching confirmed transaction found: {decoded_tx_data}")
+                            return True
+                        else:
+                            logger.info(f"Matching unconfirmed transaction found: {decoded_tx_data}")
+                            return True
                     else:
                         logger.warning(f"Transaction {txid} found, but the amount sent to the burn address ({total_amount_to_burn_address}) does not match the expected amount ({expected_amount})")
                 else:
-                    logger.warning(f"Transaction {txid} does not match the specified criteria")
-            else:
-                # If the transaction is not found in the blockchain, check the mempool
-                mempool_txids = await rpc_connection.getrawmempool(True)
-                if txid in mempool_txids:
-                    mempool_tx_data = mempool_txids[txid]
-                    logger.info(f"Transaction {txid} found in the mempool: {mempool_tx_data}")
-                    # Check if the transaction in the mempool matches the specified criteria
-                    vin = mempool_tx_data.get("vin", [])
-                    vout = mempool_tx_data.get("vout", [])
-                    if (
-                        any(output.get("scriptPubKey", {}).get("addresses", [None])[0] == burn_address for output in vout) and
-                        any(input.get("txid") == txid for input in vin)
-                    ):
-                        # Calculate the total amount sent to the burn address in the mempool transaction
-                        total_amount_to_burn_address = sum(
-                            output["value"] for output in vout
-                            if output.get("scriptPubKey", {}).get("addresses", [None])[0] == burn_address
-                        )
-                        if total_amount_to_burn_address == expected_amount:
-                            logger.info(f"Matching transaction found in the mempool: {mempool_tx_data}")
-                            return True
-                        else:
-                            logger.warning(f"Transaction {txid} found in the mempool, but the amount sent to the burn address ({total_amount_to_burn_address}) does not match the expected amount ({expected_amount})")
-                    else:
-                        logger.warning(f"Transaction {txid} found in the mempool, but it does not match the specified criteria")
-                else:
-                    logger.warning(f"Transaction {txid} not found in the mempool")
+                    logger.warning(f"Transaction {txid} does not send funds to the specified burn address")
             # If the transaction is not found or does not match the criteria, wait before retrying
             await asyncio.sleep(retry_delay)
             try_count += 1
-            retry_delay *= 1.1  # Optional: increase delay between retries
+            retry_delay *= 1.15  # Optional: increase delay between retries
         else:
             logger.error(f"Invalid txid for tracking transaction: {txid}")
     logger.info(f"Transaction not found or did not match the criteria after {max_retries} attempts.")

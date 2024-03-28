@@ -508,7 +508,11 @@ async def confirm_inference_request_endpoint(
         is_processed = await service_functions.process_inference_confirmation(
             inference_confirmation.inference_request_id, inference_confirmation.confirmation_transaction
         )
-        return is_processed
+        if is_processed:
+            logger.info(f"Inference request {inference_confirmation.inference_request_id} confirmed successfully")
+        else:
+            logger.error(f"Error confirming inference request {inference_confirmation.inference_request_id}")
+        return inference_confirmation
     except Exception as e:
         logger.error(f"Error sending inference confirmation: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error sending inference confirmation: {str(e)}")
