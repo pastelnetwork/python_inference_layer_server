@@ -17,8 +17,10 @@ from typing import List, Dict, Any
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from httpx import AsyncClient, Limits, Timeout
 
+# Note: you must have `minrelaytxfee=0.00001` in your pastel.conf to allow "dust" transactions for the inference request confirmation transactions to work!
+
 logger = logging.getLogger("pastel_supernode_messaging_client")
-MESSAGING_TIMEOUT_IN_SECONDS = 30
+MESSAGING_TIMEOUT_IN_SECONDS = 60
 
 def setup_logger():
     if logger.handlers:
@@ -820,7 +822,7 @@ async def main():
 
         # Send the inference API usage request
         usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, request_data)
-        logger.info(f"Received inference API usage request response: {usage_request_response}")
+        logger.info(f"Received inference API usage request response from SN:\n {usage_request_response}")
 
         # Extract the relevant information from the response
         inference_request_id = usage_request_response["inference_request_id"]
