@@ -10,17 +10,25 @@ import base64
 import hashlib
 import urllib.parse as urlparse
 import decimal
+import re
 import pandas as pd
 from pydantic import BaseModel
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from httpx import AsyncClient, Limits, Timeout
+from decouple import Config as DecoupleConfig, RepositoryEnv
 
 # Note: you must have `minrelaytxfee=0.00001` in your pastel.conf to allow "dust" transactions for the inference request confirmation transactions to work!
 
 logger = logging.getLogger("pastel_supernode_messaging_client")
-MESSAGING_TIMEOUT_IN_SECONDS = 60
+
+config = DecoupleConfig(RepositoryEnv('.env'))
+MESSAGING_TIMEOUT_IN_SECONDS = config.get("MESSAGING_TIMEOUT_IN_SECONDS", default=60, cast=int)
+MY_LOCAL_PASTELID = config.get("MY_LOCAL_PASTELID", cast=str)
+MY_PASTELID_PASSPHRASE = config.get("MY_PASTELID_PASSPHRASE", cast=str)
+LOCAL_CREDIT_TRACKING_PSL_ADDRESS = config.get("LOCAL_CREDIT_TRACKING_PSL_ADDRESS", cast=str)
+CREDIT_PACK_FILE = config.get("CREDIT_PACK_FILE", cast=str)
 
 def setup_logger():
     if logger.handlers:
@@ -265,6 +273,38 @@ def get_closest_supernode_to_pastelid_url(input_pastelid, supernode_list_df):
         supernode_url = f"http://{ipaddress}:7123"
         return supernode_url, closest_supernode_pastelid
     return None, None
+
+async def get_n_closest_supernodes_to_pastelid_urls(n, input_pastelid, supernode_list_df):
+    if not supernode_list_df.empty:
+        # Compute SHA3-256 hash of the input_pastelid
+        input_pastelid_hash = compute_sha3_256_hexdigest(input_pastelid)
+        input_pastelid_int = int(input_pastelid_hash, 16)
+
+        list_of_supernode_pastelids = supernode_list_df['extKey'].values.tolist()
+        xor_distances = []
+
+        # Compute XOR distances for each supernode PastelID
+        for supernode_pastelid in list_of_supernode_pastelids:
+            supernode_pastelid_hash = compute_sha3_256_hexdigest(supernode_pastelid)
+            supernode_pastelid_int = int(supernode_pastelid_hash, 16)
+            distance = input_pastelid_int ^ supernode_pastelid_int
+            xor_distances.append((supernode_pastelid, distance))
+
+        # Sort the XOR distances in ascending order
+        sorted_xor_distances = sorted(xor_distances, key=lambda x: x[1])
+
+        # Get the N closest supernodes
+        closest_supernodes = sorted_xor_distances[:n]
+
+        # Retrieve the URLs and PastelIDs of the N closest supernodes
+        supernode_urls_and_pastelids = []
+        for supernode_pastelid, _ in closest_supernodes:
+            supernode_ipaddress_port = supernode_list_df.loc[supernode_list_df['extKey'] == supernode_pastelid]['ipaddress:port'].values[0]
+            ipaddress = supernode_ipaddress_port.split(':')[0]
+            supernode_url = f"http://{ipaddress}:7123"
+            supernode_urls_and_pastelids.append((supernode_url, supernode_pastelid))
+        return supernode_urls_and_pastelids
+    return []
 
 async def send_to_address_func(address, amount, comment="", comment_to="", subtract_fee_from_amount=False):
     """
@@ -776,167 +816,212 @@ class PastelMessagingClient:
             result = response.json()
             return result
         
-async def main():
-    global rpc_connection
-    rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
-    rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
-    
-    use_test_messaging_functionality = 0
-    use_test_inference_request_functionality = 1
-        
-    # Replace with your own values
-    my_local_pastelid = "jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"
-    my_passphrase = "5QcX9nX67buxyeC"
-
-    messaging_client = PastelMessagingClient(my_local_pastelid, my_passphrase)
-
+async def send_message_and_check_for_new_incoming_messages(
+    to_pastelid: str,
+    message_body: str
+):
+    global MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE
+    # Create messaging client to use:
+    messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)    
     # Get the list of Supernodes
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
-    supernode_url = get_top_supernode_url(supernode_list_df)
-    supernode_url = 'http://154.38.164.75:7123' #Temporary override for debugging
-    
-    if use_test_messaging_functionality:
-        # Request a challenge from a Supernode
-        challenge_result = await messaging_client.request_and_sign_challenge(supernode_url)
-        challenge = challenge_result["challenge"]
-        signature = challenge_result["signature"]
-        logger.info(f"Received challenge: {challenge}")
-        logger.info(f"Signed challenge with signature: {signature}")
-
-        # Send a user message
-        logger.info("Sending user message...")
-        to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"
-        logger.info(f"Recipient pastelid: {to_pastelid}")
-        #Lookup the closest supernode to the recipient pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the recipient since it is closest to the recipient's pastelid:
-        supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(to_pastelid, supernode_list_df)
-        supernode_url = 'http://154.38.164.75:7123' #Temporary override for debugging
-        logger.info(f"Closest Supernode to recipient pastelid: {supernode_pastelid}")
+    # Send a user message
+    logger.info("Sending user message...")
+    logger.info(f"Recipient pastelid: {to_pastelid}")
+    # Lookup the closest supernode to the recipient pastelid and use it as the supernode_url
+    # This Supernode will act as the "mail server" for the recipient since it is closest to the recipient's pastelid
+    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(to_pastelid, supernode_list_df)
+    supernode_url = 'http://154.38.164.75:7123'  # Temporary override for debugging
+    logger.info(f"Closest Supernode to recipient pastelid: {supernode_pastelid}")
+    send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body)
+    logger.info(f"Sent user message: {send_result}")
+    # Get user messages
+    logger.info("Retrieving incoming user messages...")
+    logger.info(f"My local pastelid: {messaging_client.pastelid}")
+    # Lookup the closest supernode to the local pastelid and use it as the supernode_url
+    # This Supernode will act as the "mail server" for the local user since it is closest to the local pastelid
+    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(messaging_client.pastelid, supernode_list_df)
+    supernode_url = 'http://154.38.164.75:7123'  # Temporary override for debugging
+    logger.info(f"Closest Supernode to local pastelid: {supernode_pastelid}")
+    messages = await messaging_client.get_user_messages(supernode_url)
+    logger.info(f"Retrieved user messages: {messages}")
+    message_dict = {
+        "sent_message": {
+            "to_pastelid": to_pastelid,
+            "message_body": message_body,
+            "send_result": send_result
+        },
+        "received_messages": messages
+    }        
+    return message_dict
         
-        message_body = "Hello, this is a brand 🍉 NEW test message from a regular user!"
-        send_result = await messaging_client.send_user_message(supernode_url, to_pastelid, message_body)
-        logger.info(f"Sent user message: {send_result}")
-
-        # Get user messages
-        logger.info("Retrieving user messages...")
-        logger.info(f"My local pastelid: {my_local_pastelid}")
-        # Lookup the closest supernode to the local pastelid and use it as the supernode_url; this Supernode will act as the "mail server" for the local user since it is closest to the local pastelid:
-        supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(my_local_pastelid, supernode_list_df)
-        supernode_url = 'http://154.38.164.75:7123' #Temporary override for debugging
-        logger.info(f"Closest Supernode to local pastelid: {supernode_pastelid}")
-        messages = await messaging_client.get_user_messages(supernode_url)
-        logger.info(f"Retrieved user messages: {messages}")
-
-    #________________________________________________________
-
-    if use_test_inference_request_functionality:
-        local_credit_tracking_psl_address = '44oSueBgdMaAnGxrbTNZwQeDnxvPJg4dGAR3'
-        
-        if rpc_port == '9932':
-            burn_address = 'PtpasteLBurnAddressXXXXXXXXXXbJ5ndd'
-        elif rpc_port == '19932':
-            burn_address = 'tPpasteLBurnAddressXXXXXXXXXXX3wy7u'
-        elif rpc_port == '29932':
-            burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
-        
-        burn_address_already_imported = await check_if_address_is_already_imported_in_local_wallet(burn_address)
-        if not burn_address_already_imported:
-            logger.info(f"Please wait, importing burn address {burn_address} into local wallet, which requires a reindexing...")
-            await import_address_func(burn_address, "burn_address", True)
-
-        local_tracking_address_already_imported = await check_if_address_is_already_imported_in_local_wallet(local_credit_tracking_psl_address)
-        if not local_tracking_address_already_imported:
-            logger.error(f"Error: Local tracking address does not exist in local wallet: {local_credit_tracking_psl_address}")
-        
-        # Load or create the global InferenceCreditPackMockup instance
-        CREDIT_PACK_FILE = "credit_pack.json"
-        credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
-
-        if credit_pack is None:
-            # Create a new credit pack if the file doesn't exist or is invalid
-            credit_pack = InferenceCreditPackMockup(
-                credit_pack_identifier="credit_pack_123",
-                authorized_pastelids=["jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"],
-                psl_cost_per_credit=10.0,
-                total_psl_cost_for_pack=10000.0,
-                initial_credit_balance=100000.0,
-                credit_usage_tracking_psl_address=local_credit_tracking_psl_address
-            )
-            credit_pack.save_to_json(CREDIT_PACK_FILE)
-
-        sample_text_completion = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
-        sample_text_completion__base64_encoded = base64.b64encode(sample_text_completion.encode()).decode('utf-8')
-        model_parameters = {"max_length": 100, "temperature": 0.7}
-
-        # Prepare the inference API usage request
-        request_data = InferenceAPIUsageRequestModel(
-            requesting_pastelid=my_local_pastelid,
-            credit_pack_identifier=credit_pack.credit_pack_identifier,
-            requested_model_canonical_string="llama-7b",
-            model_parameters_json=json.dumps(model_parameters),
-            model_input_data_json_b64=sample_text_completion__base64_encoded
+async def handle_inference_request_end_to_end(
+    input_prompt_text_to_llm: str,
+    model_parameters: dict,
+    maximum_inference_cost_in_credits: float,
+    burn_address: str
+):
+    global MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE, LOCAL_CREDIT_TRACKING_PSL_ADDRESS, CREDIT_PACK_FILE
+    burn_address_already_imported = await check_if_address_is_already_imported_in_local_wallet(burn_address)
+    if not burn_address_already_imported:
+        logger.info(f"Please wait, importing burn address {burn_address} into local wallet, which requires a reindexing...")
+        await import_address_func(burn_address, "burn_address", True)
+    local_tracking_address_already_imported = await check_if_address_is_already_imported_in_local_wallet(LOCAL_CREDIT_TRACKING_PSL_ADDRESS)
+    if not local_tracking_address_already_imported:
+        logger.error(f"Error: Local tracking address does not exist in local wallet: {LOCAL_CREDIT_TRACKING_PSL_ADDRESS}")
+    # Create messaging client to use:
+    messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)
+    # Load or create the global InferenceCreditPackMockup instance
+    credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
+    if credit_pack is None:
+        # Create a new credit pack if the file doesn't exist or is invalid
+        credit_pack = InferenceCreditPackMockup(
+            credit_pack_identifier="credit_pack_123",
+            authorized_pastelids=["jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"],
+            psl_cost_per_credit=10.0,
+            total_psl_cost_for_pack=10000.0,
+            initial_credit_balance=100000.0,
+            credit_usage_tracking_psl_address=LOCAL_CREDIT_TRACKING_PSL_ADDRESS
         )
-
-        # Send the inference API usage request
-        usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, request_data)
-        logger.info(f"Received inference API usage request response from SN:\n {usage_request_response}")
-
-        # Extract the relevant information from the response
-        inference_request_id = usage_request_response["inference_request_id"]
-        proposed_cost_in_credits = float(usage_request_response["proposed_cost_of_request_in_inference_credits"])
-        credit_usage_tracking_psl_address = usage_request_response["credit_usage_tracking_psl_address"]
-        try:
-            assert(credit_usage_tracking_psl_address == local_credit_tracking_psl_address)
-        except AssertionError:
-            logger.error(f"Error! Inference request response has a different tracking address than the local tracking address used in the request: {credit_usage_tracking_psl_address} vs {local_credit_tracking_psl_address}")
-        credit_usage_tracking_amount_in_psl = float(usage_request_response["request_confirmation_message_amount_in_patoshis"])/(10**5) # Divide by number of Patoshis per PSL
-
-        # Check if tracking address contains enough PSL to send tracking amount:
-        tracking_address_balance = await check_psl_address_balance_alternative_func(credit_usage_tracking_psl_address)
-        if tracking_address_balance < credit_usage_tracking_amount_in_psl:
-            logger.error(f"Insufficient balance in tracking address: {credit_usage_tracking_psl_address}; amount needed: {credit_usage_tracking_amount_in_psl}; current balance: {tracking_address_balance}; shortfall: {credit_usage_tracking_amount_in_psl - tracking_address_balance}")
-            return
-
+        credit_pack.save_to_json(CREDIT_PACK_FILE)
+    # Get the list of Supernodes
+    supernode_list_df, supernode_list_json = await check_supernode_list_func()
+    # Get the top Supernode URL
+    supernode_url = get_top_supernode_url(supernode_list_df)
+    supernode_url = 'http://154.38.164.75:7123'  # Temporary override for debugging
+    input_prompt_text_to_llm__base64_encoded = base64.b64encode(input_prompt_text_to_llm.encode()).decode('utf-8')
+    # Prepare the inference API usage request
+    request_data = InferenceAPIUsageRequestModel(
+        requesting_pastelid=MY_LOCAL_PASTELID,
+        credit_pack_identifier=credit_pack.credit_pack_identifier,
+        requested_model_canonical_string="llama-7b",
+        model_parameters_json=json.dumps(model_parameters),
+        model_input_data_json_b64=input_prompt_text_to_llm__base64_encoded
+    )
+    # Send the inference API usage request
+    usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, request_data)
+    logger.info(f"Received inference API usage request response from SN:\n {usage_request_response}")
+    # Extract the relevant information from the response
+    inference_request_id = usage_request_response["inference_request_id"]
+    proposed_cost_in_credits = float(usage_request_response["proposed_cost_of_request_in_inference_credits"])
+    credit_usage_tracking_psl_address = usage_request_response["credit_usage_tracking_psl_address"]
+    try:
+        assert(credit_usage_tracking_psl_address == LOCAL_CREDIT_TRACKING_PSL_ADDRESS)
+    except AssertionError:
+        logger.error(f"Error! Inference request response has a different tracking address than the local tracking address used in the request: {credit_usage_tracking_psl_address} vs {LOCAL_CREDIT_TRACKING_PSL_ADDRESS}")
+        return None
+    credit_usage_tracking_amount_in_psl = float(usage_request_response["request_confirmation_message_amount_in_patoshis"])/(10**5) # Divide by number of Patoshis per PSL
+    # Check if tracking address contains enough PSL to send tracking amount:
+    tracking_address_balance = await check_psl_address_balance_alternative_func(credit_usage_tracking_psl_address)
+    if tracking_address_balance < credit_usage_tracking_amount_in_psl:
+        logger.error(f"Insufficient balance in tracking address: {credit_usage_tracking_psl_address}; amount needed: {credit_usage_tracking_amount_in_psl}; current balance: {tracking_address_balance}; shortfall: {credit_usage_tracking_amount_in_psl - tracking_address_balance}")
+        return None
+    # Check if the quoted price is less than or equal to the maximum allowed cost
+    if proposed_cost_in_credits <= maximum_inference_cost_in_credits:
         # Check if the credit pack has sufficient credits
         if credit_pack.has_sufficient_credits(proposed_cost_in_credits):
             # Deduct the credits from the credit pack
             credit_pack.deduct_credits(proposed_cost_in_credits)
             logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
-            
             # Save the updated credit pack state to the JSON file
             credit_pack.save_to_json(CREDIT_PACK_FILE)
-            
             # Send the required PSL coins to authorize the request
             tracking_transaction_txid = await send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(inference_request_id, credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, burn_address)
-            
-            # Prepare the inference confirmation
-            confirmation_data = InferenceConfirmationModel(
-                inference_request_id=inference_request_id,
-                confirmation_transaction={"txid": tracking_transaction_txid}
-            )
-
-            # Send the inference confirmation
-            confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data)
-            logger.info(f"Sent inference confirmation: {confirmation_result}")
-
-            # Wait for the confirmation message via the messaging system
-            inference_response_id = None
-            while True:
-                messages = await messaging_client.get_user_messages(supernode_url)
-                for message in messages:
-                    if "type" in message and message["type"] == "inference_result_notification":
-                        if message["inference_request_id"] == inference_request_id:
-                            inference_response_id = message["inference_response_id"]
-                            break
-                if inference_response_id is not None:
-                    break
-                logger.info("Waiting for the inference result notification...")
-                await asyncio.sleep(5)  # Wait for 5 seconds before checking again
-
-            # Get the inference output results
-            output_results = await messaging_client.get_inference_output_results(supernode_url, inference_request_id, inference_response_id)
-            logger.info(f"Retrieved inference output results: {output_results}")
+            txid_looks_valid = bool(re.match("^[0-9a-fA-F]{64}$", tracking_transaction_txid))
+            if txid_looks_valid:
+                # Prepare the inference confirmation
+                confirmation_data = InferenceConfirmationModel(
+                    inference_request_id=inference_request_id,
+                    confirmation_transaction={"txid": tracking_transaction_txid}
+                )
+                # Send the inference confirmation
+                confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data)
+                logger.info(f"Sent inference confirmation: {confirmation_result}")
+                # Wait for the confirmation message via the messaging system
+                inference_response_id = None
+                max_tries_to_get_confirmation = 10
+                initial_wait_time_in_seconds = 5
+                wait_time_in_seconds = initial_wait_time_in_seconds
+                for cnt in range(max_tries_to_get_confirmation):
+                    wait_time_in_seconds = wait_time_in_seconds*(1.15**cnt)
+                    messages = await messaging_client.get_user_messages(supernode_url)
+                    for message in messages:
+                        if "type" in message and message["type"] == "inference_result_notification":
+                            if message["inference_request_id"] == inference_request_id:
+                                inference_response_id = message["inference_response_id"]
+                                break
+                    if inference_response_id is not None:
+                        break
+                    logger.info(f"Waiting for the inference result notification for {wait_time_in_seconds} seconds... (Attempt {cnt+1}/{max_tries_to_get_confirmation})") 
+                    await asyncio.sleep(wait_time_in_seconds)
+                if inference_response_id is None:
+                    logger.error(f"Failed to get the inference result notification after {max_tries_to_get_confirmation} attempts. Returning what we have so far...")
+                    # Return what we have so far:
+                    inference_result_dict = {
+                        "inference_request_id": inference_request_id,
+                        "inference_response_id": inference_response_id,
+                        "usage_request_response": usage_request_response,
+                        "sample_text_completion": input_prompt_text_to_llm,
+                        "request_data": request_data.to_dict(),
+                        "tracking_transaction_txid": tracking_transaction_txid,
+                        "supernode_url": supernode_url,
+                        "output_results": "NA"
+                    }                
+                    return inference_result_dict
+                # Get the inference output results
+                output_results = await messaging_client.get_inference_output_results(supernode_url, inference_request_id, inference_response_id)
+                logger.info(f"Retrieved inference output results: {output_results}")
+                # Create the inference_result_dict with all relevant information
+                inference_result_dict = {
+                    "inference_request_id": inference_request_id,
+                    "inference_response_id": inference_response_id,
+                    "usage_request_response": usage_request_response,
+                    "sample_text_completion": input_prompt_text_to_llm,
+                    "request_data": request_data.dict(),
+                    "tracking_transaction_txid": tracking_transaction_txid,
+                    "supernode_url": supernode_url,
+                    "output_results": output_results
+                }
+                return inference_result_dict
+            else:
+                logger.error(f"Invalid tracking transaction TXID: {tracking_transaction_txid}")
         else:
             logger.error("Insufficient credits in the credit pack; request cannot be authorized.")
+            return None
+    else:
+        logger.info(f"Quoted price of {proposed_cost_in_credits} credits exceeds the maximum allowed cost of {maximum_inference_cost_in_credits} credits. Inference request not confirmed.")
+        return None
+            
+            
+async def main():
+    global rpc_connection
+    rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
+    rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
+    if rpc_port == '9932':
+        burn_address = 'PtpasteLBurnAddressXXXXXXXXXXbJ5ndd'
+    elif rpc_port == '19932':
+        burn_address = 'tPpasteLBurnAddressXXXXXXXXXXX3wy7u'
+    elif rpc_port == '29932':
+        burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
+        
+    use_test_messaging_functionality = 0
+    use_test_inference_request_functionality = 1
+
+    if use_test_messaging_functionality:
+        # Sample message data:
+        message_body = "Hello, this is a brand 🍉 NEW test message from a regular user!"
+        to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"        
+        message_dict = await send_message_and_check_for_new_incoming_messages(to_pastelid, message_body)
+        logger.info(f"Message data: {message_dict}")
+
+    #________________________________________________________
+
+    if use_test_inference_request_functionality:
+        sample_text_completion = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
+        model_parameters = {"max_length": 100, "temperature": 0.7}
+        max_credit_cost_to_approve_inference_request = 100.0
+        inference_dict = await handle_inference_request_end_to_end(sample_text_completion, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
+        logger.info(f"Inference result data: {inference_dict}")
 
 if __name__ == "__main__":
     asyncio.run(main())

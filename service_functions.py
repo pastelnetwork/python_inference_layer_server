@@ -459,64 +459,132 @@ async def list_sn_messages_func():
     datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
     supernode_list_df, _ = await check_supernode_list_func()
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
+
     async with AsyncSessionLocal() as db:
-        # Retrieve messages from the database
+        # Retrieve messages from the database that meet the timestamp criteria
         result = await db.execute(select(Message).where(Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages).order_by(Message.timestamp.desc()))
-        db_messages_df = pd.DataFrame([message.to_dict() for message in result.scalars().all()])
-        if not db_messages_df.empty:
-            db_messages_df['timestamp'] = pd.to_datetime(db_messages_df['timestamp'], errors='coerce')
-        # Retrieve new messages from the RPC interface
-        new_messages = await rpc_connection.masternode('message', 'list')
-        new_messages_data = []
-        for message in new_messages:
-            message_key = list(message.keys())[0]
-            message = message[message_key]
-            sending_sn_txid_vout = message['From']
-            receiving_sn_txid_vout = message['To']
-            sending_pastelid = txid_vout_to_pastelid_dict.get(sending_sn_txid_vout)
-            receiving_pastelid = txid_vout_to_pastelid_dict.get(receiving_sn_txid_vout)
-            if sending_pastelid is None or receiving_pastelid is None:
-                logger.warning(f"Skipping message due to missing PastelID for txid_vout: {sending_sn_txid_vout} or {receiving_sn_txid_vout}")
-                continue
-            message_timestamp = parse_timestamp(datetime.fromtimestamp(message['Timestamp']).isoformat())
-            # Check if the message already exists in the database
-            if not db_messages_df.empty:
-                existing_message = db_messages_df[
-                    (db_messages_df['sending_sn_pastelid'] == sending_pastelid) &
-                    (db_messages_df['receiving_sn_pastelid'] == receiving_pastelid) &
-                    (db_messages_df['timestamp'] == message_timestamp)
-                ]
-                if not existing_message.empty:
-                    logger.debug("Message already exists in the database. Skipping...")
-                    continue
-            message_body = base64.b64decode(message['Message'].encode('utf-8'))
-            verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
-            decompressed_message = await decompress_data_with_zstd_func(message_body)
-            decompressed_message = decompressed_message.decode('utf-8')
-            try:
-                message_dict = json.loads(decompressed_message)
-            except json.JSONDecodeError as e:
-                logger.error(f"Error parsing JSON: {e}")
-                logger.error(f"Decompressed message: {decompressed_message}")
-                continue
-            if verification_status == 'OK':
-                new_message = {
-                    'sending_sn_pastelid': sending_pastelid,
-                    'receiving_sn_pastelid': receiving_pastelid,
-                    'message_type': message_dict['message_type'],
-                    'message_body': decompressed_message,
-                    'signature': message_dict['signature'],
-                    'timestamp': message_timestamp,
-                    'sending_sn_txid_vout': sending_sn_txid_vout,
-                    'receiving_sn_txid_vout': receiving_sn_txid_vout
-                }
-                new_messages_data.append(new_message)
-        new_messages_df = pd.DataFrame(new_messages_data)
-        combined_messages_df = pd.concat([db_messages_df, new_messages_df], ignore_index=True)
-        if not combined_messages_df.empty:
-            combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
-            combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
+        db_messages = result.scalars().all()
+        existing_messages = {(message.sending_sn_pastelid, message.receiving_sn_pastelid, message.timestamp) for message in db_messages}
+
+    # Retrieve new messages from the RPC interface
+    new_messages = await rpc_connection.masternode('message', 'list')
+    new_messages_data = []
+
+    for message in new_messages:
+        message_key = list(message.keys())[0]
+        message = message[message_key]
+        sending_sn_txid_vout = message['From']
+        receiving_sn_txid_vout = message['To']
+        sending_pastelid = txid_vout_to_pastelid_dict.get(sending_sn_txid_vout)
+        receiving_pastelid = txid_vout_to_pastelid_dict.get(receiving_sn_txid_vout)
+
+        if sending_pastelid is None or receiving_pastelid is None:
+            logger.warning(f"Skipping message due to missing PastelID for txid_vout: {sending_sn_txid_vout} or {receiving_sn_txid_vout}")
+            continue
+
+        message_timestamp = parse_timestamp(datetime.fromtimestamp(message['Timestamp']).isoformat())
+
+        # Check if the message already exists in the database
+        if (sending_pastelid, receiving_pastelid, message_timestamp) in existing_messages:
+            logger.debug("Message already exists in the database. Skipping...")
+            continue
+
+        message_body = base64.b64decode(message['Message'].encode('utf-8'))
+        verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
+        decompressed_message = await decompress_data_with_zstd_func(message_body)
+        decompressed_message = decompressed_message.decode('utf-8')
+
+        try:
+            message_dict = json.loads(decompressed_message)
+        except json.JSONDecodeError as e:
+            logger.error(f"Error parsing JSON: {e}")
+            logger.error(f"Decompressed message: {decompressed_message}")
+            continue
+
+        if verification_status == 'OK':
+            new_message = {
+                'sending_sn_pastelid': sending_pastelid,
+                'receiving_sn_pastelid': receiving_pastelid,
+                'message_type': message_dict['message_type'],
+                'message_body': decompressed_message,
+                'signature': message_dict['signature'],
+                'timestamp': message_timestamp,
+                'sending_sn_txid_vout': sending_sn_txid_vout,
+                'receiving_sn_txid_vout': receiving_sn_txid_vout
+            }
+            new_messages_data.append(new_message)
+
+    combined_messages_df = pd.DataFrame(new_messages_data)
+
+    if not combined_messages_df.empty:
+        combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
+        combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
+
     return combined_messages_df
+
+# async def list_sn_messages_func():
+#     global rpc_connection
+#     datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
+#     supernode_list_df, _ = await check_supernode_list_func()
+#     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
+#     async with AsyncSessionLocal() as db:
+#         # Retrieve messages from the database
+#         result = await db.execute(select(Message).where(Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages).order_by(Message.timestamp.desc()))
+#         db_messages_df = pd.DataFrame([message.to_dict() for message in result.scalars().all()])
+#         if not db_messages_df.empty:
+#             db_messages_df['timestamp'] = pd.to_datetime(db_messages_df['timestamp'], errors='coerce')
+#         # Retrieve new messages from the RPC interface
+#         new_messages = await rpc_connection.masternode('message', 'list')
+#         new_messages_data = []
+#         for message in new_messages:
+#             message_key = list(message.keys())[0]
+#             message = message[message_key]
+#             sending_sn_txid_vout = message['From']
+#             receiving_sn_txid_vout = message['To']
+#             sending_pastelid = txid_vout_to_pastelid_dict.get(sending_sn_txid_vout)
+#             receiving_pastelid = txid_vout_to_pastelid_dict.get(receiving_sn_txid_vout)
+#             if sending_pastelid is None or receiving_pastelid is None:
+#                 logger.warning(f"Skipping message due to missing PastelID for txid_vout: {sending_sn_txid_vout} or {receiving_sn_txid_vout}")
+#                 continue
+#             message_timestamp = parse_timestamp(datetime.fromtimestamp(message['Timestamp']).isoformat())
+#             # Check if the message already exists in the database
+#             if not db_messages_df.empty:
+#                 existing_message = db_messages_df[
+#                     (db_messages_df['sending_sn_pastelid'] == sending_pastelid) &
+#                     (db_messages_df['receiving_sn_pastelid'] == receiving_pastelid) &
+#                     (db_messages_df['timestamp'] == message_timestamp)
+#                 ]
+#                 if not existing_message.empty:
+#                     logger.debug("Message already exists in the database. Skipping...")
+#                     continue
+#             message_body = base64.b64decode(message['Message'].encode('utf-8'))
+#             verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
+#             decompressed_message = await decompress_data_with_zstd_func(message_body)
+#             decompressed_message = decompressed_message.decode('utf-8')
+#             try:
+#                 message_dict = json.loads(decompressed_message)
+#             except json.JSONDecodeError as e:
+#                 logger.error(f"Error parsing JSON: {e}")
+#                 logger.error(f"Decompressed message: {decompressed_message}")
+#                 continue
+#             if verification_status == 'OK':
+#                 new_message = {
+#                     'sending_sn_pastelid': sending_pastelid,
+#                     'receiving_sn_pastelid': receiving_pastelid,
+#                     'message_type': message_dict['message_type'],
+#                     'message_body': decompressed_message,
+#                     'signature': message_dict['signature'],
+#                     'timestamp': message_timestamp,
+#                     'sending_sn_txid_vout': sending_sn_txid_vout,
+#                     'receiving_sn_txid_vout': receiving_sn_txid_vout
+#                 }
+#                 new_messages_data.append(new_message)
+#         new_messages_df = pd.DataFrame(new_messages_data)
+#         combined_messages_df = pd.concat([db_messages_df, new_messages_df], ignore_index=True)
+#         if not combined_messages_df.empty:
+#             combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
+#             combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
+#     return combined_messages_df
 
 async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase) -> str:
     global rpc_connection
@@ -730,7 +798,6 @@ async def monitor_new_messages():
                                 )
                             )
                             total_messages, total_senders, total_receivers = (result.first())
-
                             result = await db.execute(select(MessageMetadata).order_by(MessageMetadata.timestamp.desc()).limit(1))
                             message_metadata = result.scalar_one_or_none()
                             if message_metadata:
@@ -981,6 +1048,66 @@ async def create_and_save_inference_api_usage_response(saved_request: InferenceA
         await db_session.refresh(inference_response)
     return inference_response
 
+async def check_burn_address_for_tracking_transaction(
+    burn_address: str,
+    tracking_address: str,
+    expected_amount: float,
+    txid: str,
+    max_block_height: int,
+    max_retries: int = 10,
+    initial_retry_delay: int = 25
+) -> bool:
+    """
+    Repeatedly checks the burn address for a transaction with the correct identifier, amount,
+    and originating address before a specified block height using the get_and_decode_raw_transaction function
+    and also checks the mempool using the getrawmempool RPC method.
+
+    Args:
+        burn_address (str): The burn address to check for the transaction.
+        tracking_address (str): The address expected to have sent the transaction.
+        expected_amount (float): The exact amount of PSL expected in the transaction.
+        txid (str): The transaction identifier to look for.
+        max_block_height (int): The maximum block height to include the confirmation transaction.
+        max_retries (int, optional): Maximum number of retries for checking the transaction. Defaults to 10.
+        initial_retry_delay (int, optional): Delay between retries in seconds. Defaults to 25. Increases by 15% each retry.
+
+    Returns:
+        bool: True if a matching transaction is found, False otherwise.
+    """
+    try_count = 0
+    retry_delay = initial_retry_delay
+    while try_count < max_retries:
+        # Retrieve and decode the transaction details using the txid
+        if len(txid) > 0:
+            decoded_tx_data = await get_and_decode_raw_transaction(txid)
+            if decoded_tx_data:
+                # Check if the transaction matches the specified criteria
+                if any(vout["scriptPubKey"].get("addresses", [None])[0] == burn_address for vout in decoded_tx_data["vout"]):
+                    # Calculate the total amount sent to the burn address in the transaction
+                    total_amount_to_burn_address = sum(
+                        vout["value"] for vout in decoded_tx_data["vout"]
+                        if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address
+                    )
+                    if total_amount_to_burn_address == expected_amount:
+                        if decoded_tx_data.get("confirmations", 0) >= 0 and decoded_tx_data.get("blockheight", max_block_height + 1) <= max_block_height:
+                            logger.info(f"Matching confirmed transaction found: {decoded_tx_data[:50]}...")
+                            return True
+                        else:
+                            logger.info(f"Matching unconfirmed transaction found: {decoded_tx_data[:50]}...")
+                            return True
+                    else:
+                        logger.warning(f"Transaction {txid} found, but the amount sent to the burn address ({total_amount_to_burn_address}) does not match the expected amount ({expected_amount})")
+                else:
+                    logger.warning(f"Transaction {txid} does not send funds to the specified burn address")
+            # If the transaction is not found or does not match the criteria, wait before retrying
+            await asyncio.sleep(retry_delay)
+            try_count += 1
+            retry_delay *= 1.15  # Optional: increase delay between retries
+        else:
+            logger.error(f"Invalid txid for tracking transaction: {txid}")
+    logger.info(f"Transaction not found or did not match the criteria after {max_retries} attempts.")
+    return False
+
 async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: InferenceConfirmationModel) -> bool:
     try:
         # Retrieve the inference API usage request from the database
@@ -1069,7 +1196,7 @@ async def execute_inference_request(inference_request_id: str) -> None:
             inference_response = await db.execute(
                 select(InferenceAPIUsageResponse).where(InferenceAPIUsageResponse.inference_request_id == inference_request_id)
             )
-            inference_response = inference_response.scalar_one_or_none()        
+            inference_response = inference_response.scalar_one_or_none()
         # TODO: Integrate with the Swiss Army Llama project or other inference libraries to perform the inference task
         # For now, let's assume the inference is executed successfully and the output results are generated
         output_results = {
@@ -1166,10 +1293,11 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     burn_address_txids = [tx.get("txid") for tx in burn_address_transactions]
     number_of_burn_address_txids = len(burn_address_txids)
     logger.info(f"Number of transactions sent to the burn address with amount < 1.0 PSL: {number_of_burn_address_txids}")
+    # Fetch and decode raw transactions in parallel using asyncio.gather
+    decoded_tx_data_list = await asyncio.gather(*[get_and_decode_raw_transaction(txid) for txid in burn_address_txids])
     # Filter the tracking transactions to include only those sent from the credit_usage_tracking_psl_address
     tracking_transactions = []
-    for txid in burn_address_txids:
-        decoded_tx_data = await get_and_decode_raw_transaction(txid)
+    for decoded_tx_data in decoded_tx_data_list:
         decoded_tx_data_as_string = json.dumps(decoded_tx_data)
         if credit_usage_tracking_psl_address in decoded_tx_data_as_string:
             tracking_transactions.append(decoded_tx_data)
@@ -1358,66 +1486,6 @@ async def get_transaction_details(txid: str, include_watchonly: bool = False) ->
     except Exception as e:
         logger.error(f"Error retrieving transaction details for {txid}: {e}")
         return {}
-
-async def check_burn_address_for_tracking_transaction(
-    burn_address: str,
-    tracking_address: str,
-    expected_amount: float,
-    txid: str,
-    max_block_height: int,
-    max_retries: int = 10,
-    initial_retry_delay: int = 25
-) -> bool:
-    """
-    Repeatedly checks the burn address for a transaction with the correct identifier, amount,
-    and originating address before a specified block height using the get_and_decode_raw_transaction function
-    and also checks the mempool using the getrawmempool RPC method.
-
-    Args:
-        burn_address (str): The burn address to check for the transaction.
-        tracking_address (str): The address expected to have sent the transaction.
-        expected_amount (float): The exact amount of PSL expected in the transaction.
-        txid (str): The transaction identifier to look for.
-        max_block_height (int): The maximum block height to include the confirmation transaction.
-        max_retries (int, optional): Maximum number of retries for checking the transaction. Defaults to 10.
-        initial_retry_delay (int, optional): Delay between retries in seconds. Defaults to 25. Increases by 15% each retry.
-
-    Returns:
-        bool: True if a matching transaction is found, False otherwise.
-    """
-    try_count = 0
-    retry_delay = initial_retry_delay
-    while try_count < max_retries:
-        # Retrieve and decode the transaction details using the txid
-        if len(txid) > 0:
-            decoded_tx_data = await get_and_decode_raw_transaction(txid)
-            if decoded_tx_data:
-                # Check if the transaction matches the specified criteria
-                if any(vout["scriptPubKey"].get("addresses", [None])[0] == burn_address for vout in decoded_tx_data["vout"]):
-                    # Calculate the total amount sent to the burn address in the transaction
-                    total_amount_to_burn_address = sum(
-                        vout["value"] for vout in decoded_tx_data["vout"]
-                        if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address
-                    )
-                    if total_amount_to_burn_address == expected_amount:
-                        if decoded_tx_data.get("confirmations", 0) >= 0 and decoded_tx_data.get("blockheight", max_block_height + 1) <= max_block_height:
-                            logger.info(f"Matching confirmed transaction found: {decoded_tx_data}")
-                            return True
-                        else:
-                            logger.info(f"Matching unconfirmed transaction found: {decoded_tx_data}")
-                            return True
-                    else:
-                        logger.warning(f"Transaction {txid} found, but the amount sent to the burn address ({total_amount_to_burn_address}) does not match the expected amount ({expected_amount})")
-                else:
-                    logger.warning(f"Transaction {txid} does not send funds to the specified burn address")
-            # If the transaction is not found or does not match the criteria, wait before retrying
-            await asyncio.sleep(retry_delay)
-            try_count += 1
-            retry_delay *= 1.15  # Optional: increase delay between retries
-        else:
-            logger.error(f"Invalid txid for tracking transaction: {txid}")
-    logger.info(f"Transaction not found or did not match the criteria after {max_retries} attempts.")
-    return False
 
 #Misc helper functions:
 class MyTimer():
