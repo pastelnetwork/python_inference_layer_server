@@ -1,0 +1,52 @@
+---
+- name: Update code and run Python script in tmux
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Close/terminate the application if running
+      shell: |
+        ps -ef | grep 'supernode_messaging_and_control' | grep -v grep | awk '{print $2}' | xargs -r kill -9
+      ignore_errors: true
+
+    - name: Update code
+      shell: |
+        git stash
+        git pull
+      args:
+        chdir: ~/python_supernode_messaging_and_control_layer
+
+    - name: Set executable permission on the bash script
+      file:
+        path: ~/python_supernode_messaging_and_control_layer/update_and_deploy_inference_layer.sh
+        mode: '0755'
+
+    - name: Get the name of the existing tmux session
+      shell: tmux list-sessions -F '#{session_name}' | head -1
+      register: tmux_session_name
+      ignore_errors: true
+
+    - name: Create tmux session if it doesn't exist
+      shell: tmux new-session -d -s default_session
+      when: tmux_session_name.stdout == ""
+
+    - name: Set the tmux session name
+      set_fact:
+        session_name: "{{ tmux_session_name.stdout if tmux_session_name.stdout else 'default_session' }}"
+
+    - name: Check if supernode_script window exists
+      shell: tmux list-windows -t {{ session_name }} -F '#{window_name}' | grep -q '^supernode_script$'
+      register: window_exists
+      ignore_errors: true
+
+    - name: Launch script in new tmux window
+      shell: |
+        {% if window_exists.rc != 0 %}
+        tmux new-window -t {{ session_name }}: -n supernode_script -d "$HOME/python_supernode_messaging_and_control_layer/update_and_deploy_inference_layer.sh"
+        {% else %}
+        tmux send-keys -t {{ session_name }}:supernode_script "$HOME/python_supernode_messaging_and_control_layer/update_and_deploy_inference_layer.sh" Enter
+        {% endif %}
+      register: script_output
+
+    - name: Display script output
+      debug:
+        var: script_output.stdout_lines
