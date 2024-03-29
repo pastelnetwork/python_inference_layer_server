@@ -1090,10 +1090,10 @@ async def check_burn_address_for_tracking_transaction(
                     )
                     if total_amount_to_burn_address == expected_amount:
                         if decoded_tx_data.get("confirmations", 0) >= 0 and decoded_tx_data.get("blockheight", max_block_height + 1) <= max_block_height:
-                            logger.info(f"Matching confirmed transaction found: {decoded_tx_data[:50]}...")
+                            logger.info("Matching confirmed transaction found!")
                             return True
                         else:
-                            logger.info(f"Matching unconfirmed transaction found: {decoded_tx_data[:50]}...")
+                            logger.info("Matching unconfirmed transaction found!") 
                             return True
                     else:
                         logger.warning(f"Transaction {txid} found, but the amount sent to the burn address ({total_amount_to_burn_address}) does not match the expected amount ({expected_amount})")

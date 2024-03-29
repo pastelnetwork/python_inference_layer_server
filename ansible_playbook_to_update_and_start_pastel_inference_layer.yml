@@ -15,11 +15,6 @@
       args:
         chdir: ~/python_supernode_messaging_and_control_layer
 
-    - name: Set executable permission on the bash script
-      file:
-        path: ~/python_supernode_messaging_and_control_layer/update_and_deploy_inference_layer.sh
-        mode: '0755'
-
     - name: Get the name of the existing tmux session
       shell: tmux list-sessions -F '#{session_name}' | head -1
       register: tmux_session_name
@@ -38,15 +33,29 @@
       register: window_exists
       ignore_errors: true
 
+    - name: Kill supernode_script window if it exists
+      shell: tmux kill-window -t {{ session_name }}:supernode_script
+      when: window_exists.rc == 0
+
+    - name: Create temporary script
+      copy:
+        content: |
+          #!/bin/bash
+          cd ~/python_supernode_messaging_and_control_layer
+          . ~/.bashrc
+          pyenv local 3.12
+          source venv/bin/activate
+          pip install -r requirements.txt
+          python main.py
+        dest: ~/run_script.sh
+        mode: '0755'
+
     - name: Launch script in new tmux window
       shell: |
-        {% if window_exists.rc != 0 %}
-        tmux new-window -t {{ session_name }}: -n supernode_script -d "$HOME/python_supernode_messaging_and_control_layer/update_and_deploy_inference_layer.sh"
-        {% else %}
-        tmux send-keys -t {{ session_name }}:supernode_script "$HOME/python_supernode_messaging_and_control_layer/update_and_deploy_inference_layer.sh" Enter
-        {% endif %}
+        tmux new-window -t {{ session_name }}: -n supernode_script -d "bash -c '~/run_script.sh'"
       register: script_output
 
-    - name: Display script output
-      debug:
-        var: script_output.stdout_lines
+    - name: Remove temporary script
+      file:
+        path: ~/run_script.sh
+        state: absent
