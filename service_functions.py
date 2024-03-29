@@ -211,6 +211,7 @@ class AsyncAuthServiceProxy:
                     'code': -343, 'message': 'missing JSON-RPC result'})
             else:
                 return response_json['result']
+            
 class InferenceCreditPackMockup:
     def __init__(self, credit_pack_identifier: str, authorized_pastelids: List[str], psl_cost_per_credit: float, total_psl_cost_for_pack: float, initial_credit_balance: float, credit_usage_tracking_psl_address: str):
         self.credit_pack_identifier = credit_pack_identifier
