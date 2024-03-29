@@ -1,7 +1,11 @@
 #!/bin/bash
 
 # Change to the project directory
-cd ~/python_supernode_messaging_and_control_layer
+cd /home/ubuntu/python_supernode_messaging_and_control_layer
+
+# Pull the latest changes from the repository
+git stash
+git pull
 
 # Set the Python version using pyenv
 pyenv local 3.12
