@@ -297,7 +297,7 @@ async def send_to_address_func(address, amount, comment="", comment_to="", subtr
         logger.error(f"Error in send_to_address_func: {e}")
         return None
 
-async def send_many_func(amounts, min_conf=1, comment="", subtract_fee_from_amount=None):
+async def send_many_func(amounts, min_conf=1, comment="", change_address=""):
     """
     Send multiple amounts to multiple recipients.
 
@@ -306,8 +306,7 @@ async def send_many_func(amounts, min_conf=1, comment="", subtract_fee_from_amou
                         Each key is the Pastel address, and the corresponding value is the amount in PSL to send.
         min_conf (int, optional): The minimum number of confirmations required for the funds to be used. Defaults to 1.
         comment (str, optional): A comment to include with the transaction. Defaults to an empty string.
-        subtract_fee_from_amount (list, optional): A list of addresses from which to subtract the fee.
-                                                    If not provided, the sender pays the fee. Defaults to None.
+        change_address (str, optional): The Pastel address to receive the change from the transaction. Defaults to an empty string.
 
     Returns:
         str: The transaction ID if successful, None otherwise.
@@ -317,15 +316,14 @@ async def send_many_func(amounts, min_conf=1, comment="", subtract_fee_from_amou
             "PtczsZ91Bt3oDPDQotzUsrx1wjmsFVgf28n": 0.01,
             "PtczsZ91Bt3oDPDQotzUsrx1wjmsFVgf28n": 0.02
         }
-        send_many_func(amounts, min_conf=6, comment="testing", subtract_fee_from_amount=["PtczsZ91Bt3oDPDQotzUsrx1wjmsFVgf28n"])
+        send_many_func(amounts, min_conf=6, comment="testing", change_address="PtczsZ91Bt3oDPDQotzUsrx1wjmsFVgf28n")
     """
     global rpc_connection
     try:
         # Set the 'fromaccount' parameter to an empty string
         from_account = ""
-
         # Call the 'sendmany' RPC method
-        result = await rpc_connection.sendmany(from_account, amounts, min_conf, comment, subtract_fee_from_amount)
+        result = await rpc_connection.sendmany(from_account, amounts, min_conf, comment, [""], change_address)
         return result
     except Exception as e:
         logger.error(f"Error in send_many_func: {e}")
@@ -511,7 +509,7 @@ async def send_tracking_amount_from_control_address_to_burn_address_to_confirm_i
             amounts=amounts,
             min_conf=0,
             comment="Confirmation tracking transaction for inference request with request_id " + inference_request_id, 
-            subtract_fee_from_amount=[credit_usage_tracking_psl_address]
+            change_address=credit_usage_tracking_psl_address
         )
         if txid is not None:
             logger.info(f"Sent {credit_usage_tracking_amount_in_psl} PSL from {credit_usage_tracking_psl_address} to {burn_address} to confirm inference request {inference_request_id}. TXID: {txid}")
@@ -753,7 +751,7 @@ class PastelMessagingClient:
             "challenge_id": challenge_id,
             "challenge_signature": challenge_signature
         }
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client: # Added extra time for the checks to complete
             response = await client.post(f"{supernode_url}/confirm_inference_request", json=payload)
             response.raise_for_status()
             result = response.json()
@@ -886,6 +884,10 @@ async def main():
         inference_request_id = usage_request_response["inference_request_id"]
         proposed_cost_in_credits = float(usage_request_response["proposed_cost_of_request_in_inference_credits"])
         credit_usage_tracking_psl_address = usage_request_response["credit_usage_tracking_psl_address"]
+        try:
+            assert(credit_usage_tracking_psl_address == local_credit_tracking_psl_address)
+        except AssertionError:
+            logger.error(f"Error! Inference request response has a different tracking address than the local tracking address used in the request: {credit_usage_tracking_psl_address} vs {local_credit_tracking_psl_address}")
         credit_usage_tracking_amount_in_psl = float(usage_request_response["request_confirmation_message_amount_in_patoshis"])/(10**5) # Divide by number of Patoshis per PSL
 
         # Check if tracking address contains enough PSL to send tracking amount:

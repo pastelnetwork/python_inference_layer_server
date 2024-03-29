@@ -948,11 +948,15 @@ async def process_inference_api_usage_request(inference_api_usage_request: Infer
     logger.info(f"Received inference API usage request: {request_data}")
     # Save the inference API usage request
     saved_request = await save_inference_api_usage_request(inference_api_usage_request)
+    credit_pack_identifier = inference_api_usage_request.credit_pack_identifier
+    credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
+    if credit_pack.credit_pack_identifier == credit_pack_identifier:
+        credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
     # Create and save the InferenceAPIUsageResponse
-    inference_response = await create_and_save_inference_api_usage_response(saved_request, proposed_cost_in_credits, remaining_credits_after_request)
+    inference_response = await create_and_save_inference_api_usage_response(saved_request, proposed_cost_in_credits, remaining_credits_after_request, credit_usage_tracking_psl_address)
     return inference_response
 
-async def create_and_save_inference_api_usage_response(saved_request: InferenceAPIUsageRequest, proposed_cost_in_credits: float, remaining_credits_after_request: float) -> InferenceAPIUsageResponse:
+async def create_and_save_inference_api_usage_response(saved_request: InferenceAPIUsageRequest, proposed_cost_in_credits: float, remaining_credits_after_request: float, credit_usage_tracking_psl_address: str) -> InferenceAPIUsageResponse:
     # Generate a unique identifier for the inference response
     inference_response_id = str(uuid.uuid4())
     # Create an InferenceAPIUsageResponse instance
@@ -964,7 +968,7 @@ async def create_and_save_inference_api_usage_response(saved_request: InferenceA
         inference_request_id=saved_request.inference_request_id,
         proposed_cost_of_request_in_inference_credits=proposed_cost_in_credits,
         remaining_credits_in_pack_after_request_processed=remaining_credits_after_request,
-        credit_usage_tracking_psl_address=credit_pack.credit_usage_tracking_psl_address,
+        credit_usage_tracking_psl_address=credit_usage_tracking_psl_address,
         request_confirmation_message_amount_in_patoshis=int(proposed_cost_in_credits * credit_usage_to_tracking_amount_multiplier),
         max_block_height_to_include_confirmation_transaction=await get_current_pastel_block_height_func() + 10,  # Adjust as needed
         supernode_pastelid_and_signature_on_inference_response_id=supernode_pastelid_and_signature_on_inference_response_id
@@ -1157,34 +1161,42 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
 
     Returns:
         float: The current credit balance of the inference credit pack.
+        int: The number of confirmation transactions from the tracking address to the burn address.
     """
+    global rpc_connection
     initial_credit_balance = credit_pack.initial_credit_balance
     credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
-    # Get all transactions sent from the credit_usage_tracking_psl_address to the burn address
-    transactions = await rpc_connection.listtransactions("*", 10000, 0, True)
-    tracking_transactions = [
-        tx for tx in transactions
-        if tx.get("address") == credit_usage_tracking_psl_address and tx.get("category") == "send" and tx.get("amount") < 1.0
-    ]
-    # Filter the tracking transactions to include only those sent to the burn address
+    # Get all transactions sent to the burn address
+    transactions = await rpc_connection.listtransactions("*", 100000, 0, True)
     burn_address_transactions = [
-        tx for tx in tracking_transactions
-        if any(details.get("address") == burn_address for details in tx.get("details", []))
+        tx for tx in transactions
+        if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("amount") < 1.0
     ]
-    number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(burn_address_transactions)
+    burn_address_txids = [tx.get("txid") for tx in burn_address_transactions]
+    number_of_burn_address_txids = len(burn_address_txids)
+    logger.info(f"Number of transactions sent to the burn address with amount < 1.0 PSL: {number_of_burn_address_txids}")
+    # Filter the tracking transactions to include only those sent from the credit_usage_tracking_psl_address
+    tracking_transactions = []
+    for txid in burn_address_txids:
+        decoded_tx_data = await get_and_decode_raw_transaction(txid)
+        decoded_tx_data_as_string = json.dumps(decoded_tx_data)
+        if credit_usage_tracking_psl_address in decoded_tx_data_as_string:
+            tracking_transactions.append(decoded_tx_data)
+    number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(tracking_transactions)
     # Calculate the total number of inference credits consumed
     credit_usage_to_tracking_amount_multiplier = 10
-    total_credits_consumed = sum(
-        int(abs(tx["amount"]) * credit_usage_to_tracking_amount_multiplier)
-        for tx in burn_address_transactions
-    )
+    total_credits_consumed = 0
+    for tx in tracking_transactions:
+        for vout in tx.get("vout", []):
+            if vout.get("scriptPubKey", {}).get("addresses", [None])[0] == burn_address and vout["value"] < 1.0:
+                total_credits_consumed += float(vout["valuePat"]) / credit_usage_to_tracking_amount_multiplier
     # Calculate the current credit balance
     current_credit_balance = initial_credit_balance - total_credits_consumed
     logger.info(f"Initial credit balance: {initial_credit_balance}")
     logger.info(f"Total credits consumed: {total_credits_consumed}")
     logger.info(f"Current credit balance: {current_credit_balance}")
     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
-    
+
 async def update_inference_sn_reputation_score(supernode_pastelid: str, reputation_score: float) -> bool:
     try:
         # TODO: Implement the logic to update the inference SN reputation score
