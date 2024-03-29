@@ -918,8 +918,21 @@ async def main():
             confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data)
             logger.info(f"Sent inference confirmation: {confirmation_result}")
 
+            # Wait for the confirmation message via the messaging system
+            inference_response_id = None
+            while True:
+                messages = await messaging_client.get_user_messages(supernode_url)
+                for message in messages:
+                    if "type" in message and message["type"] == "inference_result_notification":
+                        if message["inference_request_id"] == inference_request_id:
+                            inference_response_id = message["inference_response_id"]
+                            break
+                if inference_response_id is not None:
+                    break
+                logger.info("Waiting for the inference result notification...")
+                await asyncio.sleep(5)  # Wait for 5 seconds before checking again
+
             # Get the inference output results
-            inference_response_id = confirmation_result["inference_response_id"]
             output_results = await messaging_client.get_inference_output_results(supernode_url, inference_request_id, inference_response_id)
             logger.info(f"Retrieved inference output results: {output_results}")
         else:

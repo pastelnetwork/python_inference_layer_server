@@ -20,7 +20,7 @@ import urllib.parse as urlparse
 from logger_config import setup_logger
 import zstandard as zstd
 from database_code import AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata
-from database_code import InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage, InferenceAPIUsageRequestModel, InferenceConfirmationModel
+from database_code import InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage, InferenceAPIUsageRequestModel, InferenceConfirmationModel, InferenceOutputResultsModel
 from sqlalchemy import select, func
 from typing import List, Tuple
 from decouple import Config as DecoupleConfig, RepositoryEnv
@@ -1009,11 +1009,6 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
             logger.info(f"Found correct inference request confirmation tracking transaction in burn address! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};") 
             computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address)
             logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address} tracking transactions from tracking address to burn address.")       
-            # proposed_cost_in_credits = inference_response.proposed_cost_of_request_in_inference_credits
-            # credit_pack.deduct_credits(proposed_cost_in_credits)
-            # logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
-            # # Save the updated credit pack state to the JSON file
-            # credit_pack.save_to_json(CREDIT_PACK_FILE)
             # Update the inference request status to "confirmed"
             inference_request.status = "confirmed"
             async with AsyncSessionLocal() as db:
@@ -1028,7 +1023,35 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
     except Exception as e:
         logger.error(f"Error processing inference confirmation: {str(e)}")
         raise
-    
+
+async def save_inference_output_results(inference_request_id: str, inference_response_id: str, output_results: dict) -> None:
+    try:
+        _, _, local_supernode_pastelid, _ = await get_local_machine_supernode_data_func()
+        # Generate a unique identifier for the inference result
+        inference_result_id = str(uuid.uuid4())
+        # Sign the inference result ID with the local Supernode's PastelID
+        result_id_signature = await sign_message_with_pastelid_func(local_supernode_pastelid, inference_result_id, LOCAL_PASTEL_ID_PASSPHRASE)
+        supernode_pastelid_and_signature_on_inference_result_id = json.dumps({
+            'signing_sn_pastelid': local_supernode_pastelid,
+            'sn_signature_on_result_id': result_id_signature
+        })
+        # Create an inference output result record
+        inference_output_result = InferenceAPIOutputResult(
+            inference_result_id=inference_result_id,
+            inference_request_id=inference_request_id,
+            inference_response_id=inference_response_id,
+            responding_supernode_pastelid=local_supernode_pastelid,
+            inference_result_json_base64=base64.b64encode(json.dumps(output_results).encode("utf-8")).decode("utf-8"),
+            responding_supernode_signature_on_inference_result_id=supernode_pastelid_and_signature_on_inference_result_id
+        )
+        async with AsyncSessionLocal() as db:
+            db.add(inference_output_result)
+            await db.commit()
+            await db.refresh(inference_output_result)
+    except Exception as e:
+        logger.error(f"Error saving inference output results: {str(e)}")
+        raise
+        
 async def execute_inference_request(inference_request_id: str) -> None:
     try:
         # Retrieve the inference API usage request from the database
@@ -1052,25 +1075,21 @@ async def execute_inference_request(inference_request_id: str) -> None:
             "output_text": "This is the generated output text.",
             "output_files": []
         }
-        _, _, local_supernode_pastelid, _ = await get_local_machine_supernode_data_func()
-        # Create an inference response record
-        inference_response = InferenceAPIUsageResponse(
-            inference_request_id=inference_request_id,
-            inference_response_id=inference_response.inference_response_id,
-            responding_supernode_pastelid=local_supernode_pastelid,
-            output_results=output_results
-        )
-        async with AsyncSessionLocal() as db:
-            db.add(inference_response)
-            await db.commit()
-            await db.refresh(inference_response)
-        # Send the inference output results to the requesting party
-        await send_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results)
+        # Save the inference output results to the database
+        await save_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results)
+        # Send a notification to the requesting party that the results are ready
+        notification_message = {
+            "type": "inference_result_notification",
+            "inference_request_id": inference_request_id,
+            "inference_response_id": inference_response.inference_response_id,
+            "message": "Your inference request has been processed. You can retrieve the results using the provided inference_response_id."
+        }
+        await send_notification(inference_request.requesting_pastelid, notification_message)
     except Exception as e:
         logger.error(f"Error executing inference request: {str(e)}")
         raise
 
-async def get_inference_output_results_and_verify_authorization(inference_response_id: str, requesting_pastelid: str) -> dict:
+async def get_inference_output_results_and_verify_authorization(inference_response_id: str, requesting_pastelid: str) -> InferenceOutputResultsModel:
     async with AsyncSessionLocal() as db_session:
         # Retrieve the inference output result
         inference_output_result = await db_session.execute(
@@ -1086,10 +1105,16 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
         inference_request = inference_request.scalar_one_or_none()
         if inference_request is None or inference_request.requesting_pastelid != requesting_pastelid:
             raise ValueError("Unauthorized access to inference output results")
-        # Decode the inference output results
-        inference_result_json = base64.b64decode(inference_output_result.inference_result_json_base64).decode("utf-8")
-        inference_result = json.loads(inference_result_json)
-        return inference_result
+        # Create an InferenceOutputResultsModel instance
+        inference_output_results_model = InferenceOutputResultsModel(
+            inference_result_id=inference_output_result.inference_result_id,
+            inference_request_id=inference_output_result.inference_request_id,
+            inference_response_id=inference_output_result.inference_response_id,
+            responding_supernode_pastelid=inference_output_result.responding_supernode_pastelid,
+            inference_result_json_base64=inference_output_result.inference_result_json_base64,
+            responding_supernode_signature_on_inference_result_id=inference_output_result.responding_supernode_signature_on_inference_result_id
+        )
+        return inference_output_results_model
 
 async def send_notification(pastelid: str, notification_message: dict) -> None:
     try:
@@ -1114,41 +1139,6 @@ async def send_notification(pastelid: str, notification_message: dict) -> None:
         logger.info(f"Notification sent to PastelID: {pastelid}")
     except Exception as e:
         logger.error(f"Error sending notification: {str(e)}")
-        raise
-    
-async def send_inference_output_results(inference_request_id: str, inference_response_id: str, output_results: dict) -> None:
-    try:
-        # Retrieve the inference API usage request from the database
-        async with AsyncSessionLocal() as db:
-            inference_request = await db.execute(
-                select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
-            )
-            inference_request = inference_request.scalar_one_or_none()
-        if inference_request is None:
-            logger.warning(f"Invalid inference request ID: {inference_request_id}")
-            return
-        # Create an inference output result record
-        inference_output_result = InferenceAPIOutputResult(
-            inference_request_id=inference_request_id,
-            inference_response_id=inference_response_id,
-            responding_supernode_pastelid="your_supernode_pastelid",
-            inference_result_json_base64=base64.b64encode(json.dumps(output_results).encode("utf-8")).decode("utf-8"),
-            responding_supernode_signature_on_inference_result_id="your_signature"
-        )
-        async with AsyncSessionLocal() as db:
-            db.add(inference_output_result)
-            await db.commit()
-            await db.refresh(inference_output_result)
-        # Send a notification to the requesting party (e.g., via a message or callback URL)
-        notification_message = {
-            "type": "inference_result_notification",
-            "inference_request_id": inference_request_id,
-            "inference_response_id": inference_response_id,
-            "message": "Your inference request has been processed. You can retrieve the results using the provided inference_response_id."
-        }
-        await send_notification(inference_request.requesting_pastelid, notification_message)
-    except Exception as e:
-        logger.error(f"Error sending inference output results: {str(e)}")
         raise
     
 async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address):

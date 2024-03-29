@@ -490,7 +490,7 @@ async def make_inference_api_usage_request_endpoint(
         raise HTTPException(status_code=500, detail=f"Error sending inference API usage request: {str(e)}")
     
 
-@router.post("/confirm_inference_request", response_model=bool)
+@router.post("/confirm_inference_request", response_model=db.InferenceConfirmationModel)
 async def confirm_inference_request_endpoint(
     inference_confirmation: db.InferenceConfirmationModel = Body(...),
     challenge: str = Body(..., description="The challenge string"),
@@ -518,7 +518,7 @@ async def confirm_inference_request_endpoint(
         raise HTTPException(status_code=500, detail=f"Error sending inference confirmation: {str(e)}")
 
 
-@router.get("/get_inference_output_results/{inference_response_id}")
+@router.get("/get_inference_output_results/{inference_response_id}", response_model=db.InferenceOutputResultsModel)
 async def get_inference_output_results_endpoint(
     inference_response_id: str,
     pastelid: str = Query(..., description="The PastelID of the requesting party"),
@@ -531,13 +531,13 @@ async def get_inference_output_results_endpoint(
         is_valid_signature = await service_functions.verify_challenge_signature(pastelid, challenge_signature, challenge_id)
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        inference_result = await service_functions.get_inference_output_results_and_verify_authorization(
+        inference_output_results = await service_functions.get_inference_output_results_and_verify_authorization(
             inference_response_id, pastelid)
-        return inference_result
+        return inference_output_results
     except Exception as e:
         logger.error(f"Error retrieving inference output results: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving inference output results: {str(e)}")
-
+    
     
 @router.get("/get_inference_model_menu")
 async def get_inference_model_menu_endpoint(
@@ -545,42 +545,6 @@ async def get_inference_model_menu_endpoint(
 ):
     model_menu = await service_functions.get_inference_model_menu()
     return model_menu
-
-
-@router.post("/validate_inference_api_usage_request")
-async def validate_inference_api_usage_request_endpoint(
-    request_data: db.InferenceAPIUsageRequestModel,
-    rpc_connection=Depends(get_rpc_connection),
-):
-    is_valid = await service_functions.validate_inference_api_usage_request(request_data.dict())
-    return {"is_valid": is_valid}
-
-
-@router.post("/process_inference_confirmation")
-async def process_inference_confirmation_endpoint(
-    confirmation_data: db.InferenceConfirmationModel,
-    rpc_connection=Depends(get_rpc_connection),
-):
-    is_processed = await service_functions.process_inference_confirmation(confirmation_data.inference_request_id, confirmation_data.confirmation_transaction)
-    return {"is_processed": is_processed}
-
-
-@router.post("/execute_inference_request")
-async def execute_inference_request_endpoint(
-    inference_request_id: str,
-    rpc_connection=Depends(get_rpc_connection),
-):
-    output_results = await service_functions.execute_inference_request(inference_request_id)
-    return output_results
-
-
-@router.post("/send_inference_output_results")
-async def send_inference_output_results_endpoint(
-    output_results_data: db.InferenceOutputResultsModel,
-    rpc_connection=Depends(get_rpc_connection),
-):
-    inference_output_result = await service_functions.send_inference_output_results(output_results_data.inference_request_id, output_results_data.inference_response_id, output_results_data.output_results)
-    return inference_output_result
 
 
 @router.post("/update_inference_sn_reputation_score")
