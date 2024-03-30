@@ -897,9 +897,10 @@ async def handle_inference_request_end_to_end(
         credit_pack.save_to_json(CREDIT_PACK_FILE)
     # Get the list of Supernodes
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
-    # Get the 3 closest Supernodes
-    closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, MY_LOCAL_PASTELID, supernode_list_df)
-    logger.info(f"Selected Supernode URLs: {[sn[0] for sn in closest_supernodes]} for inference request!")
+    # Get the closest Supernode URL
+    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(MY_LOCAL_PASTELID, supernode_list_df)
+    # supernode_url = 'http://154.38.164.75:7123'  # Temporary override for debugging
+    logger.info(f"Selected Supernode URL: {supernode_url} for inference request!")
     input_prompt_text_to_llm__base64_encoded = base64.b64encode(input_prompt_text_to_llm.encode()).decode('utf-8')
     # Prepare the inference API usage request
     request_data = InferenceAPIUsageRequestModel(
@@ -909,15 +910,10 @@ async def handle_inference_request_end_to_end(
         model_parameters_json=json.dumps(model_parameters),
         model_input_data_json_b64=input_prompt_text_to_llm__base64_encoded
     )
-    # Send the inference API usage request to the closest Supernodes concurrently
-    usage_request_tasks = []
-    for supernode_url, _ in closest_supernodes:
-        usage_request_task = asyncio.create_task(messaging_client.make_inference_api_usage_request(supernode_url, request_data))
-        usage_request_tasks.append(usage_request_task)
-    usage_request_responses = await asyncio.gather(*usage_request_tasks)
-    logger.info(f"Received inference API usage request responses from SNs:\n {usage_request_responses}")
-    # Extract the relevant information from the first response (assuming all responses are the same)
-    usage_request_response = usage_request_responses[0]
+    # Send the inference API usage request
+    usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, request_data)
+    logger.info(f"Received inference API usage request response from SN:\n {usage_request_response}")
+    # Extract the relevant information from the response
     inference_request_id = usage_request_response["inference_request_id"]
     proposed_cost_in_credits = float(usage_request_response["proposed_cost_of_request_in_inference_credits"])
     credit_usage_tracking_psl_address = usage_request_response["credit_usage_tracking_psl_address"]
@@ -950,18 +946,17 @@ async def handle_inference_request_end_to_end(
                     inference_request_id=inference_request_id,
                     confirmation_transaction={"txid": tracking_transaction_txid}
                 )
-                # Send the inference confirmation to the closest Supernodes concurrently
-                confirmation_tasks = []
-                for supernode_url, _ in closest_supernodes:
-                    confirmation_task = asyncio.create_task(messaging_client.send_inference_confirmation(supernode_url, confirmation_data))
-                    confirmation_tasks.append(confirmation_task)
-                confirmation_results = await asyncio.gather(*confirmation_tasks)
-                logger.info(f"Sent inference confirmations: {confirmation_results}")
+                # Send the inference confirmation
+                confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data)
+                logger.info(f"Sent inference confirmation: {confirmation_result}")
                 # Wait for the confirmation message via the messaging system
                 inference_response_id = None
                 max_tries_to_get_confirmation = 10
                 initial_wait_time_in_seconds = 5
                 wait_time_in_seconds = initial_wait_time_in_seconds
+                # Get the 3 closest Supernodes to check for user messages
+                closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, MY_LOCAL_PASTELID, supernode_list_df)
+                logger.info(f"Closest Supernodes for checking user messages: {[sn[1] for sn in closest_supernodes]}")
                 for cnt in range(max_tries_to_get_confirmation):
                     wait_time_in_seconds = wait_time_in_seconds*(1.15**cnt)
                     message_retrieval_tasks = []
@@ -989,18 +984,12 @@ async def handle_inference_request_end_to_end(
                         "sample_text_completion": input_prompt_text_to_llm,
                         "request_data": request_data.dict(),
                         "tracking_transaction_txid": tracking_transaction_txid,
-                        "supernode_urls": [sn[0] for sn in closest_supernodes],
+                        "supernode_url": supernode_url,
                         "output_results": "NA"
                     }                
                     return inference_result_dict
-                # Get the inference output results from the closest Supernodes concurrently
-                output_retrieval_tasks = []
-                for supernode_url, _ in closest_supernodes:
-                    output_retrieval_task = asyncio.create_task(messaging_client.get_inference_output_results(supernode_url, inference_request_id, inference_response_id))
-                    output_retrieval_tasks.append(output_retrieval_task)
-                output_results_list = await asyncio.gather(*output_retrieval_tasks)
-                # Assume all output results are the same and take the first one
-                output_results = output_results_list[0]
+                # Get the inference output results
+                output_results = await messaging_client.get_inference_output_results(supernode_url, inference_request_id, inference_response_id)
                 logger.info(f"Retrieved inference output results: {output_results}")
                 # Create the inference_result_dict with all relevant information
                 inference_result_dict = {
@@ -1010,7 +999,7 @@ async def handle_inference_request_end_to_end(
                     "sample_text_completion": input_prompt_text_to_llm,
                     "request_data": request_data.dict(),
                     "tracking_transaction_txid": tracking_transaction_txid,
-                    "supernode_urls": [sn[0] for sn in closest_supernodes],
+                    "supernode_url": supernode_url,
                     "output_results": output_results
                 }
                 return inference_result_dict
