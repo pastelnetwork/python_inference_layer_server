@@ -120,6 +120,38 @@ def get_closest_supernode_to_pastelid_url(input_pastelid, supernode_list_df):
         return supernode_url, closest_supernode_pastelid
     return None, None
 
+async def get_n_closest_supernodes_to_pastelid_urls(n, input_pastelid, supernode_list_df):
+    if not supernode_list_df.empty:
+        # Compute SHA3-256 hash of the input_pastelid
+        input_pastelid_hash = compute_sha3_256_hexdigest(input_pastelid)
+        input_pastelid_int = int(input_pastelid_hash, 16)
+
+        list_of_supernode_pastelids = supernode_list_df['extKey'].values.tolist()
+        xor_distances = []
+
+        # Compute XOR distances for each supernode PastelID
+        for supernode_pastelid in list_of_supernode_pastelids:
+            supernode_pastelid_hash = compute_sha3_256_hexdigest(supernode_pastelid)
+            supernode_pastelid_int = int(supernode_pastelid_hash, 16)
+            distance = input_pastelid_int ^ supernode_pastelid_int
+            xor_distances.append((supernode_pastelid, distance))
+
+        # Sort the XOR distances in ascending order
+        sorted_xor_distances = sorted(xor_distances, key=lambda x: x[1])
+
+        # Get the N closest supernodes
+        closest_supernodes = sorted_xor_distances[:n]
+
+        # Retrieve the URLs and PastelIDs of the N closest supernodes
+        supernode_urls_and_pastelids = []
+        for supernode_pastelid, _ in closest_supernodes:
+            supernode_ipaddress_port = supernode_list_df.loc[supernode_list_df['extKey'] == supernode_pastelid]['ipaddress:port'].values[0]
+            ipaddress = supernode_ipaddress_port.split(':')[0]
+            supernode_url = f"http://{ipaddress}:7123"
+            supernode_urls_and_pastelids.append((supernode_url, supernode_pastelid))
+        return supernode_urls_and_pastelids
+    return []
+
 class JSONRPCException(Exception):
     def __init__(self, rpc_error):
         parent_args = []
@@ -845,41 +877,53 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
     user_message_data = await create_user_message(from_pastelid, to_pastelid, message_body, message_signature)
     local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
     sending_sn_pastelid = local_machine_supernode_data['extKey'][0]  # Assuming this is a list
-    # Find the closest Supernode to the receiving end user's PastelID
+    # Find the 3 closest Supernodes to the receiving end user's PastelID
     supernode_list_df, _ = await check_supernode_list_func()
-    closest_supernode_url, receiving_sn_pastelid = get_closest_supernode_to_pastelid_url(to_pastelid, supernode_list_df)
-    if receiving_sn_pastelid is None:
-        raise ValueError(f"No Supernode found for PastelID: {to_pastelid}.")
-    # Now that we have user_message_data and the receiving Supernode PastelID, let's create the supernode user message.
-    supernode_user_message_data = await create_supernode_user_message(sending_sn_pastelid, receiving_sn_pastelid, user_message_data)
-    # Preparing the message to be sent to the supernode.
-    signed_message_to_send = json.dumps({
-        'message': user_message_data['message_body'],
-        'message_type': 'user_message',
-        'signature': user_message_data['message_signature'],
-        'from_pastelid': user_message_data['from_pastelid'],
-        'to_pastelid': user_message_data['to_pastelid']
-    }, ensure_ascii=False)
-    # Send the message to the receiving Supernode.
-    signed_message, pastelid_signature_on_message = await send_message_to_sn_using_pastelid_func(signed_message_to_send, 'user_message', receiving_sn_pastelid, LOCAL_PASTEL_ID_PASSPHRASE)
-    message_dict = {
-        "message": user_message_data['message_body'],  # The content of the message
-        "message_type": "user_message",  # Static type as per your design
-        "sending_sn_pastelid": sending_sn_pastelid,  # From local machine supernode data
-        "timestamp": datetime.utcnow().isoformat(),  # Current UTC timestamp
-        "id": supernode_user_message_data['id'],  # ID from the supernode user message record
-        "signature": pastelid_signature_on_message,
-        "user_message": {
-            # Details from the user_message_data
-            "from_pastelid": from_pastelid,
-            "to_pastelid": to_pastelid,
-            "message_body": message_body,
-            "message_signature": user_message_data['message_signature'],
-            "id": user_message_data['id'],  # Assuming these fields are included in your dictionary
-            "timestamp": user_message_data['timestamp']
+    closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, to_pastelid, supernode_list_df)
+    if not closest_supernodes:
+        raise ValueError(f"No Supernodes found for PastelID: {to_pastelid}.")
+    # Create a list to store the message_dicts for each Supernode
+    message_dicts = []
+    # Send the message to the 3 closest Supernodes in parallel using asyncio.gather
+    send_tasks = []
+    for closest_supernode_url, receiving_sn_pastelid in closest_supernodes:
+        # Now that we have user_message_data and the receiving Supernode PastelID, let's create the supernode user message.
+        supernode_user_message_data = await create_supernode_user_message(sending_sn_pastelid, receiving_sn_pastelid, user_message_data)
+        # Preparing the message to be sent to the supernode.
+        signed_message_to_send = json.dumps({
+            'message': user_message_data['message_body'],
+            'message_type': 'user_message',
+            'signature': user_message_data['message_signature'],
+            'from_pastelid': user_message_data['from_pastelid'],
+            'to_pastelid': user_message_data['to_pastelid']
+        }, ensure_ascii=False)
+        # Send the message to the receiving Supernode.
+        send_task = asyncio.create_task(send_message_to_sn_using_pastelid_func(signed_message_to_send, 'user_message', receiving_sn_pastelid, LOCAL_PASTEL_ID_PASSPHRASE))
+        send_tasks.append(send_task)
+    # Wait for all send tasks to complete
+    send_results = await asyncio.gather(*send_tasks)
+    # Create the message_dict for each Supernode
+    for send_result in send_results:
+        signed_message, pastelid_signature_on_message = send_result
+        message_dict = {
+            "message": user_message_data['message_body'],  # The content of the message
+            "message_type": "user_message",  # Static type as per your design
+            "sending_sn_pastelid": sending_sn_pastelid,  # From local machine supernode data
+            "timestamp": datetime.utcnow().isoformat(),  # Current UTC timestamp
+            "id": supernode_user_message_data['id'],  # ID from the supernode user message record
+            "signature": pastelid_signature_on_message,
+            "user_message": {
+                # Details from the user_message_data
+                "from_pastelid": from_pastelid,
+                "to_pastelid": to_pastelid,
+                "message_body": message_body,
+                "message_signature": user_message_data['message_signature'],
+                "id": user_message_data['id'],  # Assuming these fields are included in your dictionary
+                "timestamp": user_message_data['timestamp']
+            }
         }
-    }    
-    return message_dict
+        message_dicts.append(message_dict)
+    return message_dicts
 
 async def process_received_user_message(supernode_user_message: SupernodeUserMessage):
     async with AsyncSessionLocal() as db:
@@ -1246,25 +1290,31 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
 
 async def send_notification(pastelid: str, notification_message: dict) -> None:
     try:
-        # Retrieve the closest Supernode to the receiving PastelID
+        # Retrieve the closest Supernodes to the receiving PastelID
         supernode_list_df, _ = await check_supernode_list_func()
-        closest_supernode_url, closest_supernode_pastelid = get_closest_supernode_to_pastelid_url(pastelid, supernode_list_df)
-        if closest_supernode_pastelid is None:
-            logger.warning(f"No Supernode found for PastelID: {pastelid}")
+        closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, pastelid, supernode_list_df)
+        if not closest_supernodes:
+            logger.warning(f"No Supernodes found for PastelID: {pastelid}")
             return
         # Prepare the notification message
         notification_message_str = json.dumps(notification_message, ensure_ascii=False)
         # Sign the notification message with the local Supernode's PastelID
         _, _, local_supernode_pastelid, _ = await get_local_machine_supernode_data_func()
         notification_signature = await sign_message_with_pastelid_func(local_supernode_pastelid, notification_message_str, LOCAL_PASTEL_ID_PASSPHRASE)
-        # Send the notification message via the closest Supernode
-        _ = await send_user_message_via_supernodes(
-            from_pastelid=local_supernode_pastelid,
-            to_pastelid=pastelid,
-            message_body=notification_message_str,
-            message_signature=notification_signature
-        )
-        logger.info(f"Notification sent to PastelID: {pastelid}")
+        # Send the notification message via the closest Supernodes in parallel
+        send_tasks = []
+        for supernode_url, supernode_pastelid in closest_supernodes:
+            send_task = asyncio.create_task(send_user_message_via_supernodes(
+                from_pastelid=local_supernode_pastelid,
+                to_pastelid=pastelid,
+                message_body=notification_message_str,
+                message_signature=notification_signature,
+                supernode_url=supernode_url
+            ))
+            send_tasks.append(send_task)
+        # Wait for all send tasks to complete
+        await asyncio.gather(*send_tasks)
+        logger.info(f"Notification sent to PastelID: {pastelid} via {len(closest_supernodes)} closest Supernodes")
     except Exception as e:
         logger.error(f"Error sending notification: {str(e)}")
         raise
