@@ -298,7 +298,7 @@ async def get_db():
     finally:
         await db.close()
 
-engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False},  execution_options={"isolation_level": "READ COMMITTED"}, pool_size=20, max_overflow=10)
+engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False}, execution_options={"isolation_level": "READ COMMITTED"})
     
 AsyncSessionLocal = sessionmaker(
     bind=engine,
