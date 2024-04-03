@@ -23,7 +23,7 @@ import zstandard as zstd
 from database_code import AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata
 from database_code import InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage, InferenceAPIUsageRequestModel, InferenceConfirmationModel, InferenceOutputResultsModel
 from sqlalchemy import select, func
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, InvalidRequestError
 from typing import List, Tuple
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from magika import Magika
@@ -752,6 +752,13 @@ async def retry_on_database_locked(func, *args, max_retries=5, initial_delay=1, 
                 await asyncio.sleep(delay)
             else:
                 raise
+        except InvalidRequestError as e:
+            if "This Session's transaction has been rolled back due to a previous exception during flush" in str(e):
+                logger.warning("Session transaction has been rolled back. Retrying...")
+                db_session = args[0]  # Assuming the first argument is the db_session
+                await db_session.rollback()
+            else:
+                raise
             
 async def process_broadcast_messages(message, db_session):
     message_body = json.loads(message.message_body)
@@ -768,6 +775,7 @@ async def process_broadcast_messages(message, db_session):
             supernode_pastelid_and_signature_on_inference_response_id=response_data['supernode_pastelid_and_signature_on_inference_response_id']
         )
         db_session.add(usage_response)
+        await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
         await retry_on_database_locked(db_session.add, usage_response)
         await retry_on_database_locked(db_session.commit)
         await retry_on_database_locked(db_session.refresh, usage_response)
@@ -783,6 +791,7 @@ async def process_broadcast_messages(message, db_session):
             responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id']
         )
         db_session.add(output_result)
+        await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
         await retry_on_database_locked(db_session.add, output_result)
         await retry_on_database_locked(db_session.commit)
         await retry_on_database_locked(db_session.refresh, output_result)
@@ -819,6 +828,7 @@ async def monitor_new_messages():
                             sending_sn_pastelid = message['sending_sn_pastelid']
                             receiving_sn_pastelid = message['receiving_sn_pastelid']
                             message_size_bytes = len(message['message_body'].encode('utf-8'))
+                            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before updating metadata                            
                             # Update MessageSenderMetadata
                             result = await db.execute(
                                 select(MessageSenderMetadata).where(MessageSenderMetadata.sending_sn_pastelid == sending_sn_pastelid)
@@ -887,6 +897,7 @@ async def monitor_new_messages():
                                 )
                                 for _, row in new_messages_df.iterrows()
                             ]
+                            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding messages                            
                             await retry_on_database_locked(db.add_all, new_messages)
                             # Process broadcast messages concurrently
                             processing_tasks = [
@@ -916,6 +927,7 @@ async def monitor_new_messages():
                                     total_receivers=total_receivers
                                 )
                                 db.add(message_metadata)
+                            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before updating message metadata                                
                             await retry_on_database_locked(db.commit)
                 await asyncio.sleep(5)
         except Exception as e:
