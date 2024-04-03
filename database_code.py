@@ -282,7 +282,7 @@ Message.to_dict = to_dict
 UserMessage.to_dict = to_dict
 SupernodeUserMessage.to_dict = to_dict
 InferenceAPIUsageRequest.to_dict = to_dict
-
+InferenceAPIUsageResponse.to_dict = to_dict
 
 async def get_db():
     db = AsyncSessionLocal()

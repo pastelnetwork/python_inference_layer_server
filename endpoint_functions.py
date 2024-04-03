@@ -474,6 +474,10 @@ async def make_inference_api_usage_request_endpoint(
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         # Validate and process the inference API usage request
         inference_response = await service_functions.process_inference_api_usage_request(inference_api_usage_request)
+        # Broadcast message to nearest SNs to requester's pastelid containing inference response message
+        response_message_body = json.dumps(inference_response.to_dict())
+        response_message_type = "inference_request_response_announcement_message"
+        _ = await service_functions.broadcast_message_to_n_closest_supernodes_to_given_pastelid(inference_api_usage_request.requesting_pastelid, response_message_body, response_message_type) 
         # Return the InferenceAPIUsageResponse as the API response
         return db.InferenceAPIUsageResponseModel(
             inference_response_id=inference_response.inference_response_id,
@@ -532,10 +536,86 @@ async def retrieve_inference_output_results_endpoint(
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         inference_output_results = await service_functions.get_inference_output_results_and_verify_authorization(inference_response_id, pastelid)
+        # Broadcast message to nearest SNs to requester's pastelid containing inference results
+        inference_output_results_dict = inference_output_results.dict()
+        # Abbreviate the 'inference_result_json_base64' field to the first 32 characters
+        inference_output_results_dict['inference_result_json_base64'] = inference_output_results_dict['inference_result_json_base64'][:32]
+        result_message_body = json.dumps(inference_output_results_dict)
+        result_message_type = "inference_request_result_announcement_message"
+        _ = await service_functions.broadcast_message_to_n_closest_supernodes_to_given_pastelid(pastelid, result_message_body, result_message_type) 
         return inference_output_results
     except Exception as e:
         logger.error(f"Error retrieving inference output results: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving inference output results: {str(e)}")
+    
+
+@router.post("/audit_inference_request_response", response_model=db.InferenceAPIUsageResponseModel)
+async def audit_inference_request_response_endpoint(
+    inference_response_id: str = Body(..., description="The inference response ID"),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        # Verify the challenge signature
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            challenge_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        # Retrieve the InferenceAPIUsageResponse from the local database
+        response = await service_functions.get_inference_api_usage_response_for_audit(inference_response_id)
+        if response is None:
+            raise HTTPException(status_code=404, detail="Inference response not found")
+        # Return the InferenceAPIUsageResponse as the API response
+        return db.InferenceAPIUsageResponseModel(
+            inference_response_id=response.inference_response_id,
+            inference_request_id=response.inference_request_id,
+            proposed_cost_of_request_in_inference_credits=response.proposed_cost_of_request_in_inference_credits,
+            remaining_credits_in_pack_after_request_processed=response.remaining_credits_in_pack_after_request_processed,
+            credit_usage_tracking_psl_address=response.credit_usage_tracking_psl_address,
+            request_confirmation_message_amount_in_patoshis=response.request_confirmation_message_amount_in_patoshis,
+            max_block_height_to_include_confirmation_transaction=response.max_block_height_to_include_confirmation_transaction,
+            supernode_pastelid_and_signature_on_inference_response_id=response.supernode_pastelid_and_signature_on_inference_response_id
+        )
+    except Exception as e:
+        logger.error(f"Error auditing inference request response: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error auditing inference request response: {str(e)}")
+
+
+@router.post("/audit_inference_request_result", response_model=db.InferenceOutputResultsModel)
+async def audit_inference_request_result_endpoint(
+    inference_response_id: str = Body(..., description="The inference response ID"),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        # Verify the challenge signature
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            challenge_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        # Retrieve the InferenceAPIOutputResult from the local database
+        result = await service_functions.get_inference_api_usage_result_for_audit(inference_response_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Inference result not found")
+        # Return the InferenceAPIOutputResult as the API response
+        return db.InferenceOutputResultsModel(
+            inference_result_id=result.inference_result_id,
+            inference_request_id=result.inference_request_id,
+            inference_response_id=result.inference_response_id,
+            responding_supernode_pastelid=result.responding_supernode_pastelid,
+            inference_result_json_base64=result.inference_result_json_base64,
+            inference_result_file_type_strings=result.inference_result_file_type_strings,
+            responding_supernode_signature_on_inference_result_id=result.responding_supernode_signature_on_inference_result_id
+        )
+    except Exception as e:
+        logger.error(f"Error auditing inference request result: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error auditing inference request result: {str(e)}")    
     
     
 @router.get("/get_inference_model_menu")

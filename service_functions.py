@@ -152,6 +152,7 @@ async def get_n_closest_supernodes_to_pastelid_urls(n, input_pastelid, supernode
         return supernode_urls_and_pastelids
     return []
 
+
 class JSONRPCException(Exception):
     def __init__(self, rpc_error):
         parent_args = []
@@ -720,6 +721,50 @@ async def broadcast_message_to_all_sns_using_pastelid_func(message_to_send, mess
     await asyncio.gather(*[send_message(pastelid) for pastelid in list_of_receiving_sn_pastelids])
     return signed_message_to_send
 
+async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_pastelid, message_body, message_type):
+    supernode_list_df, _ = await check_supernode_list_func()
+    n = 4
+    supernode_urls_and_pastelids = await get_n_closest_supernodes_to_pastelid_urls(n, input_pastelid, supernode_list_df)
+    local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
+    local_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]    
+    list_of_supernode_pastelids = [x[1] for x in supernode_urls_and_pastelids if x[1]!=local_sn_pastelid]
+    list_of_supernode_urls = [x[0] for x in supernode_urls_and_pastelids if x[1]!=local_sn_pastelid]
+    list_of_supernode_ips = [x.split('//')[1].split(':')[0] for x in list_of_supernode_urls]
+    signed_message = await broadcast_message_to_list_of_sns_using_pastelid_func(message_body, message_type, list_of_supernode_pastelids, LOCAL_PASTEL_ID_PASSPHRASE)
+    logger.info(f"Broadcasted a {message_type} to {len(list_of_supernode_pastelids)} closest supernodes to PastelID: {input_pastelid} (with Supernode IPs of {list_of_supernode_ips}): {message_body}")
+    return signed_message
+    
+async def process_broadcast_messages(message, db_session):
+    if message['message_type'] == 'inference_request_response_announcement_message':
+        response_data = json.loads(message['message_body'])
+        usage_response = InferenceAPIUsageResponse(
+            inference_response_id=response_data['inference_response_id'],
+            inference_request_id=response_data['inference_request_id'],
+            proposed_cost_of_request_in_inference_credits=response_data['proposed_cost_of_request_in_inference_credits'],
+            remaining_credits_in_pack_after_request_processed=response_data['remaining_credits_in_pack_after_request_processed'],
+            credit_usage_tracking_psl_address=response_data['credit_usage_tracking_psl_address'],
+            request_confirmation_message_amount_in_patoshis=response_data['request_confirmation_message_amount_in_patoshis'],
+            max_block_height_to_include_confirmation_transaction=response_data['max_block_height_to_include_confirmation_transaction'],
+            supernode_pastelid_and_signature_on_inference_response_id=response_data['supernode_pastelid_and_signature_on_inference_response_id']
+        )
+        db_session.add(usage_response)
+        await db_session.commit()
+        await db_session.refresh(usage_response)
+    elif message['message_type'] == 'inference_request_result_announcement_message':
+        result_data = json.loads(message['message_body'])
+        output_result = InferenceAPIOutputResult(
+            inference_result_id=result_data['inference_result_id'],
+            inference_request_id=result_data['inference_request_id'],
+            inference_response_id=result_data['inference_response_id'],
+            responding_supernode_pastelid=result_data['responding_supernode_pastelid'],
+            inference_result_json_base64=result_data['inference_result_json_base64'],
+            inference_result_file_type_strings=result_data['inference_result_file_type_strings'],
+            responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id']
+        )
+        db_session.add(output_result)
+        await db_session.commit()
+        await db_session.refresh(output_result)
+            
 async def monitor_new_messages():
     last_processed_timestamp = None
     while True:
@@ -821,6 +866,13 @@ async def monitor_new_messages():
                                 for _, row in new_messages_df.iterrows()
                             ]
                             db.add_all(new_messages)
+                            
+                            # Process broadcast messages concurrently
+                            processing_tasks = [
+                                process_broadcast_messages(message, db)
+                                for message in new_messages
+                            ]
+                            await asyncio.gather(*processing_tasks)              
                             # Update overall MessageMetadata
                             result = await db.execute(
                                 select(
@@ -1344,6 +1396,19 @@ async def update_inference_sn_reputation_score(supernode_pastelid: str, reputati
         logger.error(f"Error updating inference SN reputation score: {str(e)}")
         raise
         
+async def get_inference_api_usage_response_for_audit(inference_response_id: str) -> InferenceAPIUsageResponse:
+    async with AsyncSessionLocal() as db_session:
+        result = await db_session.execute(
+            select(InferenceAPIUsageResponse).where(InferenceAPIUsageResponse.inference_response_id == inference_response_id)
+        )
+        return result.scalar_one_or_none()
+
+async def get_inference_api_usage_result_for_audit(inference_response_id: str) -> InferenceAPIOutputResult:
+    async with AsyncSessionLocal() as db_session:
+        result = await db_session.execute(
+            select(InferenceAPIOutputResult).where(InferenceAPIOutputResult.inference_response_id == inference_response_id)
+        )
+        return result.scalar_one_or_none()            
 # ________________________________________________________________________________________________________________________________
 
 # Blockchain ticket related functions:

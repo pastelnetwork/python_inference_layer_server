@@ -803,7 +803,6 @@ class PastelMessagingClient:
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        # Parameters to be sent in the query string
         params = {
             "inference_response_id": inference_response_id,
             "pastelid": self.pastelid,
@@ -812,11 +811,64 @@ class PastelMessagingClient:
             "challenge_signature": challenge_signature
         }
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            # Use POST method but with query parameters
             response = await client.post(f"{supernode_url}/retrieve_inference_output_results", params=params)
             response.raise_for_status()
             result = response.json()
             return result
+
+    async def audit_inference_request_response(self, supernode_url: str, inference_response_id: str) -> Dict[str, Any]:
+        try:
+            challenge_result = await self.request_and_sign_challenge(supernode_url)
+            challenge = challenge_result["challenge"]
+            challenge_id = challenge_result["challenge_id"]
+            challenge_signature = challenge_result["signature"]
+            payload = {
+                "inference_response_id": inference_response_id,
+                "challenge": challenge,
+                "challenge_id": challenge_id,
+                "challenge_signature": challenge_signature
+            }
+            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+                response = await client.post(f"{supernode_url}/audit_inference_request_response", json=payload)
+                response.raise_for_status()
+                result = response.json()
+                return {
+                    "inference_response_id": result.get("inference_response_id"),
+                    "inference_request_id": result.get("inference_request_id"),
+                    "proposed_cost_of_request_in_inference_credits": result.get("proposed_cost_of_request_in_inference_credits"),
+                    "remaining_credits_in_pack_after_request_processed": result.get("remaining_credits_in_pack_after_request_processed"),
+                    "credit_usage_tracking_psl_address": result.get("credit_usage_tracking_psl_address"),
+                    "request_confirmation_message_amount_in_patoshis": result.get("request_confirmation_message_amount_in_patoshis"),
+                    "max_block_height_to_include_confirmation_transaction": result.get("max_block_height_to_include_confirmation_transaction"),
+                    "supernode_pastelid_and_signature_on_inference_response_id": result.get("supernode_pastelid_and_signature_on_inference_response_id")
+                }
+        except Exception as e:
+            logger.error(f"Error in audit_inference_request_response from Supernode URL: {supernode_url}: {e}")
+            return {}
+            
+    async def audit_inference_request_response_id(self, inference_response_id: str, pastelid_of_supernode_to_audit: str):
+        supernode_list_df, _ = await check_supernode_list_func()
+        n = 4
+        supernode_urls_and_pastelids = await get_n_closest_supernodes_to_pastelid_urls(n, self.pastelid, supernode_list_df)
+        list_of_supernode_pastelids = [x[1] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
+        list_of_supernode_urls = [x[0] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
+        list_of_supernode_ips = [x.split('//')[1].split(':')[0] for x in list_of_supernode_urls]
+        logger.info(f"Now attempting to audit inference request response with ID {inference_response_id} with {len(list_of_supernode_pastelids)} closest supernodes (with Supernode IPs of {list_of_supernode_ips})...")
+        audit_tasks = [self.audit_inference_request_response(url, inference_response_id) for url in list_of_supernode_urls]
+        audit_results = await asyncio.gather(*audit_tasks)
+        logger.info(f"Audit results for inference response ID {inference_response_id}:")
+        for i, result in enumerate(audit_results):
+            if len(result) > 0:
+                logger.info(f"Supernode {i+1} (IP: {list_of_supernode_ips[i]}):")
+                logger.info(f"  Inference Response ID: {result.get('inference_response_id')}")
+                logger.info(f"  Inference Request ID: {result.get('inference_request_id')}")
+                logger.info(f"  Proposed Cost (Inference Credits): {result.get('proposed_cost_of_request_in_inference_credits')}")
+                logger.info(f"  Remaining Credits After Request: {result.get('remaining_credits_in_pack_after_request_processed')}")
+                logger.info(f"  Credit Usage Tracking Address: {result.get('credit_usage_tracking_psl_address')}")
+                logger.info(f"  Confirmation Message Amount (Patoshis): {result.get('request_confirmation_message_amount_in_patoshis')}")
+                logger.info(f"  Max Block Height for Confirmation: {result.get('max_block_height_to_include_confirmation_transaction')}")
+                logger.info(f"  Supernode PastelID and Signature: {result.get('supernode_pastelid_and_signature_on_inference_response_id')}")
+        return audit_results
         
         
 async def send_message_and_check_for_new_incoming_messages(
@@ -867,6 +919,9 @@ async def send_message_and_check_for_new_incoming_messages(
         "received_messages": unique_messages
     }        
     return message_dict
+        
+
+
         
 async def handle_inference_request_end_to_end(
     input_prompt_text_to_llm: str,
@@ -960,6 +1015,8 @@ async def handle_inference_request_end_to_end(
                     logger.info(f"Waiting for the inference results for {round(wait_time_in_seconds, 1)} seconds... (Attempt {cnt+1}/{max_tries_to_get_confirmation}); Checking with Supernode URL: {supernode_url}")
                     await asyncio.sleep(wait_time_in_seconds)
                     # Get the inference output results
+                    assert(len(inference_request_id)>0)
+                    assert(len(inference_response_id)>0)
                     output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
                     logger.info(f"Retrieved inference output results: {output_results}")
                     # Create the inference_result_dict with all relevant information
@@ -970,7 +1027,8 @@ async def handle_inference_request_end_to_end(
                         "input_prompt_text_to_llm": input_prompt_text_to_llm,
                         "output_results": output_results
                     }
-                    return inference_result_dict
+                    audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
+                    return inference_result_dict, audit_results
             else:
                 logger.error(f"Invalid tracking transaction TXID: {tracking_transaction_txid}")
         else:
@@ -1004,10 +1062,10 @@ async def main():
     #________________________________________________________
 
     if use_test_inference_request_functionality:
-        sample_text_completion = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
+        input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
         model_parameters = {"max_length": 100, "temperature": 0.7}
         max_credit_cost_to_approve_inference_request = 100.0
-        inference_dict = await handle_inference_request_end_to_end(sample_text_completion, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
+        inference_dict, audit_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
         logger.info(f"Inference result data: {inference_dict}")
 
 if __name__ == "__main__":
