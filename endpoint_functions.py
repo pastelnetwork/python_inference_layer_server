@@ -563,7 +563,7 @@ async def audit_inference_request_response_endpoint(
             raise HTTPException(status_code=404, detail="Inference response not found")
         
         # Verify the signature
-        is_valid_signature = await service_functions.verify_signature(pastel_id, inference_response_id, signature)
+        is_valid_signature = await service_functions.verify_message_with_pastelid_func(pastel_id, inference_response_id, signature)
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         
@@ -601,7 +601,7 @@ async def audit_inference_request_result_endpoint(
             raise HTTPException(status_code=404, detail="Inference result not found")
         
         # Verify the signature
-        is_valid_signature = await service_functions.verify_signature(pastel_id, inference_response_id, signature)
+        is_valid_signature = await service_functions.verify_message_with_pastelid_func(pastel_id, inference_response_id, signature)
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         
