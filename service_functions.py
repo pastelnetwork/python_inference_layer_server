@@ -9,6 +9,7 @@ import platform
 import statistics
 import time
 import uuid
+import random
 import re
 import html
 import warnings
@@ -735,17 +736,23 @@ async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_past
     logger.info(f"Broadcasted a {message_type} to {len(list_of_supernode_pastelids)} closest supernodes to PastelID: {input_pastelid} (with Supernode IPs of {list_of_supernode_ips}): {message_body}")
     return signed_message
     
-async def retry_on_database_locked(func, *args, max_retries=3, delay=1, **kwargs):
+async def retry_on_database_locked(func, *args, max_retries=5, initial_delay=1, backoff_factor=2, jitter_factor=0.1, **kwargs):
+    delay = initial_delay
     for attempt in range(max_retries):
         try:
-            return await func(*args, **kwargs)
+            result = func(*args, **kwargs)
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
         except OperationalError as e:
             if "database is locked" in str(e) and attempt < max_retries - 1:
-                logger.warning(f"Database locked. Retrying in {delay} second(s)...")
+                jitter = random.uniform(1 - jitter_factor, 1 + jitter_factor)
+                delay *= backoff_factor * jitter
+                logger.warning(f"Database locked. Retrying in {delay:.2f} second(s)...")
                 await asyncio.sleep(delay)
             else:
                 raise
-                
+            
 async def process_broadcast_messages(message, db_session):
     message_body = json.loads(message.message_body)
     if message.message_type == 'inference_request_response_announcement_message':
