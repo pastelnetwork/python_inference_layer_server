@@ -696,40 +696,39 @@ async def retry_on_database_locked(func, *args, max_retries=5, initial_delay=1, 
             else:
                 raise
             
-async def process_broadcast_messages(message):
-    async with AsyncSessionLocal() as db_session:
-        message_body = json.loads(message.message_body)
-        if message.message_type == 'inference_request_response_announcement_message':
-            response_data = json.loads(message_body['message'])
-            usage_response = InferenceAPIUsageResponse(
-                inference_response_id=response_data['inference_response_id'],
-                inference_request_id=response_data['inference_request_id'],
-                proposed_cost_of_request_in_inference_credits=response_data['proposed_cost_of_request_in_inference_credits'],
-                remaining_credits_in_pack_after_request_processed=response_data['remaining_credits_in_pack_after_request_processed'],
-                credit_usage_tracking_psl_address=response_data['credit_usage_tracking_psl_address'],
-                request_confirmation_message_amount_in_patoshis=response_data['request_confirmation_message_amount_in_patoshis'],
-                max_block_height_to_include_confirmation_transaction=response_data['max_block_height_to_include_confirmation_transaction'],
-                supernode_pastelid_and_signature_on_inference_response_id=response_data['supernode_pastelid_and_signature_on_inference_response_id']
-            )
-            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
-            await retry_on_database_locked(db_session.add, usage_response)
-            await retry_on_database_locked(db_session.commit)
-            await retry_on_database_locked(db_session.refresh, usage_response)
-        elif message.message_type == 'inference_request_result_announcement_message':
-            result_data = json.loads(message_body['message'])
-            output_result = InferenceAPIOutputResult(
-                inference_result_id=result_data['inference_result_id'],
-                inference_request_id=result_data['inference_request_id'],
-                inference_response_id=result_data['inference_response_id'],
-                responding_supernode_pastelid=result_data['responding_supernode_pastelid'],
-                inference_result_json_base64=result_data['inference_result_json_base64'],
-                inference_result_file_type_strings=result_data['inference_result_file_type_strings'],
-                responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id']
-            )
-            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
-            await retry_on_database_locked(db_session.add, output_result)
-            await retry_on_database_locked(db_session.commit)
-            await retry_on_database_locked(db_session.refresh, output_result)
+async def process_broadcast_messages(message, db_session):
+    message_body = json.loads(message.message_body)
+    if message.message_type == 'inference_request_response_announcement_message':
+        response_data = json.loads(message_body['message'])
+        usage_response = InferenceAPIUsageResponse(
+            inference_response_id=response_data['inference_response_id'],
+            inference_request_id=response_data['inference_request_id'],
+            proposed_cost_of_request_in_inference_credits=response_data['proposed_cost_of_request_in_inference_credits'],
+            remaining_credits_in_pack_after_request_processed=response_data['remaining_credits_in_pack_after_request_processed'],
+            credit_usage_tracking_psl_address=response_data['credit_usage_tracking_psl_address'],
+            request_confirmation_message_amount_in_patoshis=response_data['request_confirmation_message_amount_in_patoshis'],
+            max_block_height_to_include_confirmation_transaction=response_data['max_block_height_to_include_confirmation_transaction'],
+            supernode_pastelid_and_signature_on_inference_response_id=response_data['supernode_pastelid_and_signature_on_inference_response_id']
+        )
+        await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
+        await retry_on_database_locked(db_session.add, usage_response)
+        await retry_on_database_locked(db_session.commit)
+        await retry_on_database_locked(db_session.refresh, usage_response)
+    elif message.message_type == 'inference_request_result_announcement_message':
+        result_data = json.loads(message_body['message'])
+        output_result = InferenceAPIOutputResult(
+            inference_result_id=result_data['inference_result_id'],
+            inference_request_id=result_data['inference_request_id'],
+            inference_response_id=result_data['inference_response_id'],
+            responding_supernode_pastelid=result_data['responding_supernode_pastelid'],
+            inference_result_json_base64=result_data['inference_result_json_base64'],
+            inference_result_file_type_strings=result_data['inference_result_file_type_strings'],
+            responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id']
+        )
+        await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
+        await retry_on_database_locked(db_session.add, output_result)
+        await retry_on_database_locked(db_session.commit)
+        await retry_on_database_locked(db_session.refresh, output_result)
             
 async def monitor_new_messages():
     last_processed_timestamp = None
@@ -835,12 +834,6 @@ async def monitor_new_messages():
                             await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding messages                            
                             await retry_on_database_locked(db.add_all, new_messages)
                             await retry_on_database_locked(db.commit)  # Commit the transaction for adding new messages
-                            # Process broadcast messages concurrently
-                            processing_tasks = [
-                                process_broadcast_messages(message, db)
-                                for message in new_messages
-                            ]
-                            await asyncio.gather(*processing_tasks)              
                             # Update overall MessageMetadata
                             result = await db.execute(
                                 select(
@@ -865,6 +858,12 @@ async def monitor_new_messages():
                                 db.add(message_metadata)
                             await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before updating message metadata                                
                             await retry_on_database_locked(db.commit)
+                            # Process broadcast messages concurrently
+                            processing_tasks = [
+                                process_broadcast_messages(message, db)
+                                for message in new_messages
+                            ]
+                            await asyncio.gather(*processing_tasks)
                 await asyncio.sleep(5)
         except Exception as e:
             logger.error(f"Error while monitoring new messages: {str(e)}")
