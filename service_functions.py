@@ -1196,7 +1196,7 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
         logger.error(f"Error processing inference confirmation: {str(e)}")
         raise
 
-async def save_inference_output_results(inference_request_id: str, inference_response_id: str, output_results: dict) -> None:
+async def save_inference_output_results(inference_request_id: str, inference_response_id: str, output_results: dict, output_results_file_type_strings: dict) -> None:
     try:
         _, _, local_supernode_pastelid, _ = await get_local_machine_supernode_data_func()
         # Generate a unique identifier for the inference result
@@ -1214,6 +1214,7 @@ async def save_inference_output_results(inference_request_id: str, inference_res
             inference_response_id=inference_response_id,
             responding_supernode_pastelid=local_supernode_pastelid,
             inference_result_json_base64=base64.b64encode(json.dumps(output_results).encode("utf-8")).decode("utf-8"),
+            inference_result_file_type_strings=json.dumps(output_results_file_type_strings),
             responding_supernode_signature_on_inference_result_id=supernode_pastelid_and_signature_on_inference_result_id
         )
         async with AsyncSessionLocal() as db:
@@ -1247,16 +1248,13 @@ async def execute_inference_request(inference_request_id: str) -> None:
             "output_text": "This is the generated output text.",
             "output_files": []
         }
-        # Save the inference output results to the database
-        await save_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results)
-        # Send a notification to the requesting party that the results are ready
-        notification_message = {
-            "type": "inference_result_notification",
-            "inference_request_id": inference_request_id,
-            "inference_response_id": inference_response.inference_response_id,
-            "message": "Your inference request has been processed. You can retrieve the results using the provided inference_response_id."
+        # Will use magika library to identify all types of any binary file data, which will be base64 encoded and zstd compressed.
+        output_results_file_type_strings = {
+            "output_text": "text",  
+            "output_files": ["NA"]
         }
-        await send_notification(inference_request.requesting_pastelid, notification_message)
+        # Save the inference output results to the database
+        await save_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results, output_results_file_type_strings)
     except Exception as e:
         logger.error(f"Error executing inference request: {str(e)}")
         raise
@@ -1284,41 +1282,11 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
             inference_response_id=inference_output_result.inference_response_id,
             responding_supernode_pastelid=inference_output_result.responding_supernode_pastelid,
             inference_result_json_base64=inference_output_result.inference_result_json_base64,
+            inference_result_file_type_strings=inference_output_result.inference_result_file_type_strings,
             responding_supernode_signature_on_inference_result_id=inference_output_result.responding_supernode_signature_on_inference_result_id
         )
         return inference_output_results_model
 
-async def send_notification(pastelid: str, notification_message: dict) -> None:
-    try:
-        # Retrieve the closest Supernodes to the receiving PastelID
-        supernode_list_df, _ = await check_supernode_list_func()
-        closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, pastelid, supernode_list_df)
-        if not closest_supernodes:
-            logger.warning(f"No Supernodes found for PastelID: {pastelid}")
-            return
-        # Prepare the notification message
-        notification_message_str = json.dumps(notification_message, ensure_ascii=False)
-        # Sign the notification message with the local Supernode's PastelID
-        _, _, local_supernode_pastelid, _ = await get_local_machine_supernode_data_func()
-        notification_signature = await sign_message_with_pastelid_func(local_supernode_pastelid, notification_message_str, LOCAL_PASTEL_ID_PASSPHRASE)
-        # Send the notification message via the closest Supernodes in parallel
-        send_tasks = []
-        for supernode_url, supernode_pastelid in closest_supernodes:
-            send_task = asyncio.create_task(send_user_message_via_supernodes(
-                from_pastelid=local_supernode_pastelid,
-                to_pastelid=pastelid,
-                message_body=notification_message_str,
-                message_signature=notification_signature,
-                supernode_url=supernode_url
-            ))
-            send_tasks.append(send_task)
-        # Wait for all send tasks to complete
-        await asyncio.gather(*send_tasks)
-        logger.info(f"Notification sent to PastelID: {pastelid} via {len(closest_supernodes)} closest Supernodes")
-    except Exception as e:
-        logger.error(f"Error sending notification: {str(e)}")
-        raise
-    
 async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address):
     """
     Determines the current credit balance of an inference credit pack based on the tracking transactions.

@@ -798,24 +798,26 @@ class PastelMessagingClient:
             result = response.json()
             return result
 
-    async def get_inference_output_results(self, supernode_url: str, inference_request_id: str, inference_response_id: str) -> Dict[str, Any]:
+    async def retrieve_inference_output_results(self, supernode_url: str, inference_request_id: str, inference_response_id: str) -> Dict[str, Any]:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-
+        # Parameters to be sent in the query string
         params = {
-            "inference_request_id": inference_request_id,
             "inference_response_id": inference_response_id,
+            "pastelid": self.pastelid,
             "challenge": challenge,
             "challenge_id": challenge_id,
             "challenge_signature": challenge_signature
         }
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.get(f"{supernode_url}/get_inference_output_results", params=params)
+            # Use POST method but with query parameters
+            response = await client.post(f"{supernode_url}/retrieve_inference_output_results", params=params)
             response.raise_for_status()
             result = response.json()
             return result
+        
         
 async def send_message_and_check_for_new_incoming_messages(
     to_pastelid: str,
@@ -915,6 +917,7 @@ async def handle_inference_request_end_to_end(
     logger.info(f"Received inference API usage request response from SN:\n {usage_request_response}")
     # Extract the relevant information from the response
     inference_request_id = usage_request_response["inference_request_id"]
+    inference_response_id = usage_request_response["inference_response_id"]
     proposed_cost_in_credits = float(usage_request_response["proposed_cost_of_request_in_inference_credits"])
     credit_usage_tracking_psl_address = usage_request_response["credit_usage_tracking_psl_address"]
     try:
@@ -949,60 +952,25 @@ async def handle_inference_request_end_to_end(
                 # Send the inference confirmation
                 confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data)
                 logger.info(f"Sent inference confirmation: {confirmation_result}")
-                # Wait for the confirmation message via the messaging system
-                inference_response_id = None
                 max_tries_to_get_confirmation = 10
                 initial_wait_time_in_seconds = 5
                 wait_time_in_seconds = initial_wait_time_in_seconds
-                # Get the 3 closest Supernodes to check for user messages
-                closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, MY_LOCAL_PASTELID, supernode_list_df)
-                logger.info(f"Closest Supernodes for checking user messages: {[sn[1] for sn in closest_supernodes]}")
                 for cnt in range(max_tries_to_get_confirmation):
                     wait_time_in_seconds = wait_time_in_seconds*(1.15**cnt)
-                    message_retrieval_tasks = []
-                    for supernode_url, supernode_pastelid in closest_supernodes:
-                        message_retrieval_task = asyncio.create_task(messaging_client.get_user_messages(supernode_url))
-                        message_retrieval_tasks.append(message_retrieval_task)
-                    message_lists = await asyncio.gather(*message_retrieval_tasks)
-                    for message_list in message_lists:
-                        for message in message_list:
-                            if "type" in message and message["type"] == "inference_result_notification":
-                                if message["inference_request_id"] == inference_request_id:
-                                    inference_response_id = message["inference_response_id"]
-                                    break
-                    if inference_response_id is not None:
-                        break
-                    logger.info(f"Waiting for the inference result notification for {round(wait_time_in_seconds, 1)} seconds... (Attempt {cnt+1}/{max_tries_to_get_confirmation}); Checking with Supernodes: {[sn[1] for sn in closest_supernodes]}")
+                    logger.info(f"Waiting for the inference results for {round(wait_time_in_seconds, 1)} seconds... (Attempt {cnt+1}/{max_tries_to_get_confirmation}); Checking with Supernode URL: {supernode_url}")
                     await asyncio.sleep(wait_time_in_seconds)
-                if inference_response_id is None:
-                    logger.error(f"Failed to get the inference result notification after {max_tries_to_get_confirmation} attempts. Returning what we have so far...")
-                    # Return what we have so far:
+                    # Get the inference output results
+                    output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
+                    logger.info(f"Retrieved inference output results: {output_results}")
+                    # Create the inference_result_dict with all relevant information
                     inference_result_dict = {
-                        "inference_request_id": inference_request_id,
-                        "inference_response_id": inference_response_id,
-                        "usage_request_response": usage_request_response,
-                        "sample_text_completion": input_prompt_text_to_llm,
-                        "request_data": request_data.dict(),
-                        "tracking_transaction_txid": tracking_transaction_txid,
                         "supernode_url": supernode_url,
-                        "output_results": "NA"
-                    }                
+                        "request_data": request_data.dict(),
+                        "usage_request_response": usage_request_response,
+                        "input_prompt_text_to_llm": input_prompt_text_to_llm,
+                        "output_results": output_results
+                    }
                     return inference_result_dict
-                # Get the inference output results
-                output_results = await messaging_client.get_inference_output_results(supernode_url, inference_request_id, inference_response_id)
-                logger.info(f"Retrieved inference output results: {output_results}")
-                # Create the inference_result_dict with all relevant information
-                inference_result_dict = {
-                    "inference_request_id": inference_request_id,
-                    "inference_response_id": inference_response_id,
-                    "usage_request_response": usage_request_response,
-                    "sample_text_completion": input_prompt_text_to_llm,
-                    "request_data": request_data.dict(),
-                    "tracking_transaction_txid": tracking_transaction_txid,
-                    "supernode_url": supernode_url,
-                    "output_results": output_results
-                }
-                return inference_result_dict
             else:
                 logger.error(f"Invalid tracking transaction TXID: {tracking_transaction_txid}")
         else:

@@ -518,9 +518,9 @@ async def confirm_inference_request_endpoint(
         raise HTTPException(status_code=500, detail=f"Error sending inference confirmation: {str(e)}")
 
 
-@router.get("/get_inference_output_results/{inference_response_id}", response_model=db.InferenceOutputResultsModel)
-async def get_inference_output_results_endpoint(
-    inference_response_id: str,
+@router.post("/retrieve_inference_output_results", response_model=db.InferenceOutputResultsModel)
+async def retrieve_inference_output_results_endpoint(
+    inference_response_id: str = Query(..., description="The ResponseID Associated with the Inference Request"),
     pastelid: str = Query(..., description="The PastelID of the requesting party"),
     challenge: str = Query(..., description="The challenge string"),
     challenge_id: str = Query(..., description="The ID of the challenge string"),
@@ -531,8 +531,7 @@ async def get_inference_output_results_endpoint(
         is_valid_signature = await service_functions.verify_challenge_signature(pastelid, challenge_signature, challenge_id)
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        inference_output_results = await service_functions.get_inference_output_results_and_verify_authorization(
-            inference_response_id, pastelid)
+        inference_output_results = await service_functions.get_inference_output_results_and_verify_authorization(inference_response_id, pastelid)
         return inference_output_results
     except Exception as e:
         logger.error(f"Error retrieving inference output results: {str(e)}")

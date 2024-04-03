@@ -192,6 +192,7 @@ class InferenceAPIOutputResult(Base):
     inference_response_id = Column(String, ForeignKey("inference_api_usage_responses.inference_response_id"), index=True)
     responding_supernode_pastelid = Column(String, index=True)
     inference_result_json_base64 = Column(String)
+    inference_result_file_type_strings = Column(String)
     responding_supernode_signature_on_inference_result_id = Column(String)
 
 class InferenceOutputResultsModel(BaseModel):
@@ -200,6 +201,7 @@ class InferenceOutputResultsModel(BaseModel):
     inference_response_id: str
     responding_supernode_pastelid: str
     inference_result_json_base64: str
+    inference_result_file_type_strings: str
     responding_supernode_signature_on_inference_result_id: str
     
 # Add a new model for storing inference credit packs
