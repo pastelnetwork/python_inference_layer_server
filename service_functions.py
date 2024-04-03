@@ -557,70 +557,6 @@ async def list_sn_messages_func():
 
     return combined_messages_df
 
-# async def list_sn_messages_func():
-#     global rpc_connection
-#     datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
-#     supernode_list_df, _ = await check_supernode_list_func()
-#     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
-#     async with AsyncSessionLocal() as db:
-#         # Retrieve messages from the database
-#         result = await db.execute(select(Message).where(Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages).order_by(Message.timestamp.desc()))
-#         db_messages_df = pd.DataFrame([message.to_dict() for message in result.scalars().all()])
-#         if not db_messages_df.empty:
-#             db_messages_df['timestamp'] = pd.to_datetime(db_messages_df['timestamp'], errors='coerce')
-#         # Retrieve new messages from the RPC interface
-#         new_messages = await rpc_connection.masternode('message', 'list')
-#         new_messages_data = []
-#         for message in new_messages:
-#             message_key = list(message.keys())[0]
-#             message = message[message_key]
-#             sending_sn_txid_vout = message['From']
-#             receiving_sn_txid_vout = message['To']
-#             sending_pastelid = txid_vout_to_pastelid_dict.get(sending_sn_txid_vout)
-#             receiving_pastelid = txid_vout_to_pastelid_dict.get(receiving_sn_txid_vout)
-#             if sending_pastelid is None or receiving_pastelid is None:
-#                 logger.warning(f"Skipping message due to missing PastelID for txid_vout: {sending_sn_txid_vout} or {receiving_sn_txid_vout}")
-#                 continue
-#             message_timestamp = parse_timestamp(datetime.fromtimestamp(message['Timestamp']).isoformat())
-#             # Check if the message already exists in the database
-#             if not db_messages_df.empty:
-#                 existing_message = db_messages_df[
-#                     (db_messages_df['sending_sn_pastelid'] == sending_pastelid) &
-#                     (db_messages_df['receiving_sn_pastelid'] == receiving_pastelid) &
-#                     (db_messages_df['timestamp'] == message_timestamp)
-#                 ]
-#                 if not existing_message.empty:
-#                     logger.debug("Message already exists in the database. Skipping...")
-#                     continue
-#             message_body = base64.b64decode(message['Message'].encode('utf-8'))
-#             verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
-#             decompressed_message = await decompress_data_with_zstd_func(message_body)
-#             decompressed_message = decompressed_message.decode('utf-8')
-#             try:
-#                 message_dict = json.loads(decompressed_message)
-#             except json.JSONDecodeError as e:
-#                 logger.error(f"Error parsing JSON: {e}")
-#                 logger.error(f"Decompressed message: {decompressed_message}")
-#                 continue
-#             if verification_status == 'OK':
-#                 new_message = {
-#                     'sending_sn_pastelid': sending_pastelid,
-#                     'receiving_sn_pastelid': receiving_pastelid,
-#                     'message_type': message_dict['message_type'],
-#                     'message_body': decompressed_message,
-#                     'signature': message_dict['signature'],
-#                     'timestamp': message_timestamp,
-#                     'sending_sn_txid_vout': sending_sn_txid_vout,
-#                     'receiving_sn_txid_vout': receiving_sn_txid_vout
-#                 }
-#                 new_messages_data.append(new_message)
-#         new_messages_df = pd.DataFrame(new_messages_data)
-#         combined_messages_df = pd.concat([db_messages_df, new_messages_df], ignore_index=True)
-#         if not combined_messages_df.empty:
-#             combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
-#             combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
-#     return combined_messages_df
-
 async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase) -> str:
     global rpc_connection
     results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
@@ -760,40 +696,41 @@ async def retry_on_database_locked(func, *args, max_retries=5, initial_delay=1, 
             else:
                 raise
             
-async def process_broadcast_messages(message, db_session):
-    message_body = json.loads(message.message_body)
-    if message.message_type == 'inference_request_response_announcement_message':
-        response_data = json.loads(message_body['message'])
-        usage_response = InferenceAPIUsageResponse(
-            inference_response_id=response_data['inference_response_id'],
-            inference_request_id=response_data['inference_request_id'],
-            proposed_cost_of_request_in_inference_credits=response_data['proposed_cost_of_request_in_inference_credits'],
-            remaining_credits_in_pack_after_request_processed=response_data['remaining_credits_in_pack_after_request_processed'],
-            credit_usage_tracking_psl_address=response_data['credit_usage_tracking_psl_address'],
-            request_confirmation_message_amount_in_patoshis=response_data['request_confirmation_message_amount_in_patoshis'],
-            max_block_height_to_include_confirmation_transaction=response_data['max_block_height_to_include_confirmation_transaction'],
-            supernode_pastelid_and_signature_on_inference_response_id=response_data['supernode_pastelid_and_signature_on_inference_response_id']
-        )
-        await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
-        await retry_on_database_locked(db_session.add, usage_response)
-        await retry_on_database_locked(db_session.commit)
-        await retry_on_database_locked(db_session.refresh, usage_response)
-    elif message.message_type == 'inference_request_result_announcement_message':
-        result_data = json.loads(message_body['message'])
-        output_result = InferenceAPIOutputResult(
-            inference_result_id=result_data['inference_result_id'],
-            inference_request_id=result_data['inference_request_id'],
-            inference_response_id=result_data['inference_response_id'],
-            responding_supernode_pastelid=result_data['responding_supernode_pastelid'],
-            inference_result_json_base64=result_data['inference_result_json_base64'],
-            inference_result_file_type_strings=result_data['inference_result_file_type_strings'],
-            responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id']
-        )
-        await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
-        await retry_on_database_locked(db_session.add, output_result)
-        await retry_on_database_locked(db_session.commit)
-        await retry_on_database_locked(db_session.refresh, output_result)
-        
+async def process_broadcast_messages(message):
+    async with AsyncSessionLocal() as db_session:
+        message_body = json.loads(message.message_body)
+        if message.message_type == 'inference_request_response_announcement_message':
+            response_data = json.loads(message_body['message'])
+            usage_response = InferenceAPIUsageResponse(
+                inference_response_id=response_data['inference_response_id'],
+                inference_request_id=response_data['inference_request_id'],
+                proposed_cost_of_request_in_inference_credits=response_data['proposed_cost_of_request_in_inference_credits'],
+                remaining_credits_in_pack_after_request_processed=response_data['remaining_credits_in_pack_after_request_processed'],
+                credit_usage_tracking_psl_address=response_data['credit_usage_tracking_psl_address'],
+                request_confirmation_message_amount_in_patoshis=response_data['request_confirmation_message_amount_in_patoshis'],
+                max_block_height_to_include_confirmation_transaction=response_data['max_block_height_to_include_confirmation_transaction'],
+                supernode_pastelid_and_signature_on_inference_response_id=response_data['supernode_pastelid_and_signature_on_inference_response_id']
+            )
+            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
+            await retry_on_database_locked(db_session.add, usage_response)
+            await retry_on_database_locked(db_session.commit)
+            await retry_on_database_locked(db_session.refresh, usage_response)
+        elif message.message_type == 'inference_request_result_announcement_message':
+            result_data = json.loads(message_body['message'])
+            output_result = InferenceAPIOutputResult(
+                inference_result_id=result_data['inference_result_id'],
+                inference_request_id=result_data['inference_request_id'],
+                inference_response_id=result_data['inference_response_id'],
+                responding_supernode_pastelid=result_data['responding_supernode_pastelid'],
+                inference_result_json_base64=result_data['inference_result_json_base64'],
+                inference_result_file_type_strings=result_data['inference_result_file_type_strings'],
+                responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id']
+            )
+            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
+            await retry_on_database_locked(db_session.add, output_result)
+            await retry_on_database_locked(db_session.commit)
+            await retry_on_database_locked(db_session.refresh, output_result)
+            
 async def monitor_new_messages():
     last_processed_timestamp = None
     while True:
@@ -897,7 +834,7 @@ async def monitor_new_messages():
                             ]
                             await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding messages                            
                             await retry_on_database_locked(db.add_all, new_messages)
-                            await db.commit()  # Commit the transaction for adding new messages                            
+                            await retry_on_database_locked(db.commit)  # Commit the transaction for adding new messages
                             # Process broadcast messages concurrently
                             processing_tasks = [
                                 process_broadcast_messages(message, db)
