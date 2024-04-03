@@ -560,7 +560,7 @@ async def audit_inference_request_response_endpoint(
     try:
         # Verify the challenge signature
         is_valid_signature = await service_functions.verify_challenge_signature(
-            challenge_signature, challenge_id
+            challenge_signature, challenge, challenge_id
         )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
@@ -595,7 +595,7 @@ async def audit_inference_request_result_endpoint(
     try:
         # Verify the challenge signature
         is_valid_signature = await service_functions.verify_challenge_signature(
-            challenge_signature, challenge_id
+            challenge_signature, challenge, challenge_id
         )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")

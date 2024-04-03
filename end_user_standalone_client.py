@@ -870,6 +870,29 @@ class PastelMessagingClient:
                 logger.info(f"  Supernode PastelID and Signature: {result.get('supernode_pastelid_and_signature_on_inference_response_id')}")
         return audit_results
         
+    async def audit_inference_request_result_id(self, inference_response_id: str, pastelid_of_supernode_to_audit: str):
+        supernode_list_df, _ = await check_supernode_list_func()
+        n = 4
+        supernode_urls_and_pastelids = await get_n_closest_supernodes_to_pastelid_urls(n, self.pastelid, supernode_list_df)
+        list_of_supernode_pastelids = [x[1] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
+        list_of_supernode_urls = [x[0] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
+        list_of_supernode_ips = [x.split('//')[1].split(':')[0] for x in list_of_supernode_urls]
+        logger.info(f"Now attempting to audit inference request result with ID {inference_response_id} with {len(list_of_supernode_pastelids)} closest supernodes (with Supernode IPs of {list_of_supernode_ips})...")
+        audit_tasks = [self.audit_inference_request_result(url, inference_response_id) for url in list_of_supernode_urls]
+        audit_results = await asyncio.gather(*audit_tasks)
+        logger.info(f"Audit results for inference response ID {inference_response_id}:")
+        for i, result in enumerate(audit_results):
+            if len(result) > 0:
+                logger.info(f"Supernode {i+1} (IP: {list_of_supernode_ips[i]}):")
+                logger.info(f"  Inference Result ID: {result.get('inference_result_id')}")
+                logger.info(f"  Inference Request ID: {result.get('inference_request_id')}")
+                logger.info(f"  Inference Response ID: {result.get('inference_response_id')}")
+                logger.info(f"  Responding Supernode PastelID: {result.get('responding_supernode_pastelid')}")
+                logger.info(f"  Inference Result JSON (Base64): {result.get('inference_result_json_base64')}")
+                logger.info(f"  Inference Result File Type Strings: {result.get('inference_result_file_type_strings')}")
+                logger.info(f"  Responding Supernode Signature on Result ID: {result.get('responding_supernode_signature_on_inference_result_id')}")
+        return audit_results        
+        
         
 async def send_message_and_check_for_new_incoming_messages(
     to_pastelid: str,

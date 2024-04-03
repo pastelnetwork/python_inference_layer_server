@@ -735,8 +735,8 @@ async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_past
     return signed_message
     
 async def process_broadcast_messages(message, db_session):
-    if message['message_type'] == 'inference_request_response_announcement_message':
-        response_data = json.loads(message['message_body'])
+    if message.message_type == 'inference_request_response_announcement_message':
+        response_data = json.loads(message.message_body)
         usage_response = InferenceAPIUsageResponse(
             inference_response_id=response_data['inference_response_id'],
             inference_request_id=response_data['inference_request_id'],
@@ -750,8 +750,8 @@ async def process_broadcast_messages(message, db_session):
         db_session.add(usage_response)
         await db_session.commit()
         await db_session.refresh(usage_response)
-    elif message['message_type'] == 'inference_request_result_announcement_message':
-        result_data = json.loads(message['message_body'])
+    elif message.message_type == 'inference_request_result_announcement_message':
+        result_data = json.loads(message.message_body)
         output_result = InferenceAPIOutputResult(
             inference_result_id=result_data['inference_result_id'],
             inference_request_id=result_data['inference_request_id'],
@@ -866,7 +866,6 @@ async def monitor_new_messages():
                                 for _, row in new_messages_df.iterrows()
                             ]
                             db.add_all(new_messages)
-                            
                             # Process broadcast messages concurrently
                             processing_tasks = [
                                 process_broadcast_messages(message, db)
