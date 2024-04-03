@@ -707,18 +707,18 @@ async def process_broadcast_messages(message, db_session):
             requested_model_canonical_string=response_data['requested_model_canonical_string'],
             model_parameters_json=response_data['model_parameters_json'],
             model_input_data_json_b64=response_data['model_input_data_json_b64'],
-            total_psl_cost_for_pack=response_data['total_psl_cost_for_pack'],
-            initial_credit_balance=response_data['initial_credit_balance'],
+            total_psl_cost_for_pack=Decimal(response_data['total_psl_cost_for_pack']),
+            initial_credit_balance=Decimal(response_data['initial_credit_balance']),
             requesting_pastelid_signature=response_data['requesting_pastelid_signature']
         )
         usage_response = InferenceAPIUsageResponse(
             inference_response_id=response_data['inference_response_id'],
             inference_request_id=response_data['inference_request_id'],
-            proposed_cost_of_request_in_inference_credits=response_data['proposed_cost_of_request_in_inference_credits'],
-            remaining_credits_in_pack_after_request_processed=response_data['remaining_credits_in_pack_after_request_processed'],
+            proposed_cost_of_request_in_inference_credits=Decimal(response_data['proposed_cost_of_request_in_inference_credits']),
+            remaining_credits_in_pack_after_request_processed=Decimal(response_data['remaining_credits_in_pack_after_request_processed']),
             credit_usage_tracking_psl_address=response_data['credit_usage_tracking_psl_address'],
-            request_confirmation_message_amount_in_patoshis=response_data['request_confirmation_message_amount_in_patoshis'],
-            max_block_height_to_include_confirmation_transaction=response_data['max_block_height_to_include_confirmation_transaction'],
+            request_confirmation_message_amount_in_patoshis=int(response_data['request_confirmation_message_amount_in_patoshis']),
+            max_block_height_to_include_confirmation_transaction=int(response_data['max_block_height_to_include_confirmation_transaction']),
             supernode_pastelid_and_signature_on_inference_response_id=response_data['supernode_pastelid_and_signature_on_inference_response_id']
         )
         await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing
