@@ -298,8 +298,8 @@ async def get_db():
     finally:
         await db.close()
 
-engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False}, execution_options={"isolation_level": "READ COMMITTED"})
-    
+engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False}, execution_options={"isolation_level": "SERIALIZABLE"})    
+
 AsyncSessionLocal = sessionmaker(
     bind=engine,
     class_=AsyncSession,
@@ -331,14 +331,16 @@ async def initialize_db():
         "Disable the secure delete feature to improve deletion performance at the cost of potentially leaving deleted data recoverable"
     ]
     assert(len(list_of_sqlite_pragma_strings) == len(list_of_sqlite_pragma_justification_strings))
-
     try:
         async with engine.begin() as conn:
-            for pragma_string in list_of_sqlite_pragma_strings:
-                await conn.execute(sql_text(pragma_string))
-            await conn.run_sync(Base.metadata.create_all)  # Create tables if they don't exist
+            try:
+                for pragma_string in list_of_sqlite_pragma_strings:
+                    await conn.execute(sql_text(pragma_string))
+                await conn.run_sync(Base.metadata.create_all)  # Create tables if they don't exist
+            finally:
+                await conn.close()  # Close the connection explicitly
         await engine.dispose()
         return True
     except Exception as e:
         logger.error(f"Database Initialization Error: {e}")
-        return False    
+        return False
