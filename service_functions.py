@@ -1379,6 +1379,13 @@ async def update_inference_sn_reputation_score(supernode_pastelid: str, reputati
     except Exception as e:
         logger.error(f"Error updating inference SN reputation score: {str(e)}")
         raise
+    
+async def get_inference_api_usage_request_for_audit(inference_request_id: str) -> InferenceAPIUsageRequest:
+    async with AsyncSessionLocal() as db_session:
+        result = await db_session.execute(
+            select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
+        )
+        return result.scalar_one_or_none()    
         
 async def get_inference_api_usage_response_for_audit(inference_response_id: str) -> InferenceAPIUsageResponse:
     async with AsyncSessionLocal() as db_session:
