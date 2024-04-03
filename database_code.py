@@ -298,7 +298,7 @@ async def get_db():
     finally:
         await db.close()
 
-engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
+engine = create_async_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False},  execution_options={"isolation_level": "READ COMMITTED"}, pool_size=20, max_overflow=10)
     
 AsyncSessionLocal = sessionmaker(
     bind=engine,
@@ -309,18 +309,26 @@ AsyncSessionLocal = sessionmaker(
 
 async def initialize_db():
     list_of_sqlite_pragma_strings = [
-        "PRAGMA journal_mode=WAL;", 
-        "PRAGMA synchronous = NORMAL;", 
-        "PRAGMA cache_size = -262144;", 
-        "PRAGMA busy_timeout = 2000;", 
-        "PRAGMA wal_autocheckpoint = 100;"
+        "PRAGMA journal_mode=WAL;",
+        "PRAGMA synchronous = NORMAL;",
+        "PRAGMA cache_size = -262144;",
+        "PRAGMA busy_timeout = 2000;",
+        "PRAGMA wal_autocheckpoint = 100;",
+        "PRAGMA mmap_size = 30000000000;",
+        "PRAGMA threads = 4;",
+        "PRAGMA optimize;",
+        "PRAGMA secure_delete = OFF;"
     ]
     list_of_sqlite_pragma_justification_strings = [
         "Set SQLite to use Write-Ahead Logging (WAL) mode (from default DELETE mode) so that reads and writes can occur simultaneously",
         "Set synchronous mode to NORMAL (from FULL) so that writes are not blocked by reads",
         "Set cache size to 1GB (from default 2MB) so that more data can be cached in memory and not read from disk; to make this 256MB, set it to -262144 instead",
         "Increase the busy timeout to 2 seconds so that the database waits",
-        "Set the WAL autocheckpoint to 100 (from default 1000) so that the WAL file is checkpointed more frequently"
+        "Set the WAL autocheckpoint to 100 (from default 1000) so that the WAL file is checkpointed more frequently",
+        "Set the maximum size of the memory-mapped I/O cache to 30GB to improve performance by accessing the database file directly from memory",
+        "Enable multi-threaded mode in SQLite and set the number of worker threads to 4 to allow concurrent access to the database",
+        "Optimize the database by running a set of optimization steps to improve query performance",
+        "Disable the secure delete feature to improve deletion performance at the cost of potentially leaving deleted data recoverable"
     ]
     assert(len(list_of_sqlite_pragma_strings) == len(list_of_sqlite_pragma_justification_strings))
 
@@ -333,5 +341,4 @@ async def initialize_db():
         return True
     except Exception as e:
         logger.error(f"Database Initialization Error: {e}")
-        return False
-    
+        return False    

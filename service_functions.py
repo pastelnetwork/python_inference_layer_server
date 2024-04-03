@@ -774,7 +774,6 @@ async def process_broadcast_messages(message, db_session):
             max_block_height_to_include_confirmation_transaction=response_data['max_block_height_to_include_confirmation_transaction'],
             supernode_pastelid_and_signature_on_inference_response_id=response_data['supernode_pastelid_and_signature_on_inference_response_id']
         )
-        db_session.add(usage_response)
         await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
         await retry_on_database_locked(db_session.add, usage_response)
         await retry_on_database_locked(db_session.commit)
@@ -790,7 +789,6 @@ async def process_broadcast_messages(message, db_session):
             inference_result_file_type_strings=result_data['inference_result_file_type_strings'],
             responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id']
         )
-        db_session.add(output_result)
         await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
         await retry_on_database_locked(db_session.add, output_result)
         await retry_on_database_locked(db_session.commit)
@@ -899,6 +897,7 @@ async def monitor_new_messages():
                             ]
                             await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding messages                            
                             await retry_on_database_locked(db.add_all, new_messages)
+                            await db.commit()  # Commit the transaction for adding new messages                            
                             # Process broadcast messages concurrently
                             processing_tasks = [
                                 process_broadcast_messages(message, db)
@@ -933,6 +932,9 @@ async def monitor_new_messages():
         except Exception as e:
             logger.error(f"Error while monitoring new messages: {str(e)}")
             await asyncio.sleep(5)
+        finally:
+            await db.close()  # Close the session explicitly
+            await asyncio.sleep(5)            
             
 async def create_user_message(from_pastelid: str, to_pastelid: str, message_body: str, message_signature: str) -> dict:
     async with AsyncSessionLocal() as db:
