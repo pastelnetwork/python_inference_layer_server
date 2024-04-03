@@ -700,6 +700,17 @@ async def process_broadcast_messages(message, db_session):
     message_body = json.loads(message.message_body)
     if message.message_type == 'inference_request_response_announcement_message':
         response_data = json.loads(message_body['message'])
+        usage_request = InferenceAPIUsageRequest(
+            inference_request_id=response_data['inference_request_id'],
+            requesting_pastelid=response_data['requesting_pastelid'],
+            credit_pack_identifier=response_data['credit_pack_identifier'],
+            requested_model_canonical_string=response_data['requested_model_canonical_string'],
+            model_parameters_json=response_data['model_parameters_json'],
+            model_input_data_json_b64=response_data['model_input_data_json_b64'],
+            total_psl_cost_for_pack=response_data['total_psl_cost_for_pack'],
+            initial_credit_balance=response_data['initial_credit_balance'],
+            requesting_pastelid_signature=response_data['requesting_pastelid_signature']
+        )
         usage_response = InferenceAPIUsageResponse(
             inference_response_id=response_data['inference_response_id'],
             inference_request_id=response_data['inference_request_id'],
@@ -710,9 +721,11 @@ async def process_broadcast_messages(message, db_session):
             max_block_height_to_include_confirmation_transaction=response_data['max_block_height_to_include_confirmation_transaction'],
             supernode_pastelid_and_signature_on_inference_response_id=response_data['supernode_pastelid_and_signature_on_inference_response_id']
         )
-        await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
+        await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing
+        await retry_on_database_locked(db_session.add, usage_request)
         await retry_on_database_locked(db_session.add, usage_response)
         await retry_on_database_locked(db_session.commit)
+        await retry_on_database_locked(db_session.refresh, usage_request)
         await retry_on_database_locked(db_session.refresh, usage_response)
     elif message.message_type == 'inference_request_result_announcement_message':
         result_data = json.loads(message_body['message'])
@@ -725,11 +738,11 @@ async def process_broadcast_messages(message, db_session):
             inference_result_file_type_strings=result_data['inference_result_file_type_strings'],
             responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id']
         )
-        await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing        
+        await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing
         await retry_on_database_locked(db_session.add, output_result)
         await retry_on_database_locked(db_session.commit)
         await retry_on_database_locked(db_session.refresh, output_result)
-            
+        
 async def monitor_new_messages():
     last_processed_timestamp = None
     while True:
