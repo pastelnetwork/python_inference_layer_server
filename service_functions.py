@@ -735,8 +735,9 @@ async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_past
     return signed_message
     
 async def process_broadcast_messages(message, db_session):
+    message_body = json.loads(message.message_body)
     if message.message_type == 'inference_request_response_announcement_message':
-        response_data = json.loads(message.message_body)
+        response_data = json.loads(message_body['message'])
         usage_response = InferenceAPIUsageResponse(
             inference_response_id=response_data['inference_response_id'],
             inference_request_id=response_data['inference_request_id'],
@@ -751,7 +752,7 @@ async def process_broadcast_messages(message, db_session):
         await db_session.commit()
         await db_session.refresh(usage_response)
     elif message.message_type == 'inference_request_result_announcement_message':
-        result_data = json.loads(message.message_body)
+        result_data = json.loads(message_body['message'])
         output_result = InferenceAPIOutputResult(
             inference_result_id=result_data['inference_result_id'],
             inference_request_id=result_data['inference_request_id'],
@@ -764,7 +765,7 @@ async def process_broadcast_messages(message, db_session):
         db_session.add(output_result)
         await db_session.commit()
         await db_session.refresh(output_result)
-            
+        
 async def monitor_new_messages():
     last_processed_timestamp = None
     while True:

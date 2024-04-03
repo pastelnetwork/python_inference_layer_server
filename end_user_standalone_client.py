@@ -816,17 +816,13 @@ class PastelMessagingClient:
             result = response.json()
             return result
 
-    async def audit_inference_request_response(self, supernode_url: str, inference_response_id: str) -> Dict[str, Any]:
+    async def call_audit_inference_request_response(self, supernode_url: str, inference_response_id: str) -> Dict[str, Any]:
         try:
-            challenge_result = await self.request_and_sign_challenge(supernode_url)
-            challenge = challenge_result["challenge"]
-            challenge_id = challenge_result["challenge_id"]
-            challenge_signature = challenge_result["signature"]
+            signature = await sign_message_with_pastelid_func(self.pastelid, inference_response_id, self.passphrase)
             payload = {
                 "inference_response_id": inference_response_id,
-                "challenge": challenge,
-                "challenge_id": challenge_id,
-                "challenge_signature": challenge_signature
+                "pastel_id": self.pastelid,
+                "signature": signature
             }
             async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
                 response = await client.post(f"{supernode_url}/audit_inference_request_response", json=payload)
@@ -854,7 +850,7 @@ class PastelMessagingClient:
         list_of_supernode_urls = [x[0] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
         list_of_supernode_ips = [x.split('//')[1].split(':')[0] for x in list_of_supernode_urls]
         logger.info(f"Now attempting to audit inference request response with ID {inference_response_id} with {len(list_of_supernode_pastelids)} closest supernodes (with Supernode IPs of {list_of_supernode_ips})...")
-        audit_tasks = [self.audit_inference_request_response(url, inference_response_id) for url in list_of_supernode_urls]
+        audit_tasks = [self.call_audit_inference_request_response(url, inference_response_id) for url in list_of_supernode_urls]
         audit_results = await asyncio.gather(*audit_tasks)
         logger.info(f"Audit results for inference response ID {inference_response_id}:")
         for i, result in enumerate(audit_results):
@@ -870,6 +866,31 @@ class PastelMessagingClient:
                 logger.info(f"  Supernode PastelID and Signature: {result.get('supernode_pastelid_and_signature_on_inference_response_id')}")
         return audit_results
         
+    async def call_audit_inference_request_result(self, supernode_url: str, inference_response_id: str) -> Dict[str, Any]:
+        try:
+            signature = await sign_message_with_pastelid_func(self.pastelid, inference_response_id, self.passphrase)
+            payload = {
+                "inference_response_id": inference_response_id,
+                "pastel_id": self.pastelid,
+                "signature": signature
+            }
+            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+                response = await client.post(f"{supernode_url}/audit_inference_request_result", json=payload)
+                response.raise_for_status()
+                result = response.json()
+                return {
+                    "inference_result_id": result.get("inference_result_id"),
+                    "inference_request_id": result.get("inference_request_id"),
+                    "inference_response_id": result.get("inference_response_id"),
+                    "responding_supernode_pastelid": result.get("responding_supernode_pastelid"),
+                    "inference_result_json_base64": result.get("inference_result_json_base64"),
+                    "inference_result_file_type_strings": result.get("inference_result_file_type_strings"),
+                    "responding_supernode_signature_on_inference_result_id": result.get("responding_supernode_signature_on_inference_result_id")
+                }
+        except Exception as e:
+            logger.error(f"Error in audit_inference_request_result from Supernode URL: {supernode_url}: {e}")
+            return {}
+
     async def audit_inference_request_result_id(self, inference_response_id: str, pastelid_of_supernode_to_audit: str):
         supernode_list_df, _ = await check_supernode_list_func()
         n = 4
@@ -878,7 +899,7 @@ class PastelMessagingClient:
         list_of_supernode_urls = [x[0] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
         list_of_supernode_ips = [x.split('//')[1].split(':')[0] for x in list_of_supernode_urls]
         logger.info(f"Now attempting to audit inference request result with ID {inference_response_id} with {len(list_of_supernode_pastelids)} closest supernodes (with Supernode IPs of {list_of_supernode_ips})...")
-        audit_tasks = [self.audit_inference_request_result(url, inference_response_id) for url in list_of_supernode_urls]
+        audit_tasks = [self.call_audit_inference_request_result(url, inference_response_id) for url in list_of_supernode_urls]
         audit_results = await asyncio.gather(*audit_tasks)
         logger.info(f"Audit results for inference response ID {inference_response_id}:")
         for i, result in enumerate(audit_results):
@@ -891,8 +912,8 @@ class PastelMessagingClient:
                 logger.info(f"  Inference Result JSON (Base64): {result.get('inference_result_json_base64')}")
                 logger.info(f"  Inference Result File Type Strings: {result.get('inference_result_file_type_strings')}")
                 logger.info(f"  Responding Supernode Signature on Result ID: {result.get('responding_supernode_signature_on_inference_result_id')}")
-        return audit_results        
-        
+        return audit_results
+            
         
 async def send_message_and_check_for_new_incoming_messages(
     to_pastelid: str,
