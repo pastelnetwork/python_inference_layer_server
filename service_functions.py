@@ -22,6 +22,7 @@ import zstandard as zstd
 from database_code import AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata
 from database_code import InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage, InferenceAPIUsageRequestModel, InferenceConfirmationModel, InferenceOutputResultsModel
 from sqlalchemy import select, func
+from sqlalchemy.exc import OperationalError
 from typing import List, Tuple
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from magika import Magika
@@ -734,6 +735,17 @@ async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_past
     logger.info(f"Broadcasted a {message_type} to {len(list_of_supernode_pastelids)} closest supernodes to PastelID: {input_pastelid} (with Supernode IPs of {list_of_supernode_ips}): {message_body}")
     return signed_message
     
+async def retry_on_database_locked(func, *args, max_retries=3, delay=1, **kwargs):
+    for attempt in range(max_retries):
+        try:
+            return await func(*args, **kwargs)
+        except OperationalError as e:
+            if "database is locked" in str(e) and attempt < max_retries - 1:
+                logger.warning(f"Database locked. Retrying in {delay} second(s)...")
+                await asyncio.sleep(delay)
+            else:
+                raise
+                
 async def process_broadcast_messages(message, db_session):
     message_body = json.loads(message.message_body)
     if message.message_type == 'inference_request_response_announcement_message':
@@ -749,8 +761,9 @@ async def process_broadcast_messages(message, db_session):
             supernode_pastelid_and_signature_on_inference_response_id=response_data['supernode_pastelid_and_signature_on_inference_response_id']
         )
         db_session.add(usage_response)
-        await db_session.commit()
-        await db_session.refresh(usage_response)
+        await retry_on_database_locked(db_session.add, usage_response)
+        await retry_on_database_locked(db_session.commit)
+        await retry_on_database_locked(db_session.refresh, usage_response)
     elif message.message_type == 'inference_request_result_announcement_message':
         result_data = json.loads(message_body['message'])
         output_result = InferenceAPIOutputResult(
@@ -763,8 +776,9 @@ async def process_broadcast_messages(message, db_session):
             responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id']
         )
         db_session.add(output_result)
-        await db_session.commit()
-        await db_session.refresh(output_result)
+        await retry_on_database_locked(db_session.add, output_result)
+        await retry_on_database_locked(db_session.commit)
+        await retry_on_database_locked(db_session.refresh, output_result)
         
 async def monitor_new_messages():
     last_processed_timestamp = None
@@ -866,7 +880,7 @@ async def monitor_new_messages():
                                 )
                                 for _, row in new_messages_df.iterrows()
                             ]
-                            db.add_all(new_messages)
+                            await retry_on_database_locked(db.add_all, new_messages)
                             # Process broadcast messages concurrently
                             processing_tasks = [
                                 process_broadcast_messages(message, db)
@@ -895,7 +909,7 @@ async def monitor_new_messages():
                                     total_receivers=total_receivers
                                 )
                                 db.add(message_metadata)
-                            await db.commit()
+                            await retry_on_database_locked(db.commit)
                 await asyncio.sleep(5)
         except Exception as e:
             logger.error(f"Error while monitoring new messages: {str(e)}")
