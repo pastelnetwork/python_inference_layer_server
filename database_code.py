@@ -143,6 +143,9 @@ class InferenceAPIUsageRequestModel(BaseModel):
     class Config:
         protected_namespaces = ()
 
+    def dict(self, *args, **kwargs):
+        return super().dict(*args, **kwargs)
+    
 class InferenceAPIUsageRequest(Base):
     __tablename__ = "inference_api_usage_requests"
 

@@ -474,11 +474,13 @@ async def make_inference_api_usage_request_endpoint(
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         # Validate and process the inference API usage request
         inference_response = await service_functions.process_inference_api_usage_request(inference_api_usage_request)
-        inference_request_dict = inference_api_usage_request.to_dict()
+        inference_request_dict = inference_api_usage_request.dict()
+        # Abbreviate the 'model_input_data_json_b64' field to the first 32 characters
+        inference_request_dict['model_input_data_json_b64'] = inference_request_dict['model_input_data_json_b64'][:32]        
         inference_response_dict = inference_response.to_dict()
-        combined_dict = {**inference_request_dict, **inference_response_dict}
-        # Broadcast message to nearest SNs to requester's pastelid containing inference response message
-        response_message_body = json.dumps(combined_dict)
+        combined_message_dict = {**inference_request_dict, **inference_response_dict}
+        # Broadcast message to nearest SNs to requester's pastelid containing inference request/response message 
+        response_message_body = json.dumps(combined_message_dict)
         response_message_type = "inference_request_response_announcement_message"
         _ = await service_functions.broadcast_message_to_n_closest_supernodes_to_given_pastelid(inference_api_usage_request.requesting_pastelid, response_message_body, response_message_type) 
         # Return the InferenceAPIUsageResponse as the API response
