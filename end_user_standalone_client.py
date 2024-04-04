@@ -914,6 +914,42 @@ class PastelMessagingClient:
                 logger.info(f"  Responding Supernode Signature on Result ID: {result.get('responding_supernode_signature_on_inference_result_id')}")
         return audit_results
             
+def validate_inference_results(inference_result_dict, audit_results):
+    # Extract relevant fields from inference_result_dict
+    usage_request_response = inference_result_dict["usage_request_response"]
+    inference_response_id = usage_request_response["inference_response_id"]
+    inference_request_id = usage_request_response["inference_request_id"]
+    proposed_cost_in_credits = float(usage_request_response["proposed_cost_of_request_in_inference_credits"])
+    remaining_credits_after_request = float(usage_request_response["remaining_credits_in_pack_after_request_processed"])
+    # Count the occurrences of each value for the relevant fields in audit_results
+    inference_response_id_counts = {}
+    inference_request_id_counts = {}
+    proposed_cost_in_credits_counts = {}
+    remaining_credits_after_request_counts = {}
+    for result in audit_results:
+        if not result:
+            continue
+        if result.get("inference_response_id"):
+            inference_response_id_counts[result["inference_response_id"]] = inference_response_id_counts.get(result["inference_response_id"], 0) + 1
+        if result.get("inference_request_id"):
+            inference_request_id_counts[result["inference_request_id"]] = inference_request_id_counts.get(result["inference_request_id"], 0) + 1
+        if result.get("proposed_cost_of_request_in_inference_credits"):
+            proposed_cost_in_credits_counts[float(result["proposed_cost_of_request_in_inference_credits"])] = proposed_cost_in_credits_counts.get(float(result["proposed_cost_of_request_in_inference_credits"]), 0) + 1
+        if result.get("remaining_credits_in_pack_after_request_processed"):
+            remaining_credits_after_request_counts[float(result["remaining_credits_in_pack_after_request_processed"])] = remaining_credits_after_request_counts.get(float(result["remaining_credits_in_pack_after_request_processed"]), 0) + 1
+    # Determine the majority value for each field
+    majority_inference_response_id = max(inference_response_id_counts, key=inference_response_id_counts.get) if inference_response_id_counts else None
+    majority_inference_request_id = max(inference_request_id_counts, key=inference_request_id_counts.get) if inference_request_id_counts else None
+    majority_proposed_cost_in_credits = max(proposed_cost_in_credits_counts, key=proposed_cost_in_credits_counts.get) if proposed_cost_in_credits_counts else None
+    majority_remaining_credits_after_request = max(remaining_credits_after_request_counts, key=remaining_credits_after_request_counts.get) if remaining_credits_after_request_counts else None
+    # Compare the majority values with the values from the responding supernode
+    validation_results = {
+        "inference_response_id": majority_inference_response_id == inference_response_id,
+        "inference_request_id": majority_inference_request_id == inference_request_id,
+        "proposed_cost_in_credits": majority_proposed_cost_in_credits == proposed_cost_in_credits,
+        "remaining_credits_after_request": majority_remaining_credits_after_request == remaining_credits_after_request
+    }
+    return validation_results
         
 async def send_message_and_check_for_new_incoming_messages(
     to_pastelid: str,
@@ -965,8 +1001,6 @@ async def send_message_and_check_for_new_incoming_messages(
     return message_dict
         
 
-
-        
 async def handle_inference_request_end_to_end(
     input_prompt_text_to_llm: str,
     model_parameters: dict,
@@ -1072,7 +1106,9 @@ async def handle_inference_request_end_to_end(
                         "output_results": output_results
                     }
                     audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
-                    return inference_result_dict, audit_results
+                    validation_results = validate_inference_results(inference_result_dict, audit_results)
+                    logger.info(f"Validation results: {validation_results}")                    
+                    return inference_result_dict, audit_results, validation_results
             else:
                 logger.error(f"Invalid tracking transaction TXID: {tracking_transaction_txid}")
         else:
@@ -1109,7 +1145,7 @@ async def main():
         input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
         model_parameters = {"max_length": 100, "temperature": 0.7}
         max_credit_cost_to_approve_inference_request = 100.0
-        inference_dict, audit_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
+        inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
         logger.info(f"Inference result data: {inference_dict}")
 
 if __name__ == "__main__":
