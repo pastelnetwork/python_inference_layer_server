@@ -1,7 +1,7 @@
 {
   "models": [
     {
-      "model_name": "mistral-7b-instruct-v02",
+      "model_name": "mistral-7b-instruct-v0.2",
       "model_url": "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q5_K_M.gguf",
       "description": "The Mistral-7B-Instruct-v0.2 Large Language Model (LLM) is an instruct fine-tuned version of the Mistral-7B-v0.2. Mistral-7B-v0.2 has the following changes compared to Mistral-7B-v0.1: * 32k context window (vs 8k context in v0.1); *  Rope-theta = 1e6; *No Sliding-Window Attention",
       "supported_inference_type_strings": [
