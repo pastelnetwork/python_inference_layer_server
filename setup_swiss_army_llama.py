@@ -17,13 +17,16 @@ def is_port_available(port):
     except:  # noqa: E722
         return True
 
-def is_swiss_army_llama_responding():
+def is_swiss_army_llama_responding(swiss_army_llama_port: int, security_token: str):
     try:
-        response = httpx.get("http://localhost:8089/get_list_of_available_model_names/")
+        url = f"http://localhost:{swiss_army_llama_port}/get_list_of_available_model_names/"
+        params = {'token': security_token}  # Assuming the token should be passed as a query parameter
+        response = httpx.get(url, params=params)
         return response.status_code == 200
-    except:  # noqa: E722
+    except Exception as e:
+        print(f"Error: {e}")
         return False
-
+    
 def is_pyenv_installed():
     try:
         result = subprocess.run(["pyenv", "--version"], capture_output=True)
@@ -47,14 +50,14 @@ def setup_swiss_army_llama(security_token):
         logger.info("Cloning the Swiss Army Llama repository.")
         command = "git clone https://github.com/Dicklesworthstone/swiss_army_llama"
         logger.info(f"Now running command: {command}")
-        os.system(command)
+        subprocess.run(command, shell=True, executable="/bin/bash")
     else:
         logger.info("Swiss Army Llama repository already exists.")
         logger.info("Pulling the latest changes from the repository.")
         os.chdir(swiss_army_llama_path)
         command = "git pull"
         logger.info(f"Now running command: {command}")
-        os.system(command)
+        subprocess.run(command, shell=True, executable="/bin/bash")
 
     logger.info("Updating the Swiss Army Llama code file with the provided security token.")
     swiss_army_llama_file_path = os.path.join(swiss_army_llama_path, "swiss_army_llama.py")
@@ -71,15 +74,19 @@ def setup_swiss_army_llama(security_token):
         commands = [
             "sudo apt-get update",
             "sudo apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python3-openssl git",
-            "git clone https://github.com/pyenv/pyenv.git ~/.pyenv",
-            'echo \'export PYENV_ROOT="$HOME/.pyenv"\' >> ~/.zshrc',
-            'echo \'export PATH="$PYENV_ROOT/bin:$PATH"\' >> ~/.zshrc',
-            'echo \'eval "$(pyenv init --path)"\' >> ~/.zshrc',
-            "source ~/.zshrc"
+            "git clone https://github.com/pyenv/pyenv.git ~/.pyenv"
         ]
+        shell_rc_path = os.path.expanduser("~/.zshrc") if os.path.exists(os.path.expanduser("~/.zshrc")) else os.path.expanduser("~/.bashrc")
+        pyenv_init_commands = [
+            'echo \'export PYENV_ROOT="$HOME/.pyenv"\' >> {}'.format(shell_rc_path),
+            'echo \'export PATH="$PYENV_ROOT/bin:$PATH"\' >> {}'.format(shell_rc_path),
+            'echo \'eval "$(pyenv init --path)"\' >> {}'.format(shell_rc_path),
+            "source {}".format(shell_rc_path)
+        ]
+        commands += pyenv_init_commands
         for command in commands:
             logger.info(f"Now running command: {command}")
-            os.system(command)
+            subprocess.run(command, shell=True, executable="/bin/bash")
     else:
         logger.info("pyenv is already installed.")
 
@@ -91,39 +98,34 @@ def setup_swiss_army_llama(security_token):
         ]
         for command in commands:
             logger.info(f"Now running command: {command}")
-            os.system(command)
+            subprocess.run(command, shell=True, executable="/bin/bash")
     else:
         logger.info("Python 3.12 is already installed.")
-        os.system("pyenv local 3.12")
 
     logger.info("Creating and activating virtual environment in ~/swiss_army_llama.")
     os.chdir(swiss_army_llama_path)
     commands = [
         "python -m venv venv",
-        "source venv/bin/activate"
+        "source venv/bin/activate",
+        "pip install --upgrade pip",
+        "pip install wheel",
+        "pip install -r requirements.txt"
     ]
     for command in commands:
         logger.info(f"Now running command: {command}")
-        subprocess.run(command, shell=True, executable="/bin/bash")
+        subprocess.run(command, shell=True, executable="/bin/bash", env={"PATH": f"{swiss_army_llama_path}/venv/bin:{os.environ['PATH']}"})
 
-    logger.info("Installing dependencies and running Swiss Army Llama.")
-    commands = [
-        "python -m pip install --upgrade pip",
-        "python -m pip install wheel",
-        "pip install six==1.16.0",  # Add this line to install a compatible version of six
-        "pip install -r requirements.txt",
-        "python3 swiss_army_llama.py"
-    ]
-    for command in commands:
-        logger.info(f"Now running command: {command}")
-        subprocess.run(command, shell=True, executable="/bin/bash")
+    logger.info("Running Swiss Army Llama.")
+    command = "python swiss_army_llama.py"
+    logger.info(f"Now running command: {command}")
+    subprocess.run(command, shell=True, executable="/bin/bash", env={"PATH": f"{swiss_army_llama_path}/venv/bin:{os.environ['PATH']}"})
 
     external_ip = get_external_ip_func()
     logger.info(f"Setup complete. Open a browser to {external_ip}:8089 to get to the FastAPI Swagger page. Note that your security token is {security_token}.")
 
 def check_and_setup_swiss_army_llama(security_token):
     swiss_army_llama_port = 8089
-    if is_swiss_army_llama_responding():
+    if is_swiss_army_llama_responding(swiss_army_llama_port, security_token):
         logger.info("Swiss Army Llama is already set up and running.")
     else:
         if not is_port_available(swiss_army_llama_port):
