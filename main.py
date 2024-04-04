@@ -11,9 +11,11 @@ from uvicorn import Config, Server
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from database_code import initialize_db
 from service_functions import monitor_new_messages
+from setup_swiss_army_llama import check_and_setup_swiss_army_llama
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 UVICORN_PORT = config.get("UVICORN_PORT", cast=int)
+SWISS_ARMY_LLAMA_SECURITY_TOKEN = config.get("SWISS_ARMY_LLAMA_SECURITY_TOKEN", cast=str)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
 
@@ -56,6 +58,8 @@ async def startup():
         db_init_complete = await initialize_db()
         logger.info(f"Database initialization complete: {db_init_complete}")
         asyncio.create_task(monitor_new_messages())  # Create a background task
+        # Check and setup Swiss Army Llama
+        check_and_setup_swiss_army_llama(SWISS_ARMY_LLAMA_SECURITY_TOKEN)
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         
