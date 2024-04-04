@@ -841,30 +841,6 @@ class PastelMessagingClient:
         except Exception as e:
             logger.error(f"Error in audit_inference_request_response from Supernode URL: {supernode_url}: {e}")
             return {}
-            
-    async def audit_inference_request_response_id(self, inference_response_id: str, pastelid_of_supernode_to_audit: str):
-        supernode_list_df, _ = await check_supernode_list_func()
-        n = 4
-        supernode_urls_and_pastelids = await get_n_closest_supernodes_to_pastelid_urls(n, self.pastelid, supernode_list_df)
-        list_of_supernode_pastelids = [x[1] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
-        list_of_supernode_urls = [x[0] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
-        list_of_supernode_ips = [x.split('//')[1].split(':')[0] for x in list_of_supernode_urls]
-        logger.info(f"Now attempting to audit inference request response with ID {inference_response_id} with {len(list_of_supernode_pastelids)} closest supernodes (with Supernode IPs of {list_of_supernode_ips})...")
-        audit_tasks = [self.call_audit_inference_request_response(url, inference_response_id) for url in list_of_supernode_urls]
-        audit_results = await asyncio.gather(*audit_tasks)
-        logger.info(f"Audit results for inference response ID {inference_response_id}:")
-        for i, result in enumerate(audit_results):
-            if len(result) > 0:
-                logger.info(f"Supernode {i+1} (IP: {list_of_supernode_ips[i]}):")
-                logger.info(f"  Inference Response ID: {result.get('inference_response_id')}")
-                logger.info(f"  Inference Request ID: {result.get('inference_request_id')}")
-                logger.info(f"  Proposed Cost (Inference Credits): {result.get('proposed_cost_of_request_in_inference_credits')}")
-                logger.info(f"  Remaining Credits After Request: {result.get('remaining_credits_in_pack_after_request_processed')}")
-                logger.info(f"  Credit Usage Tracking Address: {result.get('credit_usage_tracking_psl_address')}")
-                logger.info(f"  Confirmation Message Amount (Patoshis): {result.get('request_confirmation_message_amount_in_patoshis')}")
-                logger.info(f"  Max Block Height for Confirmation: {result.get('max_block_height_to_include_confirmation_transaction')}")
-                logger.info(f"  Supernode PastelID and Signature: {result.get('supernode_pastelid_and_signature_on_inference_response_id')}")
-        return audit_results
         
     async def call_audit_inference_request_result(self, supernode_url: str, inference_response_id: str) -> Dict[str, Any]:
         try:
@@ -890,43 +866,49 @@ class PastelMessagingClient:
         except Exception as e:
             logger.error(f"Error in audit_inference_request_result from Supernode URL: {supernode_url}: {e}")
             return {}
-
-    async def audit_inference_request_result_id(self, inference_response_id: str, pastelid_of_supernode_to_audit: str):
+            
+    async def audit_inference_request_response_id(self, inference_response_id: str, pastelid_of_supernode_to_audit: str):
         supernode_list_df, _ = await check_supernode_list_func()
         n = 4
         supernode_urls_and_pastelids = await get_n_closest_supernodes_to_pastelid_urls(n, self.pastelid, supernode_list_df)
         list_of_supernode_pastelids = [x[1] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
         list_of_supernode_urls = [x[0] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
         list_of_supernode_ips = [x.split('//')[1].split(':')[0] for x in list_of_supernode_urls]
-        logger.info(f"Now attempting to audit inference request result with ID {inference_response_id} with {len(list_of_supernode_pastelids)} closest supernodes (with Supernode IPs of {list_of_supernode_ips})...")
-        audit_tasks = [self.call_audit_inference_request_result(url, inference_response_id) for url in list_of_supernode_urls]
-        audit_results = await asyncio.gather(*audit_tasks)
-        logger.info(f"Audit results for inference response ID {inference_response_id}:")
-        for i, result in enumerate(audit_results):
-            if len(result) > 0:
-                logger.info(f"Supernode {i+1} (IP: {list_of_supernode_ips[i]}):")
-                logger.info(f"  Inference Result ID: {result.get('inference_result_id')}")
-                logger.info(f"  Inference Request ID: {result.get('inference_request_id')}")
-                logger.info(f"  Inference Response ID: {result.get('inference_response_id')}")
-                logger.info(f"  Responding Supernode PastelID: {result.get('responding_supernode_pastelid')}")
-                logger.info(f"  Inference Result JSON (Base64): {result.get('inference_result_json_base64')}")
-                logger.info(f"  Inference Result File Type Strings: {result.get('inference_result_file_type_strings')}")
-                logger.info(f"  Responding Supernode Signature on Result ID: {result.get('responding_supernode_signature_on_inference_result_id')}")
+        logger.info(f"Now attempting to audit inference request response with ID {inference_response_id} with {len(list_of_supernode_pastelids)} closest supernodes (with Supernode IPs of {list_of_supernode_ips})...")
+        # Audit the inference request response
+        response_audit_tasks = [self.call_audit_inference_request_response(url, inference_response_id) for url in list_of_supernode_urls]
+        response_audit_results = await asyncio.gather(*response_audit_tasks)
+        # Wait for 20 seconds before auditing the inference request result
+        await asyncio.sleep(20)
+        # Audit the inference request result
+        result_audit_tasks = [self.call_audit_inference_request_result(url, inference_response_id) for url in list_of_supernode_urls]
+        result_audit_results = await asyncio.gather(*result_audit_tasks)
+        # Combine the audit results
+        audit_results = response_audit_results + result_audit_results
+        logger.info(f"Audit results retrieved for inference response ID {inference_response_id}")
         return audit_results
-            
-def validate_inference_results(inference_result_dict, audit_results):
-    # Extract relevant fields from inference_result_dict
-    usage_request_response = inference_result_dict["usage_request_response"]
-    inference_response_id = usage_request_response["inference_response_id"]
-    inference_request_id = usage_request_response["inference_request_id"]
-    proposed_cost_in_credits = float(usage_request_response["proposed_cost_of_request_in_inference_credits"])
-    remaining_credits_after_request = float(usage_request_response["remaining_credits_in_pack_after_request_processed"])
-    # Count the occurrences of each value for the relevant fields in audit_results
+
+def validate_inference_response_fields(
+    response_audit_results,
+    inference_response_id,
+    inference_request_id,
+    proposed_cost_in_credits,
+    remaining_credits_after_request,
+    credit_usage_tracking_psl_address,
+    request_confirmation_message_amount_in_patoshis,
+    max_block_height_to_include_confirmation_transaction,
+    supernode_pastelid_and_signature_on_inference_response_id
+):
+    # Count the occurrences of each value for the relevant fields in response_audit_results
     inference_response_id_counts = {}
     inference_request_id_counts = {}
     proposed_cost_in_credits_counts = {}
     remaining_credits_after_request_counts = {}
-    for result in audit_results:
+    credit_usage_tracking_psl_address_counts = {}
+    request_confirmation_message_amount_in_patoshis_counts = {}
+    max_block_height_to_include_confirmation_transaction_counts = {}
+    supernode_pastelid_and_signature_on_inference_response_id_counts = {}
+    for result in response_audit_results:
         if not result:
             continue
         if result.get("inference_response_id"):
@@ -937,17 +919,139 @@ def validate_inference_results(inference_result_dict, audit_results):
             proposed_cost_in_credits_counts[float(result["proposed_cost_of_request_in_inference_credits"])] = proposed_cost_in_credits_counts.get(float(result["proposed_cost_of_request_in_inference_credits"]), 0) + 1
         if result.get("remaining_credits_in_pack_after_request_processed"):
             remaining_credits_after_request_counts[float(result["remaining_credits_in_pack_after_request_processed"])] = remaining_credits_after_request_counts.get(float(result["remaining_credits_in_pack_after_request_processed"]), 0) + 1
+        if result.get("credit_usage_tracking_psl_address"):
+            credit_usage_tracking_psl_address_counts[result["credit_usage_tracking_psl_address"]] = credit_usage_tracking_psl_address_counts.get(result["credit_usage_tracking_psl_address"], 0) + 1
+        if result.get("request_confirmation_message_amount_in_patoshis"):
+            request_confirmation_message_amount_in_patoshis_counts[int(result["request_confirmation_message_amount_in_patoshis"])] = request_confirmation_message_amount_in_patoshis_counts.get(int(result["request_confirmation_message_amount_in_patoshis"]), 0) + 1
+        if result.get("max_block_height_to_include_confirmation_transaction"):
+            max_block_height_to_include_confirmation_transaction_counts[int(result["max_block_height_to_include_confirmation_transaction"])] = max_block_height_to_include_confirmation_transaction_counts.get(int(result["max_block_height_to_include_confirmation_transaction"]), 0) + 1
+        if result.get("supernode_pastelid_and_signature_on_inference_response_id"):
+            supernode_pastelid_and_signature_on_inference_response_id_counts[result["supernode_pastelid_and_signature_on_inference_response_id"]] = supernode_pastelid_and_signature_on_inference_response_id_counts.get(result["supernode_pastelid_and_signature_on_inference_response_id"], 0) + 1
     # Determine the majority value for each field
     majority_inference_response_id = max(inference_response_id_counts, key=inference_response_id_counts.get) if inference_response_id_counts else None
     majority_inference_request_id = max(inference_request_id_counts, key=inference_request_id_counts.get) if inference_request_id_counts else None
     majority_proposed_cost_in_credits = max(proposed_cost_in_credits_counts, key=proposed_cost_in_credits_counts.get) if proposed_cost_in_credits_counts else None
     majority_remaining_credits_after_request = max(remaining_credits_after_request_counts, key=remaining_credits_after_request_counts.get) if remaining_credits_after_request_counts else None
+    majority_credit_usage_tracking_psl_address = max(credit_usage_tracking_psl_address_counts, key=credit_usage_tracking_psl_address_counts.get) if credit_usage_tracking_psl_address_counts else None
+    majority_request_confirmation_message_amount_in_patoshis = max(request_confirmation_message_amount_in_patoshis_counts, key=request_confirmation_message_amount_in_patoshis_counts.get) if request_confirmation_message_amount_in_patoshis_counts else None
+    majority_max_block_height_to_include_confirmation_transaction = max(max_block_height_to_include_confirmation_transaction_counts, key=max_block_height_to_include_confirmation_transaction_counts.get) if max_block_height_to_include_confirmation_transaction_counts else None
+    majority_supernode_pastelid_and_signature_on_inference_response_id = max(supernode_pastelid_and_signature_on_inference_response_id_counts, key=supernode_pastelid_and_signature_on_inference_response_id_counts.get) if supernode_pastelid_and_signature_on_inference_response_id_counts else None
     # Compare the majority values with the values from the responding supernode
     validation_results = {
         "inference_response_id": majority_inference_response_id == inference_response_id,
         "inference_request_id": majority_inference_request_id == inference_request_id,
         "proposed_cost_in_credits": majority_proposed_cost_in_credits == proposed_cost_in_credits,
-        "remaining_credits_after_request": majority_remaining_credits_after_request == remaining_credits_after_request
+        "remaining_credits_after_request": majority_remaining_credits_after_request == remaining_credits_after_request,
+        "credit_usage_tracking_psl_address": majority_credit_usage_tracking_psl_address == credit_usage_tracking_psl_address,
+        "request_confirmation_message_amount_in_patoshis": majority_request_confirmation_message_amount_in_patoshis == request_confirmation_message_amount_in_patoshis,
+        "max_block_height_to_include_confirmation_transaction": majority_max_block_height_to_include_confirmation_transaction == max_block_height_to_include_confirmation_transaction,
+        "supernode_pastelid_and_signature_on_inference_response_id": majority_supernode_pastelid_and_signature_on_inference_response_id == supernode_pastelid_and_signature_on_inference_response_id
+    }
+    return validation_results
+
+def validate_inference_result_fields(
+    result_audit_results,
+    inference_result_id,
+    inference_request_id,
+    inference_response_id,
+    responding_supernode_pastelid,
+    inference_result_json_base64,
+    inference_result_file_type_strings,
+    responding_supernode_signature_on_inference_result_id
+):
+    # Count the occurrences of each value for the relevant fields in result_audit_results
+    inference_result_id_counts = {}
+    inference_request_id_counts = {}
+    inference_response_id_counts = {}
+    responding_supernode_pastelid_counts = {}
+    inference_result_json_base64_counts = {}
+    inference_result_file_type_strings_counts = {}
+    responding_supernode_signature_on_inference_result_id_counts = {}
+    for result in result_audit_results:
+        if not result:
+            continue
+        if result.get("inference_result_id"):
+            inference_result_id_counts[result["inference_result_id"]] = inference_result_id_counts.get(result["inference_result_id"], 0) + 1
+        if result.get("inference_request_id"):
+            inference_request_id_counts[result["inference_request_id"]] = inference_request_id_counts.get(result["inference_request_id"], 0) + 1
+        if result.get("inference_response_id"):
+            inference_response_id_counts[result["inference_response_id"]] = inference_response_id_counts.get(result["inference_response_id"], 0) + 1
+        if result.get("responding_supernode_pastelid"):
+            responding_supernode_pastelid_counts[result["responding_supernode_pastelid"]] = responding_supernode_pastelid_counts.get(result["responding_supernode_pastelid"], 0) + 1
+        if result.get("inference_result_json_base64"):
+            inference_result_json_base64_counts[result["inference_result_json_base64"][:32]] = inference_result_json_base64_counts.get(result["inference_result_json_base64"][:32], 0) + 1
+        if result.get("inference_result_file_type_strings"):
+            inference_result_file_type_strings_counts[result["inference_result_file_type_strings"]] = inference_result_file_type_strings_counts.get(result["inference_result_file_type_strings"], 0) + 1
+        if result.get("responding_supernode_signature_on_inference_result_id"):
+            responding_supernode_signature_on_inference_result_id_counts[result["responding_supernode_signature_on_inference_result_id"]] = responding_supernode_signature_on_inference_result_id_counts.get(result["responding_supernode_signature_on_inference_result_id"], 0) + 1
+    # Determine the majority value for each field
+    majority_inference_result_id = max(inference_result_id_counts, key=inference_result_id_counts.get) if inference_result_id_counts else None
+    majority_inference_request_id = max(inference_request_id_counts, key=inference_request_id_counts.get) if inference_request_id_counts else None
+    majority_inference_response_id = max(inference_response_id_counts, key=inference_response_id_counts.get) if inference_response_id_counts else None
+    majority_responding_supernode_pastelid = max(responding_supernode_pastelid_counts, key=responding_supernode_pastelid_counts.get) if responding_supernode_pastelid_counts else None
+    majority_inference_result_json_base64 = max(inference_result_json_base64_counts, key=inference_result_json_base64_counts.get) if inference_result_json_base64_counts else None
+    majority_inference_result_file_type_strings = max(inference_result_file_type_strings_counts, key=inference_result_file_type_strings_counts.get) if inference_result_file_type_strings_counts else None
+    majority_responding_supernode_signature_on_inference_result_id = max(responding_supernode_signature_on_inference_result_id_counts, key=responding_supernode_signature_on_inference_result_id_counts.get) if responding_supernode_signature_on_inference_result_id_counts else None
+    # Compare the majority values with the values from the responding supernode
+    validation_results = {
+        "inference_result_id": majority_inference_result_id == inference_result_id,
+        "inference_request_id": majority_inference_request_id == inference_request_id,
+        "inference_response_id": majority_inference_response_id == inference_response_id,
+        "responding_supernode_pastelid": majority_responding_supernode_pastelid == responding_supernode_pastelid,
+        "inference_result_json_base64": majority_inference_result_json_base64 == inference_result_json_base64[:32],
+        "inference_result_file_type_strings": majority_inference_result_file_type_strings == inference_result_file_type_strings,
+        "responding_supernode_signature_on_inference_result_id": majority_responding_supernode_signature_on_inference_result_id == responding_supernode_signature_on_inference_result_id
+    }
+    return validation_results
+            
+def validate_inference_data(inference_result_dict, audit_results):
+    # Split audit_results into response_audit_results and result_audit_results
+    response_audit_results = audit_results[:len(audit_results)//2]
+    result_audit_results = audit_results[len(audit_results)//2:]
+    # Extract relevant fields from inference_result_dict
+    usage_request_response = inference_result_dict["usage_request_response"]
+    inference_response_id = usage_request_response["inference_response_id"]
+    inference_request_id = usage_request_response["inference_request_id"]
+    proposed_cost_in_credits = float(usage_request_response["proposed_cost_of_request_in_inference_credits"])
+    remaining_credits_after_request = float(usage_request_response["remaining_credits_in_pack_after_request_processed"])
+    credit_usage_tracking_psl_address = usage_request_response["credit_usage_tracking_psl_address"]
+    request_confirmation_message_amount_in_patoshis = int(usage_request_response["request_confirmation_message_amount_in_patoshis"])
+    max_block_height_to_include_confirmation_transaction = int(usage_request_response["max_block_height_to_include_confirmation_transaction"])
+    supernode_pastelid_and_signature_on_inference_response_id = usage_request_response["supernode_pastelid_and_signature_on_inference_response_id"]
+    # Validate InferenceAPIUsageResponse fields
+    response_validation_results = validate_inference_response_fields(
+        response_audit_results,
+        inference_response_id,
+        inference_request_id,
+        proposed_cost_in_credits,
+        remaining_credits_after_request,
+        credit_usage_tracking_psl_address,
+        request_confirmation_message_amount_in_patoshis,
+        max_block_height_to_include_confirmation_transaction,
+        supernode_pastelid_and_signature_on_inference_response_id
+    )
+    # Extract relevant fields from inference_result_dict for InferenceAPIOutputResult
+    usage_result = inference_result_dict["output_results"]
+    inference_result_id = usage_result["inference_result_id"]
+    responding_supernode_pastelid = usage_result["responding_supernode_pastelid"]
+    inference_result_json_base64 = usage_result["inference_result_json_base64"]
+    inference_result_file_type_strings = usage_result["inference_result_file_type_strings"]
+    responding_supernode_signature_on_inference_result_id = usage_result["responding_supernode_signature_on_inference_result_id"]
+    # Validate InferenceAPIOutputResult fields
+    result_validation_results = validate_inference_result_fields(
+        result_audit_results,
+        inference_result_id,
+        inference_request_id,
+        inference_response_id,
+        responding_supernode_pastelid,
+        inference_result_json_base64,
+        inference_result_file_type_strings,
+        responding_supernode_signature_on_inference_result_id
+    )
+    # Combine validation results
+    validation_results = {
+        "response_validation": response_validation_results,
+        "result_validation": result_validation_results
     }
     return validation_results
         
@@ -1106,7 +1210,7 @@ async def handle_inference_request_end_to_end(
                         "output_results": output_results
                     }
                     audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
-                    validation_results = validate_inference_results(inference_result_dict, audit_results)
+                    validation_results = validate_inference_data(inference_result_dict, audit_results)
                     logger.info(f"Validation results: {validation_results}")                    
                     return inference_result_dict, audit_results, validation_results
             else:
