@@ -1,297 +1,299 @@
 {
-    "models": [
-      {
-        "model_name": "llama-7b",
-        "model_url": "https://huggingface.co/decapoda-research/llama-7b-hf",
-        "description": "LLaMA 7B model for text generation and completion",
-        "input_fields": [
-          {
-            "name": "text",
-            "file_type": "text",
-            "optional": false
-          }
-        ],
-        "output_fields": [
-          {
-            "name": "text",
-            "file_type": "text",
-            "optional": false
-          }
-        ],
-        "model_parameters": [
-          {
-            "name": "max_length",
-            "type": "int",
-            "default": 100,
-            "description": "The maximum number of tokens to generate"
-          },
-          {
-            "name": "temperature",
-            "type": "float",
-            "default": 0.7,
-            "description": "The temperature for sampling"
-          },
-          {
-            "name": "top_p",
-            "type": "float",
-            "default": 0.9,
-            "description": "The cumulative probability for top-p sampling"
-          },
-          {
-            "name": "repetition_penalty",
-            "type": "float",
-            "default": 1.0,
-            "description": "The penalty for repeating tokens"
-          }
-        ],
-        "credit_costs": {
-          "input_tokens": 1.5,
-          "output_tokens": 1.1,
-          "compute_cost": 0.5,
-          "memory_cost": 0.2
+  "models": [
+    {
+      "model_name": "mistral-7b-instruct-v0",
+      "model_url": "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q5_K_M.gguf",
+      "description": "The Mistral-7B-Instruct-v0.2 Large Language Model (LLM) is an instruct fine-tuned version of the Mistral-7B-v0.2. Mistral-7B-v0.2 has the following changes compared to Mistral-7B-v0.1: * 32k context window (vs 8k context in v0.1); *  Rope-theta = 1e6; *No Sliding-Window Attention",
+      "supported_inference_type_strings": ["text_completion", "embedding"],
+      "input_fields": [
+        {
+          "name": "text",
+          "file_type": "text",
+          "optional": false
         }
-      },
-      {
-        "model_name": "gpt-neox-20b",
-        "model_url": "https://huggingface.co/EleutherAI/gpt-neox-20b",
-        "description": "GPT-NeoX 20B model for text generation and completion",
-        "input_fields": [
-          {
-            "name": "text",
-            "file_type": "text",
-            "optional": false
-          }
-        ],
-        "output_fields": [
-          {
-            "name": "text",
-            "file_type": "text",
-            "optional": false
-          }
-        ],
-        "model_parameters": [
-          {
-            "name": "max_length",
-            "type": "int",
-            "default": 100,
-            "description": "The maximum number of tokens to generate"
-          },
-          {
-            "name": "temperature",
-            "type": "float",
-            "default": 0.7,
-            "description": "The temperature for sampling"
-          },
-          {
-            "name": "top_p",
-            "type": "float",
-            "default": 0.9,
-            "description": "The cumulative probability for top-p sampling"
-          },
-          {
-            "name": "repetition_penalty",
-            "type": "float",
-            "default": 1.0,
-            "description": "The penalty for repeating tokens"
-          }
-        ],
-        "credit_costs": {
-          "input_tokens": 2.5,
-          "output_tokens": 2.0,
-          "compute_cost": 1.0,
-          "memory_cost": 0.5
+      ],
+      "output_fields": [
+        {
+          "name": "text",
+          "file_type": "text",
+          "optional": false
         }
-      },
-      {
-        "model_name": "stable-diffusion-xl",
-        "model_url": "https://huggingface.co/CompVis/stable-diffusion-v1-4",
-        "description": "Stable Diffusion XL model for text-to-image generation",
-        "input_fields": [
-          {
-            "name": "prompt",
-            "file_type": "text",
-            "optional": false
-          },
-          {
-            "name": "image",
-            "file_type": "image",
-            "optional": true
-          }
-        ],
-        "output_fields": [
-          {
-            "name": "image",
-            "file_type": "image",
-            "optional": false
-          }
-        ],
-        "model_parameters": [
-          {
-            "name": "num_inference_steps",
-            "type": "int",
-            "default": 50,
-            "description": "The number of denoising steps"
-          },
-          {
-            "name": "guidance_scale",
-            "type": "float",
-            "default": 7.5,
-            "description": "The scale for classifier-free guidance"
-          },
-          {
-            "name": "width",
-            "type": "int",
-            "default": 512,
-            "description": "The width of the generated image"
-          },
-          {
-            "name": "height",
-            "type": "int",
-            "default": 512,
-            "description": "The height of the generated image"
-          }
-        ],
-        "credit_costs": {
-          "input_tokens": 2.0,
-          "output_tokens": 0,
-          "compute_cost": 1.5,
-          "memory_cost": 0.8
+      ],
+      "model_parameters": [
+        {
+          "name": "max_length",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "top_p",
+          "type": "float",
+          "default": 0.9,
+          "description": "The cumulative probability for top-p sampling"
+        },
+        {
+          "name": "repetition_penalty",
+          "type": "float",
+          "default": 1.0,
+          "description": "The penalty for repeating tokens"
         }
-      },
-      {
-        "model_name": "whisper-large-v2",
-        "model_url": "https://huggingface.co/openai/whisper-large-v2",
-        "description": "Whisper large-v2 model for audio transcription",
-        "input_fields": [
-          {
-            "name": "audio",
-            "file_type": "audio",
-            "optional": false
-          }
-        ],
-        "output_fields": [
-          {
-            "name": "text",
-            "file_type": "text",
-            "optional": false
-          }
-        ],
-        "model_parameters": [
-          {
-            "name": "language",
-            "type": "string",
-            "default": "en",
-            "description": "The target language for transcription"
-          },
-          {
-            "name": "task",
-            "type": "string",
-            "default": "transcribe",
-            "description": "The task to perform (transcribe or translate)"
-          },
-          {
-            "name": "temperature",
-            "type": "float",
-            "default": 0.0,
-            "description": "The temperature for sampling"
-          }
-        ],
-        "credit_costs": {
-          "input_tokens": 0,
-          "output_tokens": 1.5,
-          "compute_cost": 1.0,
-          "memory_cost": 0.5
-        }
-      },
-      {
-        "model_name": "clip-interrogator",
-        "model_url": "https://huggingface.co/pharma/ci-preprocess",
-        "description": "CLIP Interrogator model for image-to-text generation",
-        "input_fields": [
-          {
-            "name": "image",
-            "file_type": "image",
-            "optional": false
-          }
-        ],
-        "output_fields": [
-          {
-            "name": "text",
-            "file_type": "text",
-            "optional": false
-          }
-        ],
-        "model_parameters": [
-          {
-            "name": "min_length",
-            "type": "int",
-            "default": 10,
-            "description": "The minimum length of the generated text"
-          },
-          {
-            "name": "max_length",
-            "type": "int",
-            "default": 100,
-            "description": "The maximum length of the generated text"
-          },
-          {
-            "name": "num_beams",
-            "type": "int",
-            "default": 4,
-            "description": "The number of beams for beam search"
-          }
-        ],
-        "credit_costs": {
-          "input_tokens": 0,
-          "output_tokens": 1.2,
-          "compute_cost": 0.8,
-          "memory_cost": 0.3
-        }
-      },
-      {
-        "model_name": "videocap-transformer",
-        "model_url": "https://huggingface.co/ArhanK005/videocap-transformer",
-        "description": "Videocap Transformer model for video captioning",
-        "input_fields": [
-          {
-            "name": "video",
-            "file_type": "video",
-            "optional": false
-          }
-        ],
-        "output_fields": [
-          {
-            "name": "text",
-            "file_type": "text",
-            "optional": false
-          }
-        ],
-        "model_parameters": [
-          {
-            "name": "max_length",
-            "type": "int",
-            "default": 100,
-            "description": "The maximum length of the generated caption"
-          },
-          {
-            "name": "num_beams",
-            "type": "int",
-            "default": 4,
-            "description": "The number of beams for beam search"
-          },
-          {
-            "name": "temperature",
-            "type": "float",
-            "default": 1.0,
-            "description": "The temperature for sampling"
-          }
-        ],
-        "credit_costs": {
-          "input_tokens": 0,
-          "output_tokens": 1.8,
-          "compute_cost": 1.2,
-          "memory_cost": 0.6
-        }
+      ],
+      "credit_costs": {
+        "input_tokens": 1.5,
+        "output_tokens": 1.1,
+        "compute_cost": 0.5,
+        "memory_cost": 0.5
       }
-    ]
-  }
+    },
+    {
+      "model_name": "phi-2",
+      "model_url": "https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q5_K_M.gguf",
+      "description": "Phi-2 is a Transformer with 2.7 billion parameters. It was trained using the same data sources as Phi-1.5, augmented with a new data source that consists of various NLP synthetic texts and filtered websites (for safety and educational value). When assessed against benchmarks testing common sense, language understanding, and logical reasoning, Phi-2 showcased a nearly state-of-the-art performance among models with less than 13 billion parameters.",
+      "supported_inference_type_strings": ["text_completion", "embedding"],
+      "input_fields": [
+        {
+          "name": "text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "max_length",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "top_p",
+          "type": "float",
+          "default": 0.9,
+          "description": "The cumulative probability for top-p sampling"
+        },
+        {
+          "name": "repetition_penalty",
+          "type": "float",
+          "default": 1.0,
+          "description": "The penalty for repeating tokens"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 0.5,
+        "output_tokens": 0.75,
+        "compute_cost": 0.25,
+        "memory_cost": 0.1
+      }
+    },
+    {
+      "model_name": "stable-diffusion-xl",
+      "model_url": "https://huggingface.co/CompVis/stable-diffusion-v1-4",
+      "description": "Stable Diffusion XL model for text-to-image generation",
+      "input_fields": [
+        {
+          "name": "prompt",
+          "file_type": "text",
+          "optional": false
+        },
+        {
+          "name": "image",
+          "file_type": "image",
+          "optional": true
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "image",
+          "file_type": "image",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "num_inference_steps",
+          "type": "int",
+          "default": 50,
+          "description": "The number of denoising steps"
+        },
+        {
+          "name": "guidance_scale",
+          "type": "float",
+          "default": 7.5,
+          "description": "The scale for classifier-free guidance"
+        },
+        {
+          "name": "width",
+          "type": "int",
+          "default": 512,
+          "description": "The width of the generated image"
+        },
+        {
+          "name": "height",
+          "type": "int",
+          "default": 512,
+          "description": "The height of the generated image"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 2.0,
+        "output_tokens": 0,
+        "compute_cost": 1.5,
+        "memory_cost": 0.8
+      }
+    },
+    {
+      "model_name": "whisper-large-v2",
+      "model_url": "https://huggingface.co/openai/whisper-large-v2",
+      "description": "Whisper large-v2 model for audio transcription",
+      "input_fields": [
+        {
+          "name": "audio",
+          "file_type": "audio",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "language",
+          "type": "string",
+          "default": "en",
+          "description": "The target language for transcription"
+        },
+        {
+          "name": "task",
+          "type": "string",
+          "default": "transcribe",
+          "description": "The task to perform (transcribe or translate)"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.0,
+          "description": "The temperature for sampling"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 0,
+        "output_tokens": 1.5,
+        "compute_cost": 1.0,
+        "memory_cost": 0.5
+      }
+    },
+    {
+      "model_name": "clip-interrogator",
+      "model_url": "https://huggingface.co/pharma/ci-preprocess",
+      "description": "CLIP Interrogator model for image-to-text generation",
+      "input_fields": [
+        {
+          "name": "image",
+          "file_type": "image",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "min_length",
+          "type": "int",
+          "default": 10,
+          "description": "The minimum length of the generated text"
+        },
+        {
+          "name": "max_length",
+          "type": "int",
+          "default": 100,
+          "description": "The maximum length of the generated text"
+        },
+        {
+          "name": "num_beams",
+          "type": "int",
+          "default": 4,
+          "description": "The number of beams for beam search"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 0,
+        "output_tokens": 1.2,
+        "compute_cost": 0.8,
+        "memory_cost": 0.3
+      }
+    },
+    {
+      "model_name": "videocap-transformer",
+      "model_url": "https://huggingface.co/ArhanK005/videocap-transformer",
+      "description": "Videocap Transformer model for video captioning",
+      "input_fields": [
+        {
+          "name": "video",
+          "file_type": "video",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "max_length",
+          "type": "int",
+          "default": 100,
+          "description": "The maximum length of the generated caption"
+        },
+        {
+          "name": "num_beams",
+          "type": "int",
+          "default": 4,
+          "description": "The number of beams for beam search"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 1.0,
+          "description": "The temperature for sampling"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 0,
+        "output_tokens": 1.8,
+        "compute_cost": 1.2,
+        "memory_cost": 0.6
+      }
+    }
+  ]
+}

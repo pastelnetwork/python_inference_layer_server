@@ -613,6 +613,7 @@ class InferenceAPIUsageRequestModel(BaseModel):
     requesting_pastelid: str
     credit_pack_identifier: str
     requested_model_canonical_string: str
+    model_inference_type_string: str
     model_parameters_json: str
     model_input_data_json_b64: str
 
@@ -1146,6 +1147,7 @@ async def handle_inference_request_end_to_end(
         requesting_pastelid=MY_LOCAL_PASTELID,
         credit_pack_identifier=credit_pack.credit_pack_identifier,
         requested_model_canonical_string="llama-7b",
+        model_inference_type_string="text_completion",
         model_parameters_json=json.dumps(model_parameters),
         model_input_data_json_b64=input_prompt_text_to_llm__base64_encoded
     )

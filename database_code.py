@@ -137,6 +137,7 @@ class InferenceAPIUsageRequestModel(BaseModel):
     requesting_pastelid: str
     credit_pack_identifier: str
     requested_model_canonical_string: str
+    model_inference_type_string: str
     model_parameters_json: str
     model_input_data_json_b64: str
 
@@ -154,6 +155,7 @@ class InferenceAPIUsageRequest(Base):
     requesting_pastelid = Column(String, index=True)
     credit_pack_identifier = Column(String, index=True)
     requested_model_canonical_string = Column(String)
+    model_inference_type_string = Column(String)
     model_parameters_json = Column(JSON)
     model_input_data_json_b64 = Column(String)
     total_psl_cost_for_pack = Column(Numeric(precision=20, scale=8))

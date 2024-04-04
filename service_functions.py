@@ -42,6 +42,8 @@ TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", defaul
 NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = config.get("NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE", default=3, cast=int)
 GITHUB_MODEL_MENU_URL = config.get("GITHUB_MODEL_MENU_URL")
 CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_SECONDS", default=300, cast=int)
+SWISS_ARMY_LLAMA_PORT = config.get("SWISS_ARMY_LLAMA_PORT", default=8089, cast=int)
+SWISS_ARMY_LLAMA_SECURITY_TOKEN = config.get("SWISS_ARMY_LLAMA_SECURITY_TOKEN", cast=str)
 LOCAL_PASTEL_ID_PASSPHRASE = config.get("LOCAL_PASTEL_ID_PASSPHRASE")
 credit_usage_to_tracking_amount_multiplier = 10 # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis
 
@@ -705,6 +707,7 @@ async def process_broadcast_messages(message, db_session):
             requesting_pastelid=response_data['requesting_pastelid'],
             credit_pack_identifier=response_data['credit_pack_identifier'],
             requested_model_canonical_string=response_data['requested_model_canonical_string'],
+            model_inference_type_string=response_data['model_inference_type_string'],
             model_parameters_json=response_data['model_parameters_json'],
             model_input_data_json_b64=response_data['model_input_data_json_b64'],
         )
@@ -1014,6 +1017,7 @@ async def save_inference_api_usage_request(inference_request_model: InferenceAPI
         requesting_pastelid=inference_request_model.requesting_pastelid,
         credit_pack_identifier=inference_request_model.credit_pack_identifier,
         requested_model_canonical_string=inference_request_model.requested_model_canonical_string,
+        model_inference_type_string=inference_request_model.model_inference_type_string,
         model_parameters_json=inference_request_model.model_parameters_json,
         model_input_data_json_b64=inference_request_model.model_input_data_json_b64,
         inference_request_id=str(uuid.uuid4()),  # Generate a unique inference request ID
@@ -1039,11 +1043,22 @@ async def calculate_proposed_cost(requested_model_data: dict, model_parameters: 
     proposed_cost_in_credits = round(base_cost + (cost_per_token * max_tokens) + (input_data_size * 0.0001), 1)
     return proposed_cost_in_credits
 
+def is_swiss_army_llama_responding():
+    try:
+        url = f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_list_of_available_model_names/"
+        params = {'token': SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+        response = httpx.get(url, params=params)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Error: {e}")
+        return False
+    
 async def validate_inference_api_usage_request(request_data: dict) -> Tuple[bool, float, float]:
     try:
         requesting_pastelid = request_data["requesting_pastelid"]
         credit_pack_identifier = request_data["credit_pack_identifier"]
         requested_model = request_data["requested_model_canonical_string"]
+        model_inference_type_string = request_data["model_inference_type_string"]
         model_parameters = request_data["model_parameters_json"]
         input_data = request_data["model_input_data_json_b64"]
         # Check if the credit pack identifier matches the global credit pack
@@ -1054,16 +1069,35 @@ async def validate_inference_api_usage_request(request_data: dict) -> Tuple[bool
         if not credit_pack.is_authorized(requesting_pastelid):
             logger.warning(f"Unauthorized PastelID: {requesting_pastelid}")
             return False, 0, credit_pack.current_credit_balance
-        # Validate the requested model and parameters against the model menu
+        # Retrieve the model menu
         model_menu = await get_inference_model_menu()
-        requested_model_data = next(
-            (model for model in model_menu["models"] if model["model_name"] == requested_model),
-            None
-        )
+        # Check if the requested model exists in the model menu
+        requested_model_data = next((model for model in model_menu["models"] if model["model_name"] == requested_model), None)
         if requested_model_data is None:
             logger.warning(f"Invalid model requested: {requested_model}")
             return False, 0, credit_pack.current_credit_balance
-        # TODO: Validate the model parameters against the model's supported parameters
+        # Check if the requested inference type is supported by the model
+        if model_inference_type_string not in requested_model_data["supported_inference_type_strings"]:
+            logger.warning(f"Unsupported inference type '{model_inference_type_string}' for model '{requested_model}'")
+            return False, 0, credit_pack.current_credit_balance
+        if is_swiss_army_llama_responding():
+            # Validate the requested model against the Swiss Army Llama API
+            async with httpx.AsyncClient() as client:
+                params = {"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                response = await client.get(f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_list_of_available_model_names/", params=params)
+                if response.status_code == 200:
+                    available_models = response.json()["model_names"]
+                    if requested_model not in available_models:
+                        # Add the new model to Swiss Army Llama
+                        add_model_response = await client.post(f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/add_new_model/", params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "model_url": requested_model_data["model_url"]})
+                        if add_model_response.status_code != 200:
+                            logger.warning(f"Failed to add new model to Swiss Army Llama: {requested_model}")
+                            return False, 0, credit_pack.current_credit_balance
+                else:
+                    logger.warning("Failed to retrieve available models from Swiss Army Llama API")
+                    return False, 0, credit_pack.current_credit_balance
+        else:
+            logger.error(f"Error! Swiss Army Llama is not running on port {SWISS_ARMY_LLAMA_PORT}")
         # Calculate the proposed cost in credits based on the requested model and input data
         model_parameters_dict = json.loads(model_parameters)
         input_data_binary = base64.b64decode(input_data)
@@ -1084,8 +1118,8 @@ async def validate_inference_api_usage_request(request_data: dict) -> Tuple[bool
         return True, proposed_cost_in_credits, remaining_credits_after_request
     except Exception as e:
         logger.error(f"Error validating inference API usage request: {str(e)}")
-        raise    
-
+        raise
+    
 async def process_inference_api_usage_request(inference_api_usage_request: InferenceAPIUsageRequestModel) -> InferenceAPIUsageResponse: 
     # Validate the inference API usage request
     request_data = inference_api_usage_request.dict()
@@ -1275,23 +1309,58 @@ async def execute_inference_request(inference_request_id: str) -> None:
                 select(InferenceAPIUsageResponse).where(InferenceAPIUsageResponse.inference_request_id == inference_request_id)
             )
             inference_response = inference_response.scalar_one_or_none()
-        # TODO: Integrate with the Swiss Army Llama project or other inference libraries to perform the inference task
-        # For now, let's assume the inference is executed successfully and the output results are generated
-        output_results = {
-            "output_text": "This is the generated output text.",
-            "output_files": []
-        }
-        # Will use magika library to identify all types of any binary file data, which will be base64 encoded and zstd compressed.
-        output_results_file_type_strings = {
-            "output_text": "text",  
-            "output_files": ["NA"]
-        }
+        # Integrate with the Swiss Army Llama API to perform the inference task
+        async with httpx.AsyncClient() as client:
+            if inference_request.model_inference_type_string == "text_completion":
+                response = await client.post(
+                    f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_text_completions_from_input_prompt/",
+                    json={
+                        "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
+                        "llm_model_name": inference_request.requested_model_canonical_string,
+                        "model_parameters": inference_request.model_parameters_json
+                    },
+                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                )
+                if response.status_code == 200:
+                    output_results = response.json()
+                    output_text = output_results["completions"][0]
+                    result = magika.identify_bytes(output_text.encode("utf-8"))
+                    detected_data_type = result.output.ct_label
+                    output_results_file_type_strings = {
+                        "output_text": detected_data_type,
+                        "output_files": ["NA"]
+                    }
+                else:
+                    logger.error(f"Failed to execute text completion inference request: {response.text}")
+                    return
+            elif inference_request.model_inference_type_string == "embedding":
+                response = await client.post(
+                    f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_embedding_vector_for_string/",
+                    json={
+                        "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
+                        "llm_model_name": inference_request.requested_model_canonical_string
+                    },
+                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                )
+                if response.status_code == 200:
+                    output_results = response.json()
+                    output_results_file_type_strings = {
+                        "output_text": "embedding",
+                        "output_files": ["NA"]
+                    }
+                else:
+                    logger.error(f"Failed to execute embedding inference request: {response.text}")
+                    return
+            else:
+                logger.warning(f"Unsupported inference type: {inference_request.model_inference_type_string}")
+                return
+
         # Save the inference output results to the database
         await save_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results, output_results_file_type_strings)
     except Exception as e:
         logger.error(f"Error executing inference request: {str(e)}")
         raise
-
+            
 async def get_inference_output_results_and_verify_authorization(inference_response_id: str, requesting_pastelid: str) -> InferenceOutputResultsModel:
     async with AsyncSessionLocal() as db_session:
         # Retrieve the inference output result
