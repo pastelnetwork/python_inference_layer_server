@@ -799,6 +799,20 @@ class PastelMessagingClient:
             result = response.json()
             return result
 
+    async def check_status_of_inference_request_results(self, supernode_url: str, inference_response_id: str) -> bool:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            try:
+                response = await client.get(f"{supernode_url}/check_status_of_inference_request_results/{inference_response_id}")
+                response.raise_for_status()
+                result = response.json()
+                return result if isinstance(result, bool) else False
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP error in check_status_of_inference_request_results from Supernode URL: {supernode_url}: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"Error in check_status_of_inference_request_results from Supernode URL: {supernode_url}: {e}")
+                return False
+
     async def retrieve_inference_output_results(self, supernode_url: str, inference_request_id: str, inference_response_id: str) -> Dict[str, Any]:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
@@ -1163,13 +1177,13 @@ async def handle_inference_request_end_to_end(
         assert(credit_usage_tracking_psl_address == LOCAL_CREDIT_TRACKING_PSL_ADDRESS)
     except AssertionError:
         logger.error(f"Error! Inference request response has a different tracking address than the local tracking address used in the request: {credit_usage_tracking_psl_address} vs {LOCAL_CREDIT_TRACKING_PSL_ADDRESS}")
-        return None
+        return None, None, None
     credit_usage_tracking_amount_in_psl = float(usage_request_response["request_confirmation_message_amount_in_patoshis"])/(10**5) # Divide by number of Patoshis per PSL
     # Check if tracking address contains enough PSL to send tracking amount:
     tracking_address_balance = await check_psl_address_balance_alternative_func(credit_usage_tracking_psl_address)
     if tracking_address_balance < credit_usage_tracking_amount_in_psl:
         logger.error(f"Insufficient balance in tracking address: {credit_usage_tracking_psl_address}; amount needed: {credit_usage_tracking_amount_in_psl}; current balance: {tracking_address_balance}; shortfall: {credit_usage_tracking_amount_in_psl - tracking_address_balance}")
-        return None
+        return None, None, None
     # Check if the quoted price is less than or equal to the maximum allowed cost
     if proposed_cost_in_credits <= maximum_inference_cost_in_credits:
         # Check if the credit pack has sufficient credits
@@ -1201,28 +1215,32 @@ async def handle_inference_request_end_to_end(
                     # Get the inference output results
                     assert(len(inference_request_id)>0)
                     assert(len(inference_response_id)>0)
-                    output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
-                    logger.info(f"Retrieved inference output results: {output_results}")
-                    # Create the inference_result_dict with all relevant information
-                    inference_result_dict = {
-                        "supernode_url": supernode_url,
-                        "request_data": request_data.dict(),
-                        "usage_request_response": usage_request_response,
-                        "input_prompt_text_to_llm": input_prompt_text_to_llm,
-                        "output_results": output_results
-                    }
-                    audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
-                    validation_results = validate_inference_data(inference_result_dict, audit_results)
-                    logger.info(f"Validation results: {validation_results}")                    
-                    return inference_result_dict, audit_results, validation_results
+                    results_available = await messaging_client.check_status_of_inference_request_results(supernode_url, inference_response_id)
+                    if results_available:
+                        output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
+                        logger.info(f"Retrieved inference output results: {output_results}")
+                        # Create the inference_result_dict with all relevant information
+                        inference_result_dict = {
+                            "supernode_url": supernode_url,
+                            "request_data": request_data.dict(),
+                            "usage_request_response": usage_request_response,
+                            "input_prompt_text_to_llm": input_prompt_text_to_llm,
+                            "output_results": output_results
+                        }
+                        audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
+                        validation_results = validate_inference_data(inference_result_dict, audit_results)
+                        logger.info(f"Validation results: {validation_results}")                    
+                        return inference_result_dict, audit_results, validation_results
+                    else:
+                        logger.info("Inference results not available yet; retrying...")
             else:
                 logger.error(f"Invalid tracking transaction TXID: {tracking_transaction_txid}")
         else:
             logger.error("Insufficient credits in the credit pack; request cannot be authorized.")
-            return None
+            return None, None, None
     else:
         logger.info(f"Quoted price of {proposed_cost_in_credits} credits exceeds the maximum allowed cost of {maximum_inference_cost_in_credits} credits. Inference request not confirmed.")
-        return None
+        return None, None, None
             
 async def main():
     global rpc_connection
@@ -1250,7 +1268,7 @@ async def main():
     if use_test_inference_request_functionality:
         input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
         model_parameters = {"number_of_tokens_to_generate": 1000, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
-        max_credit_cost_to_approve_inference_request = 100.0
+        max_credit_cost_to_approve_inference_request = 200.0
         inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
         logger.info(f"Inference result data: {inference_dict}")
 

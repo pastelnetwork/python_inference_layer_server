@@ -527,6 +527,21 @@ async def confirm_inference_request_endpoint(
         raise HTTPException(status_code=500, detail=f"Error sending inference confirmation: {str(e)}")
 
 
+@router.get("/check_status_of_inference_request_results/{inference_response_id}")
+async def check_status_of_inference_request_results_endpoint(inference_response_id: str):
+    try:
+        request_result_is_available = await service_functions.check_status_of_inference_request_results(inference_response_id)
+        if request_result_is_available is None:
+            raise HTTPException(status_code=404, detail="Inference request result not found")
+        return request_result_is_available
+    except ValueError as ve:
+        logger.error(f"Validation error: {str(ve)}")
+        raise HTTPException(status_code=400, detail=f"Invalid request: {str(ve)}")
+    except Exception as e:
+        logger.error(f"Error checking status of inference request results: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
 @router.post("/retrieve_inference_output_results", response_model=db.InferenceOutputResultsModel)
 async def retrieve_inference_output_results_endpoint(
     inference_response_id: str = Query(..., description="The ResponseID Associated with the Inference Request"),

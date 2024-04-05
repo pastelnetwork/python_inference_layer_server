@@ -1325,15 +1325,16 @@ async def execute_inference_request(inference_request_id: str) -> None:
             )
             inference_response = inference_response.scalar_one_or_none()
         # Integrate with the Swiss Army Llama API to perform the inference task
+        model_parameters = json.loads(inference_request.model_parameters_json)
         async with httpx.AsyncClient() as client:
             if inference_request.model_inference_type_string == "text_completion":
                 payload = {
                     "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
                     "llm_model_name": inference_request.requested_model_canonical_string,
-                    "temperature": inference_request.model_parameters_json.get("temperature", 0.7),
-                    "number_of_tokens_to_generate": inference_request.model_parameters_json.get("number_of_tokens_to_generate", 1000),
-                    "number_of_completions_to_generate": inference_request.model_parameters_json.get("number_of_completions_to_generate", 1),
-                    "grammar_file_string": inference_request.model_parameters_json.get("grammar_file_string", ""),
+                    "temperature": model_parameters.get("temperature", 0.7),
+                    "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 1000),
+                    "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1),
+                    "grammar_file_string": model_parameters.get("grammar_file_string", ""),
                 }
                 response = await client.post(
                     f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_text_completions_from_input_prompt/",
@@ -1398,6 +1399,18 @@ async def execute_inference_request(inference_request_id: str) -> None:
     except Exception as e:
         logger.error(f"Error executing inference request: {str(e)}")
         raise
+    
+async def check_status_of_inference_request_results(inference_response_id: str) -> bool:
+    async with AsyncSessionLocal() as db_session:
+        # Retrieve the inference output result
+        inference_output_result = await db_session.execute(
+            select(InferenceAPIOutputResult).where(InferenceAPIOutputResult.inference_response_id == inference_response_id)
+        )    
+        inference_output_result = inference_output_result.scalar_one_or_none()
+        if inference_output_result is None:
+            return False
+        else:
+            return True
     
 async def get_inference_output_results_and_verify_authorization(inference_response_id: str, requesting_pastelid: str) -> InferenceOutputResultsModel:
     async with AsyncSessionLocal() as db_session:
