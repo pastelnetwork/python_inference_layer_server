@@ -280,23 +280,18 @@ async def get_n_closest_supernodes_to_pastelid_urls(n, input_pastelid, supernode
         # Compute SHA3-256 hash of the input_pastelid
         input_pastelid_hash = compute_sha3_256_hexdigest(input_pastelid)
         input_pastelid_int = int(input_pastelid_hash, 16)
-
         list_of_supernode_pastelids = supernode_list_df['extKey'].values.tolist()
         xor_distances = []
-
         # Compute XOR distances for each supernode PastelID
         for supernode_pastelid in list_of_supernode_pastelids:
             supernode_pastelid_hash = compute_sha3_256_hexdigest(supernode_pastelid)
             supernode_pastelid_int = int(supernode_pastelid_hash, 16)
             distance = input_pastelid_int ^ supernode_pastelid_int
             xor_distances.append((supernode_pastelid, distance))
-
         # Sort the XOR distances in ascending order
         sorted_xor_distances = sorted(xor_distances, key=lambda x: x[1])
-
         # Get the N closest supernodes
         closest_supernodes = sorted_xor_distances[:n]
-
         # Retrieve the URLs and PastelIDs of the N closest supernodes
         supernode_urls_and_pastelids = []
         for supernode_pastelid, _ in closest_supernodes:
@@ -710,10 +705,8 @@ class PastelMessagingClient:
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-
         # Sign the message body using the local RPC client
         message_signature = await sign_message_with_pastelid_func(self.pastelid, message_body, self.passphrase)
-
         # Prepare the user message
         user_message = {
             "from_pastelid": self.pastelid,
@@ -721,7 +714,6 @@ class PastelMessagingClient:
             "message_body": message_body,
             "message_signature": message_signature
         }
-
         # Send the user message
         payload = {
             "user_message": user_message,
@@ -786,7 +778,6 @@ class PastelMessagingClient:
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-
         payload = {
             "inference_confirmation": confirmation_data.dict(),
             "challenge": challenge,
@@ -902,6 +893,43 @@ class PastelMessagingClient:
         audit_results = response_audit_results + result_audit_results
         logger.info(f"Audit results retrieved for inference response ID {inference_response_id}")
         return audit_results
+    
+    async def check_if_supernode_supports_desired_model(self, supernode_url: str, model_canonical_string: str, model_inference_type_string: str, model_parameters_json: str) -> bool:
+        try:
+            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+                response = await client.get(f"{supernode_url}/get_inference_model_menu")
+                response.raise_for_status()
+                model_menu = response.json()
+                desired_parameters = json.loads(model_parameters_json)  # Convert JSON string to dictionary
+                for model in model_menu["models"]:
+                    if model["model_name"] == model_canonical_string and \
+                    model_inference_type_string in model["supported_inference_type_strings"]:
+                        # Check if all desired parameter names are in the model's parameters
+                        if all(any(param["name"] == desired_param for param in model["model_parameters"]) for desired_param in desired_parameters):
+                            return True
+                return False
+        except Exception as e:
+            logger.error(f"Error in check_if_supernode_supports_desired_model from Supernode URL: {supernode_url}: {e}")
+            return False
+
+    async def get_closest_supernode_url_that_supports_desired_model(self, desired_model_canonical_string: str, desired_model_inference_type_string: str, desired_model_parameters_json: str):
+        supernode_list_df, _ = await check_supernode_list_func()
+        n = min([len(supernode_list_df), 10])
+        supernode_urls_and_pastelids = await get_n_closest_supernodes_to_pastelid_urls(n, self.pastelid, supernode_list_df)
+        list_of_supernode_pastelids = [x[1] for x in supernode_urls_and_pastelids]
+        list_of_supernode_urls = [x[0] for x in supernode_urls_and_pastelids]
+        list_of_supernode_ips = [x.split('//')[1].split(':')[0] for x in list_of_supernode_urls]
+        logger.info(f"Now attempting to check which supernodes support the desired model ({desired_model_canonical_string}) with {len(list_of_supernode_pastelids)} closest supernodes (with Supernode IPs of {list_of_supernode_ips})...")
+        # Check which supernodes support the desired model
+        model_support_tasks = [self.check_if_supernode_supports_desired_model(url, desired_model_canonical_string, desired_model_inference_type_string, desired_model_parameters_json) for url in list_of_supernode_urls]
+        model_support_results = await asyncio.gather(*model_support_tasks)
+        supernode_support_dict = {pastelid: supports for pastelid, supports in zip(list_of_supernode_pastelids, model_support_results)}
+        logger.info(f"Found {sum(model_support_results)} supernodes that support the desired model ({desired_model_canonical_string}) out of {len(model_support_results)} checked.")
+        closest_supporting_supernode_pastelid = list_of_supernode_pastelids[model_support_results.index(True)] if True in model_support_results else None
+        closest_supporting_supernode_url = list_of_supernode_urls[model_support_results.index(True)] if True in model_support_results else None
+        logger.info(f"Closest supporting supernode PastelID: {closest_supporting_supernode_pastelid} | URL: {closest_supporting_supernode_url}")
+        return supernode_support_dict, closest_supporting_supernode_pastelid, closest_supporting_supernode_url
+
 
 def validate_inference_response_fields(
     response_audit_results,
@@ -1154,9 +1182,10 @@ async def handle_inference_request_end_to_end(
     # Get the list of Supernodes
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
     # Get the closest Supernode URL
-    supernode_url, supernode_pastelid = get_closest_supernode_to_pastelid_url(MY_LOCAL_PASTELID, supernode_list_df)
-    # supernode_url = 'http://154.38.164.75:7123'  # Temporary override for debugging
-    logger.info(f"Selected Supernode URL: {supernode_url} for inference request!")
+    model_parameters_json = json.dumps(model_parameters)
+    supernode_support_dict, closest_supporting_supernode_pastelid, closest_supporting_supernode_url = await messaging_client.get_closest_supernode_url_that_supports_desired_model(requested_model_canonical_string, model_inference_type_string, model_parameters_json) 
+    supernode_url = closest_supporting_supernode_url
+    supernode_pastelid = closest_supporting_supernode_pastelid
     input_prompt_text_to_llm__base64_encoded = base64.b64encode(input_prompt_text_to_llm.encode()).decode('utf-8')
     # Prepare the inference API usage request
     request_data = InferenceAPIUsageRequestModel(
@@ -1164,7 +1193,7 @@ async def handle_inference_request_end_to_end(
         credit_pack_identifier=credit_pack.credit_pack_identifier,
         requested_model_canonical_string=requested_model_canonical_string,
         model_inference_type_string=model_inference_type_string,
-        model_parameters_json=json.dumps(model_parameters),
+        model_parameters_json=model_parameters_json,
         model_input_data_json_b64=input_prompt_text_to_llm__base64_encoded
     )
     # Send the inference API usage request
@@ -1263,10 +1292,11 @@ async def main():
 
     if use_test_inference_request_functionality:
         # input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
-        input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
-        requested_model_canonical_string = "claude3-haiku" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2",
+        # input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
+        input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
+        requested_model_canonical_string = "mistral-7b-instruct-v0.2" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2",
         model_inference_type_string = "text_completion" # "embedding"        
-        model_parameters = {"number_of_tokens_to_generate": 500, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
+        model_parameters = {"number_of_tokens_to_generate": 200, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
         max_credit_cost_to_approve_inference_request = 200.0
         inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, requested_model_canonical_string, model_inference_type_string, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
         logger.info(f"Inference result data:\n\n {inference_dict}")
