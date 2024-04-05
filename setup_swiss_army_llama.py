@@ -68,7 +68,7 @@ def setup_swiss_army_llama(security_token):
         logger.info("Swiss Army Llama repository already exists.")
         logger.info("Pulling the latest changes from the repository.")
         os.chdir(swiss_army_llama_path)
-        command = "git pull"
+        command = "git stash && git pull"
         logger.info(f"Now running command: {command}")
         subprocess.run(command, shell=True, executable="/bin/bash")
 
