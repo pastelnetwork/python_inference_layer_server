@@ -1499,6 +1499,7 @@ async def execute_inference_request(inference_request_id: str) -> None:
                 return
         else:
             logger.info(f"Now calling Swiss Army Llama with model {inference_request.requested_model_canonical_string}")
+            model_parameters = json.loads(inference_request.model_parameters_json)
             async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*12)) as client:
                 if inference_request.model_inference_type_string == "text_completion":
                     payload = {
