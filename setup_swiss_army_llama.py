@@ -46,6 +46,14 @@ def is_python_3_12_installed():
     except:  # noqa: E722
         return False
 
+def is_rust_installed():
+    """Check if Rust is installed by attempting to run `rustc --version`."""
+    try:
+        subprocess.run(["rustc", "--version"], capture_output=True, check=True)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+    
 def setup_swiss_army_llama(security_token):
     swiss_army_llama_path = os.path.expanduser("~/swiss_army_llama")
 
@@ -113,20 +121,31 @@ def setup_swiss_army_llama(security_token):
 
     logger.info("Creating and activating virtual environment in ~/swiss_army_llama.")
     os.chdir(swiss_army_llama_path)
+    # Initialize the commands list with Python environment setup commands
     commands = [
-        "curl https://sh.rustup.rs -sSf | sh -s -- -y", # Rust required to build the fast_vector_similarity library used by Swiss Army Llama
-        "source $HOME/.cargo/env",  # This ensures the Rust environment is set up correctly for subsequent commands
-        "rustup default nightly",
-        "rustup update nightly",
         "python -m venv venv",
         "source venv/bin/activate",
         "pip install --upgrade pip",
         "pip install wheel",
         "pip install -r requirements.txt"
     ]
+    if not is_rust_installed():
+        logger.info("Rust is not installed. Installing Rust.")
+        # Prepend Rust installation and setup commands to the commands list
+        rust_commands = [
+            "curl https://sh.rustup.rs -sSf | sh -s -- -y",  # Install Rust non-interactively
+            "source $HOME/.cargo/env",  # Ensure Rust environment is set up for subsequent commands
+            "rustup default nightly",
+            "rustup update nightly"
+        ]
+        commands = rust_commands + commands  # Combine Rust commands with the rest
     for command in commands:
         logger.info(f"Now running command: {command}")
-        subprocess.run(command, shell=True, executable="/bin/bash", env={"PATH": f"{swiss_army_llama_path}/venv/bin:{os.environ['PATH']}"})
+        if command.startswith("source"):
+            command_to_run = command.replace("source", ".", 1)  # Replace 'source' with '.' for bash compatibility
+            subprocess.run(command_to_run, shell=True, executable="/bin/bash", env={"PATH": f"{swiss_army_llama_path}/venv/bin:{os.environ['PATH']}"})
+        else:
+            subprocess.run(command, shell=True, executable="/bin/bash", env={"PATH": f"{swiss_army_llama_path}/venv/bin:{os.environ['PATH']}"})
 
     logger.info("Running Swiss Army Llama.")
     command = "python swiss_army_llama.py"
