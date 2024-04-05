@@ -1146,7 +1146,7 @@ async def handle_inference_request_end_to_end(
     request_data = InferenceAPIUsageRequestModel(
         requesting_pastelid=MY_LOCAL_PASTELID,
         credit_pack_identifier=credit_pack.credit_pack_identifier,
-        requested_model_canonical_string="llama-7b",
+        requested_model_canonical_string="mistral-7b-instruct-v0.2",
         model_inference_type_string="text_completion",
         model_parameters_json=json.dumps(model_parameters),
         model_input_data_json_b64=input_prompt_text_to_llm__base64_encoded
@@ -1249,7 +1249,7 @@ async def main():
 
     if use_test_inference_request_functionality:
         input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
-        model_parameters = {"max_length": 100, "temperature": 0.7}
+        model_parameters = {"number_of_tokens_to_generate": 1000, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
         max_credit_cost_to_approve_inference_request = 100.0
         inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
         logger.info(f"Inference result data: {inference_dict}")
