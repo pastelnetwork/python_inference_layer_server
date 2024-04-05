@@ -65,6 +65,7 @@ def setup_swiss_army_llama(security_token):
         code_content = file.read()
 
     code_content = re.sub(r'SECURITY_TOKEN\s*=\s*"[^"]+"', f'SECURITY_TOKEN = "{security_token}"', code_content)
+    code_content = re.sub(r'use_hardcoded_security_token\s*=\s*\d+', 'use_hardcoded_security_token = 1', code_content)
 
     with open(swiss_army_llama_file_path, "w") as file:
         file.write(code_content)
