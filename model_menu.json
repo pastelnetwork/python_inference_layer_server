@@ -113,6 +113,55 @@
       }
     },
     {
+      "model_name": "claude3-haiku",
+      "model_url": "",
+      "description": "The Claude3 Haiku model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 2.0,
+        "output_tokens": 1.5,
+        "compute_cost": 1.0,
+        "memory_cost": 0.8
+      }
+    },    
+    {
       "model_name": "stable-diffusion-xl",
       "model_url": "https://huggingface.co/CompVis/stable-diffusion-v1-4",
       "description": "Stable Diffusion XL model for text-to-image generation",

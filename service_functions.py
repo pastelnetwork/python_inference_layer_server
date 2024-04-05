@@ -13,6 +13,7 @@ import random
 import re
 import html
 import warnings
+from urllib.parse import quote_plus, unquote_plus
 from datetime import datetime, timedelta
 import pandas as pd
 import httpx
@@ -27,7 +28,78 @@ from sqlalchemy.exc import OperationalError, InvalidRequestError
 from typing import List, Tuple
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from magika import Magika
+from claude_api import Client as claudeclient
+from cryptography.fernet import Fernet
+
+encryption_key = None
 magika = Magika()
+SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "MY_PASTELID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "CLAUDE3_API_KEY"]
+LOCAL_PASTEL_ID_PASSPHRASE = None
+MY_PASTELID_PASSPHRASE = None
+SWISS_ARMY_LLAMA_SECURITY_TOKEN = None
+CLAUDE3_API_KEY = None
+
+def get_env_value(key):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    env_file_path = os.path.join(current_dir, '.env')    
+    try:
+        with open(env_file_path, 'r') as env_file:
+            for line in env_file:
+                if line.startswith(key + '='):
+                    return line.split('=', 1)[1].strip() # Split on the first '=' to allow for '=' in the value
+    except FileNotFoundError:
+        print(f"Error: .env file at {env_file_path} not found.")
+    return None
+
+def generate_or_load_encryption_key_sync():
+    key_file_path = os.path.expanduser('~/env_encryption_key_for_supernode_inference_app')
+    key = None
+    if os.path.exists(key_file_path): # Check if key file exists and load it
+        with open(key_file_path, 'rb') as key_file:
+            key = key_file.read()
+        try:
+            Fernet(key)  # Validate the key
+            loaded_or_generated = "loaded"
+        except ValueError:
+            key = None
+    if key is None: # If key is invalid or doesn't exist, generate a new one
+        logger.info("Invalid or no encryption key found. Generating a new one.")
+        loaded_or_generated = "generated"
+        key = Fernet.generate_key()
+        with open(key_file_path, 'wb') as key_file:
+            key_file.write(key)
+        print(f"Generated new encryption key for sensitive env fields: {key}")
+        encrypt_sensitive_fields(key)  # Encrypt sensitive fields if generating key for the first time
+    logger.info(f"Encryption key {loaded_or_generated} successfully.")        
+    return key
+
+def encrypt_sensitive_fields(key):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    env_file_path = os.path.join(current_dir, '.env')    
+    cipher_suite = Fernet(key)
+    with open(env_file_path, 'r') as file: # Load existing .env file
+        lines = file.readlines()
+    updated_lines = [] # Encrypt and update sensitive fields
+    for line in lines:
+        if any(field in line for field in SENSITIVE_ENV_FIELDS):
+            for field in SENSITIVE_ENV_FIELDS:
+                if line.startswith(field):
+                    value = line.strip().split('=')[1]
+                    encrypted_data = cipher_suite.encrypt(value.encode()).decode()
+                    url_encoded_encrypted_data = quote_plus(encrypted_data)
+                    line = f"{field}={url_encoded_encrypted_data}\n"
+                    print(f"Encrypted {field}: {url_encoded_encrypted_data}")
+                    break
+        updated_lines.append(line)
+    with open(env_file_path, 'w') as file: # Write the updated lines back to the .env file
+        file.writelines(updated_lines)
+    logger.info(f"Updated {len(SENSITIVE_ENV_FIELDS)} sensitive fields in .env file with encrypted values!")
+
+def decrypt_sensitive_data(url_encoded_encrypted_data, encryption_key):
+    cipher_suite = Fernet(encryption_key)
+    encrypted_data = unquote_plus(url_encoded_encrypted_data)  # URL-decode first
+    decrypted_data = cipher_suite.decrypt(encrypted_data.encode()).decode()  # Ensure this is a bytes-like object
+    return decrypted_data
 
 # Logger setup
 logger = setup_logger()
@@ -43,12 +115,10 @@ NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = config.get("NUMBER_OF_D
 GITHUB_MODEL_MENU_URL = config.get("GITHUB_MODEL_MENU_URL")
 CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_SECONDS", default=300, cast=int)
 SWISS_ARMY_LLAMA_PORT = config.get("SWISS_ARMY_LLAMA_PORT", default=8089, cast=int)
-SWISS_ARMY_LLAMA_SECURITY_TOKEN = config.get("SWISS_ARMY_LLAMA_SECURITY_TOKEN", cast=str)
 CREDIT_COST_MULTIPLIER_FACTOR = config.get("CREDIT_COST_MULTIPLIER_FACTOR", default=0.1, cast=float)
-LOCAL_PASTEL_ID_PASSPHRASE = config.get("LOCAL_PASTEL_ID_PASSPHRASE")
 MESSAGING_TIMEOUT_IN_SECONDS = config.get("MESSAGING_TIMEOUT_IN_SECONDS", default=60, cast=int)
 credit_usage_to_tracking_amount_multiplier = 10 # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis
-
+    
 challenge_store = {}
 
 def parse_timestamp(timestamp_str):
@@ -1327,24 +1397,24 @@ async def execute_inference_request(inference_request_id: str) -> None:
             inference_response = inference_response.scalar_one_or_none()
         # Integrate with the Swiss Army Llama API to perform the inference task
         model_parameters = json.loads(inference_request.model_parameters_json)
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*12)) as client:
+        
+        # Integrate with the Claude API to perform the inference task
+        if inference_request.requested_model_canonical_string == "claude3-haiku":
+            claude_api_key = CLAUDE3_API_KEY
+            client = claudeclient(claude_api_key)
             if inference_request.model_inference_type_string == "text_completion":
-                payload = {
-                    "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                    "llm_model_name": inference_request.requested_model_canonical_string,
-                    "temperature": model_parameters.get("temperature", 0.7),
-                    "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 1000),
-                    "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1),
-                    "grammar_file_string": model_parameters.get("grammar_file_string", ""),
-                }
-                response = await client.post(
-                    f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_text_completions_from_input_prompt/",
-                    json=payload,
-                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                model_parameters = json.loads(inference_request.model_parameters_json)
+                input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+                response = client.complete(
+                    prompt=input_prompt,
+                    model="claude-v1.3-100k",
+                    max_tokens_to_sample=model_parameters.get("number_of_tokens_to_generate", 1000),
+                    temperature=model_parameters.get("temperature", 0.7),
+                    num_completions=model_parameters.get("number_of_completions_to_generate", 1)
                 )
                 if response.status_code == 200:
                     output_results = response.json()
-                    output_text = output_results[0]["generated_text"]
+                    output_text = output_results["completions"][0]
                     result = magika.identify_bytes(output_text.encode("utf-8"))
                     detected_data_type = result.output.ct_label
                     output_results_file_type_strings = {
@@ -1355,14 +1425,10 @@ async def execute_inference_request(inference_request_id: str) -> None:
                     logger.error(f"Failed to execute text completion inference request: {response.text}")
                     return
             elif inference_request.model_inference_type_string == "embedding":
-                payload = {
-                    "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                    "llm_model_name": inference_request.requested_model_canonical_string
-                }
-                response = await client.post(
-                    f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_embedding_vector_for_string/",
-                    json=payload,
-                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+                response = client.embed(
+                    text=input_text,
+                    model="claude-v1.3-100k"
                 )
                 if response.status_code == 200:
                     output_results = response.json()
@@ -1373,28 +1439,79 @@ async def execute_inference_request(inference_request_id: str) -> None:
                 else:
                     logger.error(f"Failed to execute embedding inference request: {response.text}")
                     return
-            elif inference_request.model_inference_type_string == "token_level_embedding":
-                payload = {
-                    "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                    "llm_model_name": inference_request.requested_model_canonical_string
-                }
-                response = await client.post(
-                    f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/",
-                    json=payload,
-                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "send_back_json_or_zip_file": "json"}
-                )
-                if response.status_code == 200:
-                    output_results = response.json()
-                    output_results_file_type_strings = {
-                        "output_text": "token_level_embedding",
-                        "output_files": ["NA"]
-                    }
-                else:
-                    logger.error(f"Failed to execute token level embedding inference request: {response.text}")
-                    return
             else:
-                logger.warning(f"Unsupported inference type: {inference_request.model_inference_type_string}")
+                logger.warning(f"Unsupported inference type for Claude3 Haiku: {inference_request.model_inference_type_string}")
                 return
+        else:        
+            logger.info(f"Now calling Swiss Army Llama with model {inference_request.requested_model_canonical_string}")
+            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*12)) as client:
+                if inference_request.model_inference_type_string == "text_completion":
+                    payload = {
+                        "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
+                        "llm_model_name": inference_request.requested_model_canonical_string,
+                        "temperature": model_parameters.get("temperature", 0.7),
+                        "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 1000),
+                        "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1),
+                        "grammar_file_string": model_parameters.get("grammar_file_string", ""),
+                    }
+                    response = await client.post(
+                        f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_text_completions_from_input_prompt/",
+                        json=payload,
+                        params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                    )
+                    if response.status_code == 200:
+                        output_results = response.json()
+                        output_text = output_results[0]["generated_text"]
+                        result = magika.identify_bytes(output_text.encode("utf-8"))
+                        detected_data_type = result.output.ct_label
+                        output_results_file_type_strings = {
+                            "output_text": detected_data_type,
+                            "output_files": ["NA"]
+                        }
+                    else:
+                        logger.error(f"Failed to execute text completion inference request: {response.text}")
+                        return
+                elif inference_request.model_inference_type_string == "embedding":
+                    payload = {
+                        "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
+                        "llm_model_name": inference_request.requested_model_canonical_string
+                    }
+                    response = await client.post(
+                        f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_embedding_vector_for_string/",
+                        json=payload,
+                        params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                    )
+                    if response.status_code == 200:
+                        output_results = response.json()
+                        output_results_file_type_strings = {
+                            "output_text": "embedding",
+                            "output_files": ["NA"]
+                        }
+                    else:
+                        logger.error(f"Failed to execute embedding inference request: {response.text}")
+                        return
+                elif inference_request.model_inference_type_string == "token_level_embedding":
+                    payload = {
+                        "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
+                        "llm_model_name": inference_request.requested_model_canonical_string
+                    }
+                    response = await client.post(
+                        f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/",
+                        json=payload,
+                        params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "send_back_json_or_zip_file": "json"}
+                    )
+                    if response.status_code == 200:
+                        output_results = response.json()
+                        output_results_file_type_strings = {
+                            "output_text": "token_level_embedding",
+                            "output_files": ["NA"]
+                        }
+                    else:
+                        logger.error(f"Failed to execute token level embedding inference request: {response.text}")
+                        return
+                else:
+                    logger.warning(f"Unsupported inference type: {inference_request.model_inference_type_string}")
+                    return
         # Save the inference output results to the database
         await save_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results, output_results_file_type_strings)
     except Exception as e:

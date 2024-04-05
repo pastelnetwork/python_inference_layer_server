@@ -10,7 +10,7 @@ import uvloop
 from uvicorn import Config, Server
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from database_code import initialize_db
-from service_functions import monitor_new_messages
+from service_functions import monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value
 from setup_swiss_army_llama import check_and_setup_swiss_army_llama
 
 config = DecoupleConfig(RepositoryEnv('.env'))
@@ -53,13 +53,22 @@ app.add_middleware(
     expose_headers=["Authorization"]
 )
 
+def decrypt_sensitive_fields():
+    global LOCAL_PASTEL_ID_PASSPHRASE, MY_PASTELID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, CLAUDE3_API_KEY
+    LOCAL_PASTEL_ID_PASSPHRASE = decrypt_sensitive_data(get_env_value("LOCAL_PASTEL_ID_PASSPHRASE"), encryption_key)
+    MY_PASTELID_PASSPHRASE = decrypt_sensitive_data(get_env_value("MY_PASTELID_PASSPHRASE"), encryption_key)
+    SWISS_ARMY_LLAMA_SECURITY_TOKEN = decrypt_sensitive_data(get_env_value("SWISS_ARMY_LLAMA_SECURITY_TOKEN"), encryption_key)
+    CLAUDE3_API_KEY = decrypt_sensitive_data(get_env_value("CLAUDE3_API_KEY"), encryption_key)
+
 async def startup():
+    global encryption_key  # Declare encryption_key as global
     try:
         db_init_complete = await initialize_db()
         logger.info(f"Database initialization complete: {db_init_complete}")
+        encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
+        decrypt_sensitive_fields() # Now decrypt sensitive fields        
         asyncio.create_task(monitor_new_messages())  # Create a background task
-        # Check and setup Swiss Army Llama
-        check_and_setup_swiss_army_llama(SWISS_ARMY_LLAMA_SECURITY_TOKEN)
+        asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         
@@ -78,4 +87,6 @@ async def main():
     await server.serve()
 
 if __name__ == "__main__":
+    generate_or_load_encryption_key_sync()
+    config = DecoupleConfig(RepositoryEnv('.env'))
     asyncio.run(main())

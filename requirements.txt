@@ -1,5 +1,7 @@
 aiosqlite
 asyncio
+cryptography
+claude-api
 fastapi
 httpx
 pandas

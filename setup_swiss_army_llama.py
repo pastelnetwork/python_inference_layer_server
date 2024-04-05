@@ -146,14 +146,28 @@ def setup_swiss_army_llama(security_token):
             subprocess.run(command_to_run, shell=True, executable="/bin/bash", env={"PATH": f"{swiss_army_llama_path}/venv/bin:{os.environ['PATH']}"})
         else:
             subprocess.run(command, shell=True, executable="/bin/bash", env={"PATH": f"{swiss_army_llama_path}/venv/bin:{os.environ['PATH']}"})
-
-    logger.info("Running Swiss Army Llama.")
+    logger.info("Running Swiss Army Llama...")
     command = "python swiss_army_llama.py"
     logger.info(f"Now running command: {command}")
-    subprocess.run(command, shell=True, executable="/bin/bash", env={"PATH": f"{swiss_army_llama_path}/venv/bin:{os.environ['PATH']}"})
-
+    process = subprocess.Popen(
+        command,
+        shell=True,
+        executable="/bin/bash",
+        env={"PATH": f"{swiss_army_llama_path}/venv/bin:{os.environ['PATH']}"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )    
     external_ip = get_external_ip_func()
     logger.info(f"Setup complete. Open a browser to {external_ip}:8089 to get to the FastAPI Swagger page. Note that your security token is {security_token}.")
+    # Read and log the output of the Swiss Army Llama process
+    for line in process.stdout:
+        logger.info(f"Swiss Army Llama: {line.strip()}")
+    # Read and log any error output of the Swiss Army Llama process
+    for line in process.stderr:
+        logger.error(f"Swiss Army Llama Error: {line.strip()}")
+    # Wait for the Swiss Army Llama process to finish (if needed)
+    process.wait()        
 
 def check_and_setup_swiss_army_llama(security_token):
     swiss_army_llama_port = 8089
