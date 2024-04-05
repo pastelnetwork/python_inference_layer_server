@@ -27,13 +27,18 @@ def is_swiss_army_llama_responding(swiss_army_llama_port: int, security_token: s
         print(f"Error: {e}")
         return False
     
-def is_pyenv_installed():
-    try:
-        result = subprocess.run(["pyenv", "--version"], capture_output=True)
-        return result.returncode == 0
-    except:  # noqa: E722
-        return False
+def run_command(command, shell='/bin/bash', env=None):
+    """Runs a command through subprocess.run with specified shell and environment."""
+    subprocess.run(command, shell=True, executable=shell, env=env)
 
+def is_pyenv_installed():
+    """Checks if pyenv is installed by attempting to run 'pyenv --version'."""
+    try:
+        subprocess.run(["pyenv", "--version"], capture_output=True)
+        return True
+    except FileNotFoundError:
+        return False
+    
 def is_python_3_12_installed():
     try:
         result = subprocess.run(["pyenv", "versions", "--bare"], capture_output=True, text=True)
@@ -70,25 +75,27 @@ def setup_swiss_army_llama(security_token):
     with open(swiss_army_llama_file_path, "w") as file:
         file.write(code_content)
 
+    logger.info("Checking for pyenv installation.")
     if not is_pyenv_installed():
         logger.info("pyenv is not installed. Installing pyenv.")
-        commands = [
-            "sudo apt-get update",
-            "sudo apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python3-openssl git redis redis-tools",
-            "sudo apt autoremove -y",
-            "git clone https://github.com/pyenv/pyenv.git ~/.pyenv"
-        ]
+        apt_get_install = "sudo apt-get update && sudo apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python3-openssl git redis redis-tools"
+        run_command(apt_get_install)
+        logger.info("Installing pyenv.")
+        pyenv_clone = "git clone https://github.com/pyenv/pyenv.git ~/.pyenv"
+        pyenv_dir = os.path.expanduser("~/.pyenv")
+        if not os.path.exists(pyenv_dir):
+            run_command(pyenv_clone)
+        else:
+            logger.info("~/.pyenv already exists. Skipping clone.")
         shell_rc_path = os.path.expanduser("~/.zshrc") if os.path.exists(os.path.expanduser("~/.zshrc")) else os.path.expanduser("~/.bashrc")
-        pyenv_init_commands = [
-            'echo \'export PYENV_ROOT="$HOME/.pyenv"\' >> {}'.format(shell_rc_path),
-            'echo \'export PATH="$PYENV_ROOT/bin:$PATH"\' >> {}'.format(shell_rc_path),
-            'echo \'eval "$(pyenv init --path)"\' >> {}'.format(shell_rc_path),
-            "source {}".format(shell_rc_path)
-        ]
-        commands += pyenv_init_commands
-        for command in commands:
-            logger.info(f"Now running command: {command}")
-            subprocess.run(command, shell=True, executable="/bin/bash")
+        with open(shell_rc_path, "a") as shell_rc:
+            shell_rc.write('\nexport PYENV_ROOT="$HOME/.pyenv"\n')
+            shell_rc.write('export PATH="$PYENV_ROOT/bin:$PATH"\n')
+            shell_rc.write('eval "$(pyenv init --path)"\n')
+        # Manually update os.environ for subsequent commands in this script
+        os.environ["PYENV_ROOT"] = os.path.expanduser("~/.pyenv")
+        os.environ["PATH"] = f"{os.path.expanduser('~/.pyenv/bin')}:{os.environ.get('PATH', '')}"
+        logger.info(f"Added pyenv initialization to {shell_rc_path}. Attempting to source it.")
     else:
         logger.info("pyenv is already installed.")
 
@@ -107,6 +114,10 @@ def setup_swiss_army_llama(security_token):
     logger.info("Creating and activating virtual environment in ~/swiss_army_llama.")
     os.chdir(swiss_army_llama_path)
     commands = [
+        "curl https://sh.rustup.rs -sSf | sh -s -- -y", # Rust required to build the fast_vector_similarity library used by Swiss Army Llama
+        "source $HOME/.cargo/env",  # This ensures the Rust environment is set up correctly for subsequent commands
+        "rustup default nightly",
+        "rustup update nightly",
         "python -m venv venv",
         "source venv/bin/activate",
         "pip install --upgrade pip",
