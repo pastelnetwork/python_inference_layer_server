@@ -74,7 +74,8 @@ def setup_swiss_army_llama(security_token):
         logger.info("pyenv is not installed. Installing pyenv.")
         commands = [
             "sudo apt-get update",
-            "sudo apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python3-openssl git",
+            "sudo apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python3-openssl git redis redis-tools",
+            "sudo apt autoremove -y",
             "git clone https://github.com/pyenv/pyenv.git ~/.pyenv"
         ]
         shell_rc_path = os.path.expanduser("~/.zshrc") if os.path.exists(os.path.expanduser("~/.zshrc")) else os.path.expanduser("~/.bashrc")
