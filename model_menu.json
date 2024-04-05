@@ -160,7 +160,7 @@
         "compute_cost": 1.0,
         "memory_cost": 0.8
       }
-    },    
+    },
     {
       "model_name": "stable-diffusion-xl",
       "model_url": "https://huggingface.co/CompVis/stable-diffusion-v1-4",

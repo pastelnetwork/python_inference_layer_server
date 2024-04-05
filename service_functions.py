@@ -25,11 +25,13 @@ from database_code import AsyncSessionLocal, Message, MessageMetadata, MessageSe
 from database_code import InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage, InferenceAPIUsageRequestModel, InferenceConfirmationModel, InferenceOutputResultsModel
 from sqlalchemy import select, func
 from sqlalchemy.exc import OperationalError, InvalidRequestError
-from typing import List, Tuple
+from typing import List, Tuple, Dict
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from magika import Magika
-from claude_api import Client as claudeclient
+import anthropic
 from cryptography.fernet import Fernet
+from fuzzywuzzy import process
+from transformers import AutoTokenizer, GPT2TokenizerFast
 
 encryption_key = None
 magika = Magika()
@@ -101,6 +103,13 @@ def decrypt_sensitive_data(url_encoded_encrypted_data, encryption_key):
     decrypted_data = cipher_suite.decrypt(encrypted_data.encode()).decode()  # Ensure this is a bytes-like object
     return decrypted_data
 
+def decrypt_sensitive_fields():
+    global LOCAL_PASTEL_ID_PASSPHRASE, MY_PASTELID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, CLAUDE3_API_KEY, encryption_key
+    LOCAL_PASTEL_ID_PASSPHRASE = decrypt_sensitive_data(get_env_value("LOCAL_PASTEL_ID_PASSPHRASE"), encryption_key)
+    MY_PASTELID_PASSPHRASE = decrypt_sensitive_data(get_env_value("MY_PASTELID_PASSPHRASE"), encryption_key)
+    SWISS_ARMY_LLAMA_SECURITY_TOKEN = decrypt_sensitive_data(get_env_value("SWISS_ARMY_LLAMA_SECURITY_TOKEN"), encryption_key)
+    CLAUDE3_API_KEY = decrypt_sensitive_data(get_env_value("CLAUDE3_API_KEY"), encryption_key)
+    
 # Logger setup
 logger = setup_logger()
 
@@ -1103,7 +1112,35 @@ async def save_inference_api_usage_request(inference_request_model: InferenceAPI
         await db_session.refresh(db_inference_api_usage_request)
     return db_inference_api_usage_request
 
-async def calculate_proposed_cost(requested_model_data: dict, model_parameters: dict, input_data: str) -> float:
+def get_tokenizer_name(model_name: str) -> str:
+    model_to_tokenizer_mapping = {
+        "claude3": "Xenova/claude-tokenizer",
+        "llama2": "TheBloke/Yarn-Llama-2-7B-128K-GGUF",
+        "mistral": "mistralai/Mistral-7B-Instruct-v0.2",
+        "capybarahermes-mistral": "TheBloke/CapybaraHermes-2.5-Mistral-7B-GGUF",
+        "hermes-mistral": "NousResearch/Hermes-2-Pro-Mistral-7B-GGUF",
+        "mistral-7b-instruct": "mistralai/Mistral-7B-Instruct-v0.2",
+        "tinyllama": "kirp/TinyLlama-1.1B-Chat-v0.2-gguf",
+        "phi": "TheBloke/phi-2-GGUF",
+        "yarn-llama2": "TheBloke/Yarn-Llama-2-7B-128K-GGUF"
+    }
+    best_match = process.extractOne(model_name.lower(), model_to_tokenizer_mapping.keys())
+    return model_to_tokenizer_mapping.get(best_match[0], "gpt2")  # Default to "gpt2" if no match found
+
+def count_tokens(model_name: str, input_data: str) -> int:
+    tokenizer_name = get_tokenizer_name(model_name)
+    logger.info(f"Selected tokenizer {tokenizer_name} for model {model_name}")
+    if 'claude' in model_name.lower():
+        tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_name)
+    else: 
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    if hasattr(tokenizer, "encode"): # For tokenizers with an "encode" method (e.g., GPT-2, GPT-Neo)
+        input_tokens = tokenizer.encode(input_data)
+    else: # For tokenizers without an "encode" method (e.g., BERT, RoBERTa)
+        input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
+    return len(input_tokens)
+
+async def calculate_proposed_cost(requested_model_data: Dict, model_parameters: Dict, input_data: str) -> float:
     # Extract credit costs from the requested_model_data
     input_token_cost = requested_model_data["credit_costs"]["input_tokens"]
     output_token_cost = requested_model_data["credit_costs"]["output_tokens"]
@@ -1112,13 +1149,21 @@ async def calculate_proposed_cost(requested_model_data: dict, model_parameters: 
     # Extract relevant information from the model_parameters
     number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
     number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-    # Calculate the input data size in tokens
-    input_data_tokens = len(input_data.split())
+    # Determine the appropriate tokenizer based on the model type
+    model_name = requested_model_data["model_name"]
+    # Calculate the input data size in tokens using the appropriate tokenizer
+    input_data_tokens = count_tokens(model_name, input_data)
+    logger.info(f"Total input data tokens: {input_data_tokens}")
     # Estimate the output data size in tokens (assuming output tokens <= number_of_tokens_to_generate)
     estimated_output_tokens = number_of_tokens_to_generate
     # Calculate the proposed cost based on the extracted information
-    proposed_cost_in_credits = number_of_completions_to_generate*((input_data_tokens * input_token_cost) + (estimated_output_tokens * output_token_cost) + compute_cost) + memory_cost
-    final_proposed_cost_in_credits = round(proposed_cost_in_credits*CREDIT_COST_MULTIPLIER_FACTOR, 1)
+    proposed_cost_in_credits = number_of_completions_to_generate * (
+        (input_data_tokens * input_token_cost) +
+        (estimated_output_tokens * output_token_cost) +
+        compute_cost
+    ) + memory_cost
+    final_proposed_cost_in_credits = round(proposed_cost_in_credits * CREDIT_COST_MULTIPLIER_FACTOR, 1)
+    logger.info(f"Proposed cost in credits: {final_proposed_cost_in_credits}")
     return final_proposed_cost_in_credits
 
 def is_swiss_army_llama_responding():
@@ -1378,6 +1423,14 @@ async def save_inference_output_results(inference_request_id: str, inference_res
         logger.error(f"Error saving inference output results: {str(e)}")
         raise
 
+def get_claude3_model_name(model_name: str) -> str:
+    model_mapping = {
+        "claude3-haiku": "claude-3-haiku-20240307",
+        "claude3-opus": "claude-3-opus-20240229",
+        "claude3-sonnet": "claude-3-sonnet-20240229"
+    }
+    return model_mapping.get(model_name, "")
+
 async def execute_inference_request(inference_request_id: str) -> None:
     try:
         # Retrieve the inference API usage request from the database
@@ -1395,54 +1448,56 @@ async def execute_inference_request(inference_request_id: str) -> None:
                 select(InferenceAPIUsageResponse).where(InferenceAPIUsageResponse.inference_request_id == inference_request_id)
             )
             inference_response = inference_response.scalar_one_or_none()
-        # Integrate with the Swiss Army Llama API to perform the inference task
-        model_parameters = json.loads(inference_request.model_parameters_json)
-        
         # Integrate with the Claude API to perform the inference task
-        if inference_request.requested_model_canonical_string == "claude3-haiku":
-            claude_api_key = CLAUDE3_API_KEY
-            client = claudeclient(claude_api_key)
+        if "claude" in inference_request.requested_model_canonical_string.lower():
+            client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
+            claude3_model_id_string = get_claude3_model_name(inference_request.requested_model_canonical_string)
             if inference_request.model_inference_type_string == "text_completion":
                 model_parameters = json.loads(inference_request.model_parameters_json)
                 input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-                response = client.complete(
-                    prompt=input_prompt,
-                    model="claude-v1.3-100k",
-                    max_tokens_to_sample=model_parameters.get("number_of_tokens_to_generate", 1000),
-                    temperature=model_parameters.get("temperature", 0.7),
-                    num_completions=model_parameters.get("number_of_completions_to_generate", 1)
-                )
-                if response.status_code == 200:
-                    output_results = response.json()
-                    output_text = output_results["completions"][0]
-                    result = magika.identify_bytes(output_text.encode("utf-8"))
-                    detected_data_type = result.output.ct_label
-                    output_results_file_type_strings = {
-                        "output_text": detected_data_type,
-                        "output_files": ["NA"]
-                    }
+                num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+                output_results = []
+                total_input_tokens = 0
+                total_output_tokens = 0
+                for i in range(num_completions):
+                    async with client.messages.stream(
+                        model=claude3_model_id_string,
+                        max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
+                        temperature=model_parameters.get("temperature", 0.7),
+                        messages=[{"role": "user", "content": input_prompt}],
+                    ) as stream:
+                        message = await stream.get_final_message()
+                        output_results.append(message.content[0].text)
+                        total_input_tokens += message.usage.input_tokens
+                        total_output_tokens += message.usage.output_tokens
+                logger.info(f"Total input tokens used with {claude3_model_id_string} model: {total_input_tokens}")
+                logger.info(f"Total output tokens used with {claude3_model_id_string} model: {total_output_tokens}")
+                if num_completions == 1:
+                    output_text = output_results[0]
                 else:
-                    logger.error(f"Failed to execute text completion inference request: {response.text}")
-                    return
+                    output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
+                logger.info(f"Generated the following output text using {claude3_model_id_string}: {output_text[:100]} <abbreviated>...")
+                result = magika.identify_bytes(output_text.encode("utf-8"))
+                detected_data_type = result.output.ct_label
+                output_results_file_type_strings = {
+                    "output_text": detected_data_type,
+                    "output_files": ["NA"]
+                }
             elif inference_request.model_inference_type_string == "embedding":
                 input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-                response = client.embed(
+                response = await client.embed(
                     text=input_text,
-                    model="claude-v1.3-100k"
+                    model=claude3_model_id_string
                 )
-                if response.status_code == 200:
-                    output_results = response.json()
-                    output_results_file_type_strings = {
-                        "output_text": "embedding",
-                        "output_files": ["NA"]
-                    }
-                else:
-                    logger.error(f"Failed to execute embedding inference request: {response.text}")
-                    return
+                output_results = response.embedding
+                output_results_file_type_strings = {
+                    "output_text": "embedding",
+                    "output_files": ["NA"]
+                }
             else:
                 logger.warning(f"Unsupported inference type for Claude3 Haiku: {inference_request.model_inference_type_string}")
                 return
-        else:        
+        else:
             logger.info(f"Now calling Swiss Army Llama with model {inference_request.requested_model_canonical_string}")
             async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*12)) as client:
                 if inference_request.model_inference_type_string == "text_completion":
@@ -1904,8 +1959,6 @@ elif rpc_port == '29932':
     burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
 
 
-
-
 # Load or create the global InferenceCreditPackMockup instance
 CREDIT_PACK_FILE = "credit_pack.json"
 credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
@@ -1923,4 +1976,5 @@ if credit_pack is None:
     )
     credit_pack.save_to_json(CREDIT_PACK_FILE)
 
-
+encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
+decrypt_sensitive_fields()

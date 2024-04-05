@@ -1186,38 +1186,31 @@ async def handle_inference_request_end_to_end(
     if tracking_address_balance < credit_usage_tracking_amount_in_psl:
         logger.error(f"Insufficient balance in tracking address: {credit_usage_tracking_psl_address}; amount needed: {credit_usage_tracking_amount_in_psl}; current balance: {tracking_address_balance}; shortfall: {credit_usage_tracking_amount_in_psl - tracking_address_balance}")
         return None, None, None
-    # Check if the quoted price is less than or equal to the maximum allowed cost
-    if proposed_cost_in_credits <= maximum_inference_cost_in_credits:
-        # Check if the credit pack has sufficient credits
-        if credit_pack.has_sufficient_credits(proposed_cost_in_credits):
-            # Deduct the credits from the credit pack
-            credit_pack.deduct_credits(proposed_cost_in_credits)
+    if proposed_cost_in_credits <= maximum_inference_cost_in_credits: # Check if the quoted price is less than or equal to the maximum allowed cost
+        if credit_pack.has_sufficient_credits(proposed_cost_in_credits): # Check if the credit pack has sufficient credits
+            credit_pack.deduct_credits(proposed_cost_in_credits) # Deduct the credits from the credit pack
             logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
-            # Save the updated credit pack state to the JSON file
-            credit_pack.save_to_json(CREDIT_PACK_FILE)
-            # Send the required PSL coins to authorize the request
+            credit_pack.save_to_json(CREDIT_PACK_FILE) # Save the updated credit pack state to the JSON file (mockup only)
+            # Send the required PSL coins to authorize the request:
             tracking_transaction_txid = await send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(inference_request_id, credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, burn_address)
             txid_looks_valid = bool(re.match("^[0-9a-fA-F]{64}$", tracking_transaction_txid))
-            if txid_looks_valid:
-                # Prepare the inference confirmation
+            if txid_looks_valid: # Prepare the inference confirmation
                 confirmation_data = InferenceConfirmationModel(
                     inference_request_id=inference_request_id,
                     confirmation_transaction={"txid": tracking_transaction_txid}
                 )
-                # Send the inference confirmation
-                confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data)
+                confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data) # Send the inference confirmation
                 logger.info(f"Sent inference confirmation: {confirmation_result}")
-                max_tries_to_get_confirmation = 12
-                initial_wait_time_in_seconds = 30
+                max_tries_to_get_confirmation = 10
+                initial_wait_time_in_seconds = 25
                 wait_time_in_seconds = initial_wait_time_in_seconds
                 for cnt in range(max_tries_to_get_confirmation):
                     wait_time_in_seconds = wait_time_in_seconds*(1.1**cnt)
                     logger.info(f"Waiting for the inference results for {round(wait_time_in_seconds, 1)} seconds... (Attempt {cnt+1}/{max_tries_to_get_confirmation}); Checking with Supernode URL: {supernode_url}")
                     await asyncio.sleep(wait_time_in_seconds)
-                    # Get the inference output results
                     assert(len(inference_request_id)>0)
                     assert(len(inference_response_id)>0)
-                    results_available = await messaging_client.check_status_of_inference_request_results(supernode_url, inference_response_id)
+                    results_available = await messaging_client.check_status_of_inference_request_results(supernode_url, inference_response_id) # Get the inference output results
                     if results_available:
                         output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
                         logger.info(f"Retrieved inference output results: {output_results}")
@@ -1227,7 +1220,8 @@ async def handle_inference_request_end_to_end(
                             "request_data": request_data.dict(),
                             "usage_request_response": usage_request_response,
                             "input_prompt_text_to_llm": input_prompt_text_to_llm,
-                            "output_results": output_results
+                            "output_results": output_results,
+                            "inference_result_decoded": base64.b64decode(output_results["inference_result_json_base64"]).decode()
                         }
                         audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
                         validation_results = validate_inference_data(inference_result_dict, audit_results)
@@ -1269,12 +1263,13 @@ async def main():
 
     if use_test_inference_request_functionality:
         input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
-        requested_model_canonical_string = "phi-2" # "mistral-7b-instruct-v0.2",
+        requested_model_canonical_string = "claude3-haiku" # "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2",
         model_inference_type_string = "text_completion" # "embedding"        
-        model_parameters = {"number_of_tokens_to_generate": 1000, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
+        model_parameters = {"number_of_tokens_to_generate": 300, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
         max_credit_cost_to_approve_inference_request = 200.0
         inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, requested_model_canonical_string, model_inference_type_string, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
         logger.info(f"Inference result data: {inference_dict}")
+        logger.info(f"\n\nFinal Decoded Inference Result: {inference_dict['inference_result_decoded']}")
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -495,8 +495,8 @@ async def make_inference_api_usage_request_endpoint(
             supernode_pastelid_and_signature_on_inference_response_id=inference_response.supernode_pastelid_and_signature_on_inference_response_id
         )
     except Exception as e:
-        logger.error(f"Error sending inference API usage request: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error sending inference API usage request: {str(e)}")
+        logger.error(f"Error encountered with inference API usage request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error encountered with inference API usage request: {str(e)}")
     
 
 @router.post("/confirm_inference_request", response_model=db.InferenceConfirmationModel)
