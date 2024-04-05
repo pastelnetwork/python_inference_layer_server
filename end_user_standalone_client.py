@@ -1202,10 +1202,10 @@ async def handle_inference_request_end_to_end(
                 confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data) # Send the inference confirmation
                 logger.info(f"Sent inference confirmation: {confirmation_result}")
                 max_tries_to_get_confirmation = 10
-                initial_wait_time_in_seconds = 25
+                initial_wait_time_in_seconds = 10
                 wait_time_in_seconds = initial_wait_time_in_seconds
                 for cnt in range(max_tries_to_get_confirmation):
-                    wait_time_in_seconds = wait_time_in_seconds*(1.1**cnt)
+                    wait_time_in_seconds = wait_time_in_seconds*(1.2**cnt)
                     logger.info(f"Waiting for the inference results for {round(wait_time_in_seconds, 1)} seconds... (Attempt {cnt+1}/{max_tries_to_get_confirmation}); Checking with Supernode URL: {supernode_url}")
                     await asyncio.sleep(wait_time_in_seconds)
                     assert(len(inference_request_id)>0)
@@ -1262,14 +1262,16 @@ async def main():
     #________________________________________________________
 
     if use_test_inference_request_functionality:
-        input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
-        requested_model_canonical_string = "claude3-haiku" # "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2",
+        # input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
+        input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
+        requested_model_canonical_string = "claude3-haiku" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2",
         model_inference_type_string = "text_completion" # "embedding"        
-        model_parameters = {"number_of_tokens_to_generate": 300, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
+        model_parameters = {"number_of_tokens_to_generate": 500, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
         max_credit_cost_to_approve_inference_request = 200.0
         inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, requested_model_canonical_string, model_inference_type_string, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
-        logger.info(f"Inference result data: {inference_dict}")
-        logger.info(f"\n\nFinal Decoded Inference Result: {inference_dict['inference_result_decoded']}")
+        logger.info(f"Inference result data:\n\n {inference_dict}")
+        logger.info("\n_____________________________________________________________________\n") 
+        logger.info(f"\n\nFinal Decoded Inference Result:\n\n {inference_dict['inference_result_decoded']}")
 
 if __name__ == "__main__":
     asyncio.run(main())
