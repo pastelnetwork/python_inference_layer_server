@@ -1327,7 +1327,7 @@ async def execute_inference_request(inference_request_id: str) -> None:
             inference_response = inference_response.scalar_one_or_none()
         # Integrate with the Swiss Army Llama API to perform the inference task
         model_parameters = json.loads(inference_request.model_parameters_json)
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*7)) as client:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*12)) as client:
             if inference_request.model_inference_type_string == "text_completion":
                 payload = {
                     "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
