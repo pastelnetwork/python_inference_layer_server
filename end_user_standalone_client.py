@@ -1205,8 +1205,8 @@ async def handle_inference_request_end_to_end(
                 # Send the inference confirmation
                 confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data)
                 logger.info(f"Sent inference confirmation: {confirmation_result}")
-                max_tries_to_get_confirmation = 10
-                initial_wait_time_in_seconds = 5
+                max_tries_to_get_confirmation = 6
+                initial_wait_time_in_seconds = 30
                 wait_time_in_seconds = initial_wait_time_in_seconds
                 for cnt in range(max_tries_to_get_confirmation):
                     wait_time_in_seconds = wait_time_in_seconds*(1.15**cnt)

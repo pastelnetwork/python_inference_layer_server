@@ -46,6 +46,7 @@ SWISS_ARMY_LLAMA_PORT = config.get("SWISS_ARMY_LLAMA_PORT", default=8089, cast=i
 SWISS_ARMY_LLAMA_SECURITY_TOKEN = config.get("SWISS_ARMY_LLAMA_SECURITY_TOKEN", cast=str)
 CREDIT_COST_MULTIPLIER_FACTOR = config.get("CREDIT_COST_MULTIPLIER_FACTOR", default=0.1, cast=float)
 LOCAL_PASTEL_ID_PASSPHRASE = config.get("LOCAL_PASTEL_ID_PASSPHRASE")
+MESSAGING_TIMEOUT_IN_SECONDS = config.get("MESSAGING_TIMEOUT_IN_SECONDS", default=60, cast=int)
 credit_usage_to_tracking_amount_multiplier = 10 # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis
 
 challenge_store = {}
@@ -1326,7 +1327,7 @@ async def execute_inference_request(inference_request_id: str) -> None:
             inference_response = inference_response.scalar_one_or_none()
         # Integrate with the Swiss Army Llama API to perform the inference task
         model_parameters = json.loads(inference_request.model_parameters_json)
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*7)) as client:
             if inference_request.model_inference_type_string == "text_completion":
                 payload = {
                     "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
