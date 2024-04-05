@@ -1039,13 +1039,14 @@ async def calculate_proposed_cost(requested_model_data: dict, model_parameters: 
     compute_cost = requested_model_data["credit_costs"]["compute_cost"]
     memory_cost = requested_model_data["credit_costs"]["memory_cost"]
     # Extract relevant information from the model_parameters
-    max_length = model_parameters.get("max_length", 1000)
+    number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
+    number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
     # Calculate the input data size in tokens
     input_data_tokens = len(input_data.split())
-    # Estimate the output data size in tokens (assuming output tokens <= max_length)
-    estimated_output_tokens = max_length
+    # Estimate the output data size in tokens (assuming output tokens <= number_of_tokens_to_generate)
+    estimated_output_tokens = number_of_tokens_to_generate
     # Calculate the proposed cost based on the extracted information
-    proposed_cost_in_credits = (input_data_tokens * input_token_cost) + (estimated_output_tokens * output_token_cost) + compute_cost + memory_cost
+    proposed_cost_in_credits = number_of_completions_to_generate*((input_data_tokens * input_token_cost) + (estimated_output_tokens * output_token_cost) + compute_cost) + memory_cost
     final_proposed_cost_in_credits = round(proposed_cost_in_credits*CREDIT_COST_MULTIPLIER_FACTOR, 1)
     return final_proposed_cost_in_credits
 
