@@ -6,25 +6,26 @@
       "description": "The Mistral-7B-Instruct-v0.2 Large Language Model (LLM) is an instruct fine-tuned version of the Mistral-7B-v0.2. Mistral-7B-v0.2 has the following changes compared to Mistral-7B-v0.1: * 32k context window (vs 8k context in v0.1); *  Rope-theta = 1e6; *No Sliding-Window Attention",
       "supported_inference_type_strings": [
         "text_completion",
-        "embedding"
+        "embedding",
+        "token_level_embedding"
       ],
       "input_fields": [
         {
-          "name": "text",
+          "name": "input_prompt",
           "file_type": "text",
           "optional": false
         }
       ],
       "output_fields": [
         {
-          "name": "text",
+          "name": "generated_text",
           "file_type": "text",
           "optional": false
         }
       ],
       "model_parameters": [
         {
-          "name": "max_length",
+          "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
           "description": "The maximum number of tokens to generate"
@@ -36,16 +37,16 @@
           "description": "The temperature for sampling"
         },
         {
-          "name": "top_p",
-          "type": "float",
-          "default": 0.9,
-          "description": "The cumulative probability for top-p sampling"
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
         },
         {
-          "name": "repetition_penalty",
-          "type": "float",
-          "default": 1.0,
-          "description": "The penalty for repeating tokens"
+          "name": "grammar_file_string",
+          "type": "string",
+          "default": "",
+          "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
         }
       ],
       "credit_costs": {
@@ -61,7 +62,8 @@
       "description": "Phi-2 is a Transformer with 2.7 billion parameters. It was trained using the same data sources as Phi-1.5, augmented with a new data source that consists of various NLP synthetic texts and filtered websites (for safety and educational value). When assessed against benchmarks testing common sense, language understanding, and logical reasoning, Phi-2 showcased a nearly state-of-the-art performance among models with less than 13 billion parameters.",
       "supported_inference_type_strings": [
         "text_completion",
-        "embedding"
+        "embedding",
+        "token_level_embedding"
       ],
       "input_fields": [
         {
@@ -79,7 +81,7 @@
       ],
       "model_parameters": [
         {
-          "name": "max_length",
+          "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
           "description": "The maximum number of tokens to generate"
@@ -91,16 +93,16 @@
           "description": "The temperature for sampling"
         },
         {
-          "name": "top_p",
-          "type": "float",
-          "default": 0.9,
-          "description": "The cumulative probability for top-p sampling"
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
         },
         {
-          "name": "repetition_penalty",
-          "type": "float",
-          "default": 1.0,
-          "description": "The penalty for repeating tokens"
+          "name": "grammar_file_string",
+          "type": "string",
+          "default": "",
+          "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
         }
       ],
       "credit_costs": {
