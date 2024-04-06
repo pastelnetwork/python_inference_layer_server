@@ -10,7 +10,7 @@ import uvloop
 from uvicorn import Config, Server
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from database_code import initialize_db
-from service_functions import monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value
+from service_functions import monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_fields, decrypt_sensitive_data, get_env_value
 from setup_swiss_army_llama import check_and_setup_swiss_army_llama
 
 config = DecoupleConfig(RepositoryEnv('.env'))
@@ -54,13 +54,16 @@ app.add_middleware(
 )
 
 def decrypt_sensitive_fields():
-    global LOCAL_PASTEL_ID_PASSPHRASE, MY_PASTELID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, CLAUDE3_API_KEY, STABILITY_API_KEY
+    global LOCAL_PASTEL_ID_PASSPHRASE, MY_PASTELID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, OPENAI_API_KEY, CLAUDE3_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, STABILITY_API_KEY, encryption_key
     LOCAL_PASTEL_ID_PASSPHRASE = decrypt_sensitive_data(get_env_value("LOCAL_PASTEL_ID_PASSPHRASE"), encryption_key)
     MY_PASTELID_PASSPHRASE = decrypt_sensitive_data(get_env_value("MY_PASTELID_PASSPHRASE"), encryption_key)
     SWISS_ARMY_LLAMA_SECURITY_TOKEN = decrypt_sensitive_data(get_env_value("SWISS_ARMY_LLAMA_SECURITY_TOKEN"), encryption_key)
+    OPENAI_API_KEY = decrypt_sensitive_data(get_env_value("OPENAI_API_KEY"), encryption_key)
     CLAUDE3_API_KEY = decrypt_sensitive_data(get_env_value("CLAUDE3_API_KEY"), encryption_key)
+    GROQ_API_KEY = decrypt_sensitive_data(get_env_value("GROQ_API_KEY"), encryption_key)
+    MISTRAL_API_KEY = decrypt_sensitive_data(get_env_value("MISTRAL_API_KEY"), encryption_key)
     STABILITY_API_KEY = decrypt_sensitive_data(get_env_value("STABILITY_API_KEY"), encryption_key)
-
+    
 async def startup():
     global encryption_key  # Declare encryption_key as global
     try:

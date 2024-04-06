@@ -113,6 +113,217 @@
       }
     },
     {
+      "model_name": "openai-gpt-4-0125-preview",
+      "model_url": "",
+      "description": "OpenAI's GPT-4 model with a preview API. Capable of handling more complex tasks and instructions compared to GPT-3.5.",
+      "supported_inference_type_strings": [
+        "text_completion"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "openai-gpt-4-turbo-preview",
+      "model_url": "",
+      "description": "OpenAI's GPT-4 model with a turbo preview API. Capable of generating high-quality text at a faster speed compared to the standard GPT-4 preview model.",
+      "supported_inference_type_strings": [
+        "text_completion"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "openai-gpt-4-vision-preview",
+      "model_url": "",
+      "description": "OpenAI's GPT-4 model with vision capabilities. Capable of analyzing and generating responses based on image inputs.",
+      "supported_inference_type_strings": [
+        "text_completion"
+      ],
+      "input_fields": [
+        {
+          "name": "input_image",
+          "file_type": "image",
+          "optional": false
+        },
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": true
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "openai-gpt-3.5-turbo-0125",
+      "model_url": "",
+      "description": "OpenAI's GPT-3.5 Turbo model with a specific version (0125). Provides a good balance between performance and cost-effectiveness.",
+      "supported_inference_type_strings": [
+        "text_completion"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "openai-text-embedding-ada-002",
+      "model_url": "",
+      "description": "OpenAI's text embedding model. Provides high-quality embeddings for semantic search and clustering tasks.",
+      "supported_inference_type_strings": [
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "embedding",
+          "file_type": "embedding",
+          "optional": false
+        }
+      ],
+      "model_parameters": [],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
       "model_name": "claude3-haiku",
       "model_url": "",
       "description": "The Claude3 Haiku model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
@@ -155,10 +366,7 @@
         }
       ],
       "credit_costs": {
-        "input_tokens": 2.0,
-        "output_tokens": 1.5,
-        "compute_cost": 1.0,
-        "memory_cost": 0.8
+        "api_based_pricing": 1
       }
     },
     {
@@ -204,10 +412,7 @@
         }
       ],
       "credit_costs": {
-        "input_tokens": 2.0,
-        "output_tokens": 1.5,
-        "compute_cost": 1.0,
-        "memory_cost": 0.8
+        "api_based_pricing": 1
       }
     },
     {
@@ -253,10 +458,7 @@
         }
       ],
       "credit_costs": {
-        "input_tokens": 2.0,
-        "output_tokens": 1.5,
-        "compute_cost": 1.0,
-        "memory_cost": 0.8
+        "api_based_pricing": 1
       }
     },
     {
@@ -302,10 +504,7 @@
         }
       ],
       "credit_costs": {
-        "input_tokens": 2.0,
-        "output_tokens": 1.5,
-        "compute_cost": 1.0,
-        "memory_cost": 0.8
+        "api_based_pricing": 1
       }
     },
     {
@@ -351,10 +550,7 @@
         }
       ],
       "credit_costs": {
-        "input_tokens": 2.0,
-        "output_tokens": 1.5,
-        "compute_cost": 1.0,
-        "memory_cost": 0.8
+        "api_based_pricing": 1
       }
     },
     {
@@ -400,10 +596,7 @@
         }
       ],
       "credit_costs": {
-        "input_tokens": 2.0,
-        "output_tokens": 1.5,
-        "compute_cost": 1.0,
-        "memory_cost": 0.8
+        "api_based_pricing": 1
       }
     },
     {
@@ -449,10 +642,7 @@
         }
       ],
       "credit_costs": {
-        "input_tokens": 2.0,
-        "output_tokens": 1.5,
-        "compute_cost": 1.0,
-        "memory_cost": 0.8
+        "api_based_pricing": 1
       }
     },
     {
@@ -498,10 +688,7 @@
         }
       ],
       "credit_costs": {
-        "input_tokens": 2.0,
-        "output_tokens": 1.5,
-        "compute_cost": 1.0,
-        "memory_cost": 0.8
+        "api_based_pricing": 1
       }
     },
     {
@@ -547,10 +734,7 @@
         }
       ],
       "credit_costs": {
-        "input_tokens": 2.0,
-        "output_tokens": 1.5,
-        "compute_cost": 1.0,
-        "memory_cost": 0.8
+        "api_based_pricing": 1
       }
     },
     {
@@ -608,10 +792,7 @@
         }                   
       ],
       "credit_costs": {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "compute_cost": 1500.0,
-        "memory_cost": 0
+        "api_based_pricing": 1
       }
     },
     {
@@ -692,10 +873,7 @@
         }
       ],
       "credit_costs": {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "compute_cost": 750.0,
-        "memory_cost": 0
+        "api_based_pricing": 1
       }
     },
     {
@@ -776,10 +954,7 @@
         }
       ],
       "credit_costs": {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "compute_cost": 400.0,
-        "memory_cost": 0
+        "api_based_pricing": 1
       }
     },
     {

@@ -1,6 +1,7 @@
 aiosqlite
 anthropic
 asyncio
+beautifulsoup4
 cryptography
 fastapi
 fuzzywuzzy 
@@ -17,6 +18,7 @@ python-Levenshtein
 sqlalchemy
 stability-sdk
 starlette
+tiktoken
 torch
 torchvision
 torchaudio

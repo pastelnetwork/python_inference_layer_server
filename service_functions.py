@@ -28,6 +28,7 @@ from sqlalchemy.exc import OperationalError, InvalidRequestError
 from typing import List, Tuple, Dict
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from magika import Magika
+import tiktoken
 import anthropic
 from groq import AsyncGroq
 from mistralai.async_client import MistralAsyncClient
@@ -36,14 +37,17 @@ import stability_sdk
 from stability_sdk import client as stabilityclient
 from cryptography.fernet import Fernet
 from fuzzywuzzy import process
-from transformers import AutoTokenizer, GPT2TokenizerFast
+from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
+from bs4 import BeautifulSoup
 
 encryption_key = None
 magika = Magika()
-SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "MY_PASTELID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "CLAUDE3_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "STABILITY_API_KEY"]
+
+SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "MY_PASTELID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "OPENAI_API_KEY", "CLAUDE3_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "STABILITY_API_KEY"]
 LOCAL_PASTEL_ID_PASSPHRASE = None
 MY_PASTELID_PASSPHRASE = None
 SWISS_ARMY_LLAMA_SECURITY_TOKEN = None
+OPENAI_API_KEY = None
 CLAUDE3_API_KEY = None
 GROQ_API_KEY = None
 MISTRAL_API_KEY = None
@@ -118,10 +122,11 @@ def encrypt_sensitive_data(data, encryption_key):
     return url_encoded_encrypted_data
 
 def decrypt_sensitive_fields():
-    global LOCAL_PASTEL_ID_PASSPHRASE, MY_PASTELID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, CLAUDE3_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, STABILITY_API_KEY, encryption_key
+    global LOCAL_PASTEL_ID_PASSPHRASE, MY_PASTELID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, OPENAI_API_KEY, CLAUDE3_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, STABILITY_API_KEY, encryption_key
     LOCAL_PASTEL_ID_PASSPHRASE = decrypt_sensitive_data(get_env_value("LOCAL_PASTEL_ID_PASSPHRASE"), encryption_key)
     MY_PASTELID_PASSPHRASE = decrypt_sensitive_data(get_env_value("MY_PASTELID_PASSPHRASE"), encryption_key)
     SWISS_ARMY_LLAMA_SECURITY_TOKEN = decrypt_sensitive_data(get_env_value("SWISS_ARMY_LLAMA_SECURITY_TOKEN"), encryption_key)
+    OPENAI_API_KEY = decrypt_sensitive_data(get_env_value("OPENAI_API_KEY"), encryption_key)
     CLAUDE3_API_KEY = decrypt_sensitive_data(get_env_value("CLAUDE3_API_KEY"), encryption_key)
     GROQ_API_KEY = decrypt_sensitive_data(get_env_value("GROQ_API_KEY"), encryption_key)
     MISTRAL_API_KEY = decrypt_sensitive_data(get_env_value("MISTRAL_API_KEY"), encryption_key)
@@ -143,8 +148,11 @@ CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_
 SWISS_ARMY_LLAMA_PORT = config.get("SWISS_ARMY_LLAMA_PORT", default=8089, cast=int)
 CREDIT_COST_MULTIPLIER_FACTOR = config.get("CREDIT_COST_MULTIPLIER_FACTOR", default=0.1, cast=float)
 MESSAGING_TIMEOUT_IN_SECONDS = config.get("MESSAGING_TIMEOUT_IN_SECONDS", default=60, cast=int)
-credit_usage_to_tracking_amount_multiplier = 10 # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis
-    
+API_KEY_TESTS_FILE = "api_key_tests.json"
+API_KEY_TEST_VALIDITY_HOURS = config.get("API_KEY_TEST_VALIDITY_HOURS", default=72, cast=int)
+TARGET_VALUE_PER_CREDIT_IN_USD = config.get("TARGET_VALUE_PER_CREDIT_IN_USD", default=0.1, cast=float)
+TARGET_PROFIT_MARGIN = config.get("TARGET_PROFIT_MARGIN", default=0.1, cast=float)
+CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER = config.get("CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER", default=10, cast=int) # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis     
 challenge_store = {}
 
 def parse_timestamp(timestamp_str):
@@ -1082,36 +1090,163 @@ async def get_user_messages_for_pastelid(pastelid: str) -> List[UserMessage]:
 
 
 async def get_inference_model_menu():
-    use_update_to_remote_model_menu = 0
     try:
-        # Check if the model menu file exists locally
-        if os.path.exists("model_menu.json"):
-            with open("model_menu.json", "r") as file:
-                local_model_menu = json.load(file)
-        else:
-            local_model_menu = None
-        model_menu = local_model_menu         
-        if use_update_to_remote_model_menu:   
-            # Fetch the latest model menu from GitHub
-            async with httpx.AsyncClient() as client:
-                response = await client.get(GITHUB_MODEL_MENU_URL)
-                response.raise_for_status()
-                github_model_menu = response.json()
-            # Compare the local and GitHub model menus
-            if local_model_menu != github_model_menu:
-                # Update the local model menu file
-                with open("model_menu.json", "w") as file:
-                    json.dump(github_model_menu, file, indent=2)
-            # Use the updated model menu
-            model_menu = github_model_menu
-        return model_menu
+        # Load the API key test results from the file
+        api_key_tests = load_api_key_tests()
+        # Fetch the latest model menu from GitHub
+        async with httpx.AsyncClient() as client:
+            response = await client.get(GITHUB_MODEL_MENU_URL)
+            response.raise_for_status()
+            github_model_menu = response.json()
+        # Test API keys and filter out models based on the availability of valid API keys
+        filtered_model_menu = {"models": []}
+        for model in github_model_menu["models"]:
+            if model["model_name"].startswith("stability-"):
+                if STABILITY_API_KEY and await is_api_key_valid("stability", api_key_tests):
+                    filtered_model_menu["models"].append(model)
+            elif model["model_name"].startswith("openai-"):
+                if OPENAI_API_KEY and await is_api_key_valid("openai", api_key_tests):
+                    filtered_model_menu["models"].append(model)
+            elif model["model_name"].startswith("mistralapi-"):
+                if MISTRAL_API_KEY and await is_api_key_valid("mistral", api_key_tests):
+                    filtered_model_menu["models"].append(model)
+            elif model["model_name"].startswith("groq-"):
+                if GROQ_API_KEY and await is_api_key_valid("groq", api_key_tests):
+                    filtered_model_menu["models"].append(model)
+            elif "claude" in model["model_name"].lower():
+                if CLAUDE3_API_KEY and await is_api_key_valid("claude", api_key_tests):
+                    filtered_model_menu["models"].append(model)
+            else:
+                # Models that don't require API keys can be included
+                filtered_model_menu["models"].append(model)
+        # Save the filtered model menu locally
+        with open("model_menu.json", "w") as file:
+            json.dump(filtered_model_menu, file, indent=2)
+        # Save the updated API key test results to the file
+        save_api_key_tests(api_key_tests)
+        return filtered_model_menu
     except Exception as e:
         logger.error(f"Error retrieving inference model menu: {str(e)}")
-        # Fallback to the local model menu if available
-        if local_model_menu:
-            return local_model_menu
-        else:
-            raise
+        raise
+
+def load_api_key_tests():
+    try:
+        with open(API_KEY_TESTS_FILE, "r") as file:
+            return json.load(file)
+    except FileNotFoundError:
+        return {}
+
+def save_api_key_tests(api_key_tests):
+    with open(API_KEY_TESTS_FILE, "w") as file:
+        json.dump(api_key_tests, file, indent=2)
+
+async def is_api_key_valid(api_name, api_key_tests):
+    if api_name not in api_key_tests or not is_test_result_valid(api_key_tests[api_name]["timestamp"]):
+        test_passed = await run_api_key_test(api_name)
+        api_key_tests[api_name] = {
+            "passed": test_passed,
+            "timestamp": datetime.now().isoformat()
+        }
+        return test_passed
+    else:
+        return api_key_tests[api_name]["passed"]
+
+def is_test_result_valid(test_timestamp):
+    test_datetime = datetime.fromisoformat(test_timestamp)
+    return (datetime.now() - test_datetime) < timedelta(hours=API_KEY_TEST_VALIDITY_HOURS)
+
+async def run_api_key_test(api_name):
+    if api_name == "stability":
+        return await test_stability_api_key()
+    elif api_name == "openai":
+        return await test_openai_api_key()
+    elif api_name == "mistral":
+        return await test_mistral_api_key()
+    elif api_name == "groq":
+        return await test_groq_api_key()
+    elif api_name == "claude":
+        return await test_claude_api_key()
+    else:
+        return False
+
+async def test_openai_api_key():
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "Test"}]
+                }
+            )
+            return response.status_code == 200
+    except Exception as e:
+        logger.warning(f"OpenAI API key test failed: {str(e)}")
+        return False
+    
+async def test_stability_api_key():
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.stability.ai/v1/generation/stable-diffusion-v1/text-to-image",
+                headers={
+                    "Authorization": f"Bearer {STABILITY_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "text_prompts": [{"text": "Test"}],
+                    "cfg_scale": 7,
+                    "clip_guidance_preset": "FAST_BLUE",
+                    "height": 512,
+                    "width": 512,
+                    "samples": 1,
+                    "steps": 1
+                }
+            )
+            return response.status_code == 200
+    except Exception as e:
+        logger.warning(f"Stability API key test failed: {str(e)}")
+        return False
+
+async def test_mistral_api_key():
+    try:
+        client = MistralAsyncClient(api_key=MISTRAL_API_KEY)
+        response = await client.chat.completions.create(
+            messages=[{"role": "user", "content": "Test"}],
+            model="mistral-small-latest"
+        )
+        return response.choices[0].message.content.strip().lower() == "test"
+    except Exception as e:
+        logger.warning(f"Mistral API key test failed: {str(e)}")
+        return False
+
+async def test_groq_api_key():
+    try:
+        client = AsyncGroq(api_key=GROQ_API_KEY)
+        response = await client.chat.completions.create(
+            messages=[{"role": "user", "content": "Test"}],
+            model="groq-llama2-70b-4096"
+        )
+        return response.choices[0].message.content.strip().lower() == "test"
+    except Exception as e:
+        logger.warning(f"Groq API key test failed: {str(e)}")
+        return False
+
+async def test_claude_api_key():
+    try:
+        client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
+        response = await client.complete(
+            prompt="Test",
+            model="claude-v1"
+        )
+        return response.completion.strip().lower() == "test"
+    except Exception as e:
+        logger.warning(f"Claude API key test failed: {str(e)}")
+        return False
 
 async def save_inference_api_usage_request(inference_request_model: InferenceAPIUsageRequestModel) -> InferenceAPIUsageRequest:
     db_inference_api_usage_request = InferenceAPIUsageRequest(
@@ -1132,36 +1267,125 @@ async def save_inference_api_usage_request(inference_request_model: InferenceAPI
         await db_session.refresh(db_inference_api_usage_request)
     return db_inference_api_usage_request
 
-def get_tokenizer_name(model_name: str) -> str:
+def get_tokenizer(model_name: str):
     model_to_tokenizer_mapping = {
         "claude3": "Xenova/claude-tokenizer",
-        "llama2": "TheBloke/Yarn-Llama-2-7B-128K-GGUF",
         "mistral": "mistralai/Mistral-7B-Instruct-v0.2",
-        "capybarahermes-mistral": "TheBloke/CapybaraHermes-2.5-Mistral-7B-GGUF",
-        "hermes-mistral": "NousResearch/Hermes-2-Pro-Mistral-7B-GGUF",
         "mistral-7b-instruct": "mistralai/Mistral-7B-Instruct-v0.2",
-        "tinyllama": "kirp/TinyLlama-1.1B-Chat-v0.2-gguf",
         "phi": "TheBloke/phi-2-GGUF",
-        "yarn-llama2": "TheBloke/Yarn-Llama-2-7B-128K-GGUF"
+        "openai": "cl100k_base",
+        "groq-llama2": "TheBloke/Yarn-Llama-2-7B-128K-GGUF",
+        "groq-mixtral": "EleutherAI/gpt-neox-20b",
+        "groq-gemma": "google/flan-ul2",
+        "mistralapi": "mistralai/Mistral-7B-Instruct-v0.2",
+        "stability": "openai/clip-vit-large-patch14",
+        "whisper": "openai/whisper-large-v2",
+        "clip-interrogator": "openai/clip-vit-large-patch14",
+        "videocap-transformer": "ArhanK005/videocap-transformer"
     }
     best_match = process.extractOne(model_name.lower(), model_to_tokenizer_mapping.keys())
     return model_to_tokenizer_mapping.get(best_match[0], "gpt2")  # Default to "gpt2" if no match found
 
 def count_tokens(model_name: str, input_data: str) -> int:
-    tokenizer_name = get_tokenizer_name(model_name)
+    tokenizer_name = get_tokenizer(model_name)
     logger.info(f"Selected tokenizer {tokenizer_name} for model {model_name}")
     if 'claude' in model_name.lower():
         tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_name)
-    else: 
+    elif 'whisper' in model_name.lower():
+        tokenizer = WhisperTokenizer.from_pretrained(tokenizer_name)
+    elif 'clip-interrogator' in model_name.lower() or 'stability' in model_name.lower():
+        # CLIP and Stability models don't require tokenization for input data
+        return 0
+    elif 'videocap-transformer' in model_name.lower():
         tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    if hasattr(tokenizer, "encode"): # For tokenizers with an "encode" method (e.g., GPT-2, GPT-Neo)
+    elif 'openai' in model_name.lower():
+        encoding = tiktoken.get_encoding(tokenizer_name)
+        input_tokens = encoding.encode(input_data)
+        return len(input_tokens)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    if hasattr(tokenizer, "encode"):  # For tokenizers with an "encode" method (e.g., GPT-2, GPT-Neo)
         input_tokens = tokenizer.encode(input_data)
-    else: # For tokenizers without an "encode" method (e.g., BERT, RoBERTa)
+    else:  # For tokenizers without an "encode" method (e.g., BERT, RoBERTa)
         input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
     return len(input_tokens)
 
+def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict) -> float:
+    # Define the pricing data for each API service and model
+    logger.info(f"Evaluating API cost for model: {model_name}")
+    pricing_data = {
+        "claude-instant": {"input_cost": 0.0008, "output_cost": 0.0024, "per_call_cost": 0.0013},
+        "claude-2.1": {"input_cost": 0.008, "output_cost": 0.024, "per_call_cost": 0.0128},
+        "claude3-haiku": {"input_cost": 0.00025, "output_cost": 0.00125, "per_call_cost": 0.0006},
+        "claude3-sonnet": {"input_cost": 0.003, "output_cost": 0.015, "per_call_cost": 0.0078},
+        "claude3-opus": {"input_cost": 0.015, "output_cost": 0.075, "per_call_cost": 0.0390},
+        "mistralapi-mistral-small-latest": {"input_cost": 0.002, "output_cost": 0.006, "per_call_cost": 0.0032},
+        "mistralapi-mistral-medium-latest": {"input_cost": 0.0027, "output_cost": 0.0081, "per_call_cost": 0},
+        "mistralapi-mistral-large-latest": {"input_cost": 0.008, "output_cost": 0.024, "per_call_cost": 0.0128},
+        "mistralapi-mistral-7b": {"input_cost": 0.00025, "output_cost": 0.00025, "per_call_cost": 0},
+        "mistralapi-open-mistral-7b": {"input_cost": 0.00025, "output_cost": 0.00025, "per_call_cost": 0},
+        "mistralapi-open-mixtral-8x7b": {"input_cost": 0.0007, "output_cost": 0.0007, "per_call_cost": 0},
+        "mistralapi-mistral-embed": {"input_cost": 0.0001, "output_cost": 0, "per_call_cost": 0},
+        "openai-gpt-4-0125-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
+        "openai-gpt-4-1106-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
+        "openai-gpt-4-1106-vision-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
+        "openai-gpt-4": {"input_cost": 0.03, "output_cost": 0.06, "per_call_cost": 0},
+        "openai-gpt-4-32k": {"input_cost": 0.06, "output_cost": 0.12, "per_call_cost": 0},
+        "openai-gpt-3.5-turbo-0125": {"input_cost": 0.0005, "output_cost": 0.0015, "per_call_cost": 0},
+        "openai-gpt-3.5-turbo-instruct": {"input_cost": 0.0015, "output_cost": 0.002, "per_call_cost": 0},
+        "openai-text-embedding-ada-002": {"input_cost": 0.0004, "output_cost": 0, "per_call_cost": 0},
+        "groq-llama2-70b-4096": {"input_cost": 0.0007, "output_cost": 0.0008, "per_call_cost": 0},
+        "groq-llama2-7b-2048": {"input_cost": 0.0001, "output_cost": 0.0001, "per_call_cost": 0},
+        "groq-mixtral-8x7b-32768": {"input_cost": 0.00027, "output_cost": 0.00027, "per_call_cost": 0},
+        "groq-gemma-7b-it": {"input_cost": 0.0001, "output_cost": 0.0001, "per_call_cost": 0},
+        "stability-core": {"credits_per_call": 3},
+        "stability-sdxl-1.0": {"credits_per_call": 0.4},  # Average of 0.2-0.6
+        "stability-sd-1.6": {"credits_per_call": 0.6},  # Average of 0.2-1.0
+        "stability-creative-upscaler": {"credits_per_call": 25},
+        "stability-esrgan": {"credits_per_call": 0.2},
+        "stability-search-and-replace": {"credits_per_call": 4},
+        "stability-inpaint": {"credits_per_call": 3},
+        "stability-outpaint": {"credits_per_call": 4},
+        "stability-remove-background": {"credits_per_call": 2}
+    }
+    # Find the best match for the model name using fuzzy string matching
+    best_match = process.extractOne(model_name.lower(), pricing_data.keys())
+    if best_match is None or best_match[1] < 60:  # Adjust the threshold as needed
+        logger.warning(f"No pricing data found for model: {model_name}")
+        return 0.0
+    model_pricing = pricing_data[best_match[0]]
+    if model_name.startswith("stability-"):
+        # For Stability models, calculate the cost based on the credits per call
+        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+        credits_cost = model_pricing["credits_per_call"] * number_of_completions_to_generate
+        estimated_cost = credits_cost * 10 / 1000  # Convert credits to dollars ($10 per 1,000 credits)
+    else:
+        # For other models, calculate the cost based on input/output tokens and per-call cost
+        input_data_tokens = count_tokens(model_name, input_data)
+        logger.info(f"Total input data tokens: {input_data_tokens}")
+        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
+        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+        input_cost = model_pricing["input_cost"] * input_data_tokens / 1000
+        output_cost = model_pricing["output_cost"] * number_of_tokens_to_generate / 1000
+        per_call_cost = model_pricing["per_call_cost"] * number_of_completions_to_generate
+        estimated_cost = input_cost + output_cost + per_call_cost
+    logger.info(f"Estimated cost: ${estimated_cost:.4f}")
+    return estimated_cost
+
 async def calculate_proposed_cost(requested_model_data: Dict, model_parameters: Dict, input_data: str) -> float:
-    # Extract credit costs from the requested_model_data
+    model_name = requested_model_data["model_name"]
+    # Calculate the API cost if applicable
+    api_cost = calculate_api_cost(model_name, input_data, model_parameters)
+    if api_cost > 0.0:
+        # If it's an API service-based inference request, convert the API cost to inference credits
+        target_value_per_credit = TARGET_VALUE_PER_CREDIT_IN_USD
+        target_profit_margin = TARGET_PROFIT_MARGIN
+        # Calculate the proposed cost in inference credits based on the API cost
+        proposed_cost_in_credits = api_cost / (target_value_per_credit * (1 - target_profit_margin))
+        final_proposed_cost_in_credits = round(proposed_cost_in_credits, 1)
+        logger.info(f"Proposed cost in credits (API-based): {final_proposed_cost_in_credits}")
+        return final_proposed_cost_in_credits
+    # If it's a local LLM inference request, calculate the cost based on the model's credit costs
     input_token_cost = requested_model_data["credit_costs"]["input_tokens"]
     output_token_cost = requested_model_data["credit_costs"]["output_tokens"]
     compute_cost = requested_model_data["credit_costs"]["compute_cost"]
@@ -1169,8 +1393,6 @@ async def calculate_proposed_cost(requested_model_data: Dict, model_parameters: 
     # Extract relevant information from the model_parameters
     number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
     number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-    # Determine the appropriate tokenizer based on the model type
-    model_name = requested_model_data["model_name"]
     # Calculate the input data size in tokens using the appropriate tokenizer
     input_data_tokens = count_tokens(model_name, input_data)
     logger.info(f"Total input data tokens: {input_data_tokens}")
@@ -1183,8 +1405,52 @@ async def calculate_proposed_cost(requested_model_data: Dict, model_parameters: 
         compute_cost
     ) + memory_cost
     final_proposed_cost_in_credits = round(proposed_cost_in_credits * CREDIT_COST_MULTIPLIER_FACTOR, 1)
-    logger.info(f"Proposed cost in credits: {final_proposed_cost_in_credits}")
+    logger.info(f"Proposed cost in credits (local LLM): {final_proposed_cost_in_credits}")
     return final_proposed_cost_in_credits
+
+async def get_current_psl_market_price():
+    async with httpx.AsyncClient() as client:
+        try:
+            # Fetch data from CoinMarketCap
+            response_cmc = await client.get("https://coinmarketcap.com/currencies/pastel/")
+            price_cmc = float(re.search(r'price today is \$([0-9\.]+) USD', response_cmc.text).group(1))
+        except (httpx.RequestError, AttributeError, ValueError):
+            price_cmc = None
+        try:
+            # Fetch data from CoinGecko
+            response_cg = await client.get("https://api.coingecko.com/api/v3/simple/price?ids=pastel&vs_currencies=usd")
+            if response_cg.status_code == 200:
+                data = response_cg.json()
+                price_cg = data.get("pastel", {}).get("usd")
+            else:
+                price_cg = None
+        except (httpx.RequestError, AttributeError, ValueError):
+            price_cg = None
+    # Calculate the average price
+    prices = [price for price in [price_cmc, price_cg] if price is not None]
+    if not prices:
+        raise ValueError("Could not retrieve PSL price from any source.")
+    average_price = sum(prices) / len(prices)
+    # Validate the price
+    if not 0.0000001 < average_price < 0.02:
+        raise ValueError(f"Invalid PSL price: {average_price}")
+    logger.info(f"The current Average PSL price is: ${average_price:.8f} based on {len(prices)} sources")
+    return average_price
+
+async def estimated_market_price_of_inference_credits_in_psl_terms() -> float:
+    try:
+        psl_price_usd = await get_current_psl_market_price()
+        target_value_per_credit_usd = TARGET_VALUE_PER_CREDIT_IN_USD
+        target_profit_margin = TARGET_PROFIT_MARGIN
+        # Calculate the cost per credit in USD, considering the profit margin
+        cost_per_credit_usd = target_value_per_credit_usd / (1 - target_profit_margin)
+        # Convert the cost per credit from USD to PSL
+        cost_per_credit_psl = cost_per_credit_usd / psl_price_usd
+        logger.info(f"Estimated market price of 1.0 inference credit: {cost_per_credit_psl:.4f} PSL")
+        return cost_per_credit_psl
+    except (ValueError, ZeroDivisionError) as e:
+        logger.error(f"Error calculating estimated market price of inference credits: {str(e)}")
+        raise
 
 def is_swiss_army_llama_responding():
     try:
@@ -1301,7 +1567,7 @@ async def create_and_save_inference_api_usage_response(saved_request: InferenceA
         proposed_cost_of_request_in_inference_credits=proposed_cost_in_credits,
         remaining_credits_in_pack_after_request_processed=remaining_credits_after_request,
         credit_usage_tracking_psl_address=credit_usage_tracking_psl_address,
-        request_confirmation_message_amount_in_patoshis=int(proposed_cost_in_credits * credit_usage_to_tracking_amount_multiplier),
+        request_confirmation_message_amount_in_patoshis=int(proposed_cost_in_credits * CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER),
         max_block_height_to_include_confirmation_transaction=await get_current_pastel_block_height_func() + 10,  # Adjust as needed
         supernode_pastelid_and_signature_on_inference_response_id=supernode_pastelid_and_signature_on_inference_response_id
     )
@@ -1589,8 +1855,80 @@ async def execute_inference_request(inference_request_id: str) -> None:
             else:
                 logger.warning(f"Unsupported inference type for Stability model: {inference_request.model_inference_type_string}")
                 return
+        elif inference_request.requested_model_canonical_string.startswith("openai-"):
+            # Integrate with the OpenAI API to perform the inference task
+            logger.info("Now accessing OpenAI API...")
+            if inference_request.model_inference_type_string == "text_completion":
+                model_parameters = json.loads(inference_request.model_parameters_json)
+                input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+                num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+                output_results = []
+                total_input_tokens = 0
+                total_output_tokens = 0
+                for i in range(num_completions):
+                    response = await client.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {OPENAI_API_KEY}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": inference_request.requested_model_canonical_string.replace("openai-", ""),
+                            "messages": [{"role": "user", "content": input_prompt}],
+                            "max_tokens": model_parameters.get("number_of_tokens_to_generate", 1000),
+                            "temperature": model_parameters.get("temperature", 0.7),
+                            "n": 1
+                        }
+                    )
+                    if response.status_code == 200:
+                        response_json = response.json()
+                        output_results.append(response_json["choices"][0]["message"]["content"])
+                        total_input_tokens += response_json["usage"]["prompt_tokens"]
+                        total_output_tokens += response_json["usage"]["completion_tokens"]
+                    else:
+                        logger.error(f"Error generating text from OpenAI API: {response.text}")
+                        return
+                logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
+                logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
+                if num_completions == 1:
+                    output_text = output_results[0]
+                else:
+                    output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
+                logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
+                result = magika.identify_bytes(output_text.encode("utf-8"))
+                detected_data_type = result.output.ct_label
+                output_results_file_type_strings = {
+                    "output_text": detected_data_type,
+                    "output_files": ["NA"]
+                }
+            elif inference_request.model_inference_type_string == "embedding":
+                input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+                response = await client.post(
+                    "https://api.openai.com/v1/embeddings",
+                    headers={
+                        "Authorization": f"Bearer {OPENAI_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": inference_request.requested_model_canonical_string.replace("openai-", ""),
+                        "input": input_text
+                    }
+                )
+                if response.status_code == 200:
+                    output_results = response.json()["data"][0]["embedding"]
+                    output_results_file_type_strings = {
+                        "output_text": "embedding",
+                        "output_files": ["NA"]
+                    }
+                else:
+                    logger.error(f"Error generating embedding from OpenAI API: {response.text}")
+                    return
+            else:
+                logger.warning(f"Unsupported inference type for OpenAI model: {inference_request.model_inference_type_string}")
+                return            
         elif inference_request.requested_model_canonical_string.startswith("mistralapi-"):
             # Integrate with the Mistral API to perform the inference task
+            logger.info("Now accessing Mistral API...")
             client = MistralAsyncClient(api_key=MISTRAL_API_KEY)
             if inference_request.model_inference_type_string == "text_completion":
                 model_parameters = json.loads(inference_request.model_parameters_json)
@@ -1648,6 +1986,7 @@ async def execute_inference_request(inference_request_id: str) -> None:
                 return
         elif inference_request.requested_model_canonical_string.startswith("groq-"):
             # Integrate with the Groq API to perform the inference task
+            logger.info("Now accessing Groq API...")
             client = AsyncGroq(api_key=GROQ_API_KEY)
             if inference_request.model_inference_type_string == "text_completion":
                 model_parameters = json.loads(inference_request.model_parameters_json)
@@ -1695,6 +2034,7 @@ async def execute_inference_request(inference_request_id: str) -> None:
                 return
         elif "claude" in inference_request.requested_model_canonical_string.lower():
             # Integrate with the Claude API to perform the inference task
+            logger.info("Now accessing Claude (Anthropic) API...")
             client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
             claude3_model_id_string = get_claude3_model_name(inference_request.requested_model_canonical_string)
             if inference_request.model_inference_type_string == "text_completion":
@@ -1893,12 +2233,11 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
             tracking_transactions.append(decoded_tx_data)
     number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(tracking_transactions)
     # Calculate the total number of inference credits consumed
-    credit_usage_to_tracking_amount_multiplier = 10
     total_credits_consumed = 0
     for tx in tracking_transactions:
         for vout in tx.get("vout", []):
             if vout.get("scriptPubKey", {}).get("addresses", [None])[0] == burn_address and vout["value"] < 1.0:
-                total_credits_consumed += float(vout["valuePat"]) / credit_usage_to_tracking_amount_multiplier
+                total_credits_consumed += float(vout["valuePat"]) / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER
     # Calculate the current credit balance
     current_credit_balance = initial_credit_balance - total_credits_consumed
     logger.info(f"Initial credit balance: {initial_credit_balance}")
@@ -2226,11 +2565,18 @@ decrypt_sensitive_fields()
 
 use_encrypt_new_secrets = 0
 if use_encrypt_new_secrets:
-    encrypted_groq_key = encrypt_sensitive_data("cde456", encryption_key)
+    encrypted_openai_key = encrypt_sensitive_data("abc123", encryption_key)
+    print(f"Encrypted OpenAI key: {encrypted_openai_key}")
+    
+    encrypted_groq_key = encrypt_sensitive_data("abc123", encryption_key)
     print(f"Encrypted groq key: {encrypted_groq_key}")
 
     encrypted_mistral_key = encrypt_sensitive_data("abc123", encryption_key)
     print(f"Encrypted mistral key: {encrypted_mistral_key}")
     
-    encrypted_stability_key = encrypt_sensitive_data("fgh789", encryption_key)
+    encrypted_stability_key = encrypt_sensitive_data("abc123", encryption_key)
     print(f"Encrypted stability key: {encrypted_stability_key}")    
+    
+use_test_market_price_data = 1
+if use_test_market_price_data:
+    current_psl_price = asyncio.run(get_current_psl_market_price())
