@@ -1203,14 +1203,18 @@ async def get_inference_model_menu(use_verbose=0):
         raise
 
 def load_api_key_tests():
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    api_key_test_json_file_path = os.path.join(current_dir, API_KEY_TESTS_FILE) 
     try:
-        with open(API_KEY_TESTS_FILE, "r") as file:
+        with open(api_key_test_json_file_path, "r") as file:
             return json.load(file)
     except FileNotFoundError:
         return {}
 
 def save_api_key_tests(api_key_tests):
-    with open(API_KEY_TESTS_FILE, "w") as file:
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    api_key_test_json_file_path = os.path.join(current_dir, API_KEY_TESTS_FILE)     
+    with open(api_key_test_json_file_path, "w") as file:
         json.dump(api_key_tests, file, indent=2)
 
 async def is_api_key_valid(api_name, api_key_tests):
