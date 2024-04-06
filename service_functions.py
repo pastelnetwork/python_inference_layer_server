@@ -33,8 +33,6 @@ import anthropic
 from groq import AsyncGroq
 from mistralai.async_client import MistralAsyncClient
 from mistralai.models.chat_completion import ChatMessage
-import stability_sdk
-from stability_sdk import client as stabilityclient
 from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
@@ -151,6 +149,7 @@ API_KEY_TESTS_FILE = "api_key_tests.json"
 API_KEY_TEST_VALIDITY_HOURS = config.get("API_KEY_TEST_VALIDITY_HOURS", default=72, cast=int)
 TARGET_VALUE_PER_CREDIT_IN_USD = config.get("TARGET_VALUE_PER_CREDIT_IN_USD", default=0.1, cast=float)
 TARGET_PROFIT_MARGIN = config.get("TARGET_PROFIT_MARGIN", default=0.1, cast=float)
+MINIMUM_COST_IN_CREDITS = config.get("MINIMUM_COST_IN_CREDITS", default=0.1, cast=float)
 CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER = config.get("CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER", default=10, cast=int) # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis     
 challenge_store = {}
 
@@ -766,17 +765,6 @@ async def broadcast_message_to_all_sns_using_pastelid_func(message_to_send, mess
     await asyncio.gather(*[send_message(pastelid) for pastelid in list_of_receiving_sn_pastelids])
     return signed_message_to_send
 
-async def get_supernode_model_menu(supernode_url):
-    try:
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.get(f"{supernode_url}/get_inference_model_menu")
-            response.raise_for_status()
-            model_menu = response.json()
-            return model_menu
-    except Exception as e:
-        logger.error(f"Error retrieving model menu from Supernode URL: {supernode_url}: {e}")
-        return None
-
 async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_pastelid, message_body, message_type):
     supernode_list_df, _ = await check_supernode_list_func()
     n = 4
@@ -796,21 +784,28 @@ async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_past
     supported_supernodes = supernode_list_df[supported_supernodes_mask]
     supported_supernodes_minus_this_supernode = supported_supernodes[supported_supernodes['extKey'] != local_sn_pastelid]
     if len(supported_supernodes_minus_this_supernode) == 0:
-        logger.error(f"No supported supernodes found for the desired model: {desired_model_canonical_string} with inference type: {desired_model_inference_type_string} and parameters: {desired_model_parameters_json}")
+        logger.error(f"No other supported supernodes found for the desired model: {desired_model_canonical_string} with inference type: {desired_model_inference_type_string} and parameters: {desired_model_parameters_json}")
         supported_supernodes_minus_this_supernode = supernode_list_df[supernode_list_df['extKey'] != local_sn_pastelid]
         logger.info("We had to choose audit supernodes which cannot process the request themselves if needed!")
     # Get the closest supernodes from the supported supernodes
-    supernode_urls_and_pastelids = [
-        (f"http://{row['ipaddress:port'].split(':')[0]}:7123", row['extKey'])
-        for _, row in supported_supernodes_minus_this_supernode.iterrows()
-    ]
-    closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(n, input_pastelid, supernode_urls_and_pastelids)
+    closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(n, input_pastelid, supported_supernodes_minus_this_supernode)
     list_of_supernode_pastelids = [x[1] for x in closest_supernodes]
     list_of_supernode_urls = [x[0] for x in closest_supernodes]
     list_of_supernode_ips = [x.split('//')[1].split(':')[0] for x in list_of_supernode_urls]
     signed_message = await broadcast_message_to_list_of_sns_using_pastelid_func(message_body, message_type, list_of_supernode_pastelids, LOCAL_PASTEL_ID_PASSPHRASE)
     logger.info(f"Broadcasted a {message_type} to {len(list_of_supernode_pastelids)} closest supernodes to PastelID: {input_pastelid} (with Supernode IPs of {list_of_supernode_ips}): {message_body}")
     return signed_message
+
+async def get_supernode_model_menu(supernode_url):
+    try:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            response = await client.get(f"{supernode_url}/get_inference_model_menu")
+            response.raise_for_status()
+            model_menu = response.json()
+            return model_menu
+    except Exception as e:
+        logger.error(f"Error retrieving model menu from Supernode URL: {supernode_url}: {e}")
+        return None
 
 def is_model_supported(model_menu, desired_model_canonical_string, desired_model_inference_type_string, desired_model_parameters_json):
     if model_menu:
@@ -1483,7 +1478,7 @@ async def calculate_proposed_cost(requested_model_data: Dict, model_parameters: 
         target_profit_margin = TARGET_PROFIT_MARGIN
         # Calculate the proposed cost in inference credits based on the API cost
         proposed_cost_in_credits = api_cost / (target_value_per_credit * (1 - target_profit_margin))
-        final_proposed_cost_in_credits = round(proposed_cost_in_credits, 1)
+        final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, round(proposed_cost_in_credits, 1)])
         logger.info(f"Proposed cost in credits (API-based): {final_proposed_cost_in_credits}")
         return final_proposed_cost_in_credits
     # If it's a local LLM inference request, calculate the cost based on the model's credit costs
@@ -1505,7 +1500,8 @@ async def calculate_proposed_cost(requested_model_data: Dict, model_parameters: 
         (estimated_output_tokens * output_token_cost) +
         compute_cost
     ) + memory_cost
-    final_proposed_cost_in_credits = round(proposed_cost_in_credits * CREDIT_COST_MULTIPLIER_FACTOR, 1)
+    final_proposed_cost_in_credits = round(proposed_cost_in_credits*CREDIT_COST_MULTIPLIER_FACTOR, 1)
+    final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, final_proposed_cost_in_credits])
     logger.info(f"Proposed cost in credits (local LLM): {final_proposed_cost_in_credits}")
     return final_proposed_cost_in_credits
 

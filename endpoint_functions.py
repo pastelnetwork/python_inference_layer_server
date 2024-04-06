@@ -558,6 +558,13 @@ async def retrieve_inference_output_results_endpoint(
         inference_output_results = await service_functions.get_inference_output_results_and_verify_authorization(inference_response_id, pastelid)
         # Broadcast message to nearest SNs to requester's pastelid containing inference results
         inference_output_results_dict = inference_output_results.dict()
+        # Retrieve the inference API usage request from the database
+        inference_usage_request_object = await service_functions.get_inference_api_usage_request_for_audit(inference_output_results_dict['inference_request_id'])
+        inference_usage_request_dict = inference_usage_request_object.to_dict()
+        # Get the requested model parameters from the request dict:
+        model_parameters_json = inference_usage_request_dict['model_parameters_json']
+        # Add model_parameters_json to the inference output results dict:
+        inference_output_results_dict['model_parameters_json'] = model_parameters_json
         # Abbreviate the 'inference_result_json_base64' field to the first 32 characters
         inference_output_results_dict['inference_result_json_base64'] = inference_output_results_dict['inference_result_json_base64'][:32]
         result_message_body = json.dumps(inference_output_results_dict)
