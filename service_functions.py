@@ -765,6 +765,50 @@ async def broadcast_message_to_all_sns_using_pastelid_func(message_to_send, mess
     await asyncio.gather(*[send_message(pastelid) for pastelid in list_of_receiving_sn_pastelids])
     return signed_message_to_send
 
+async def get_supernode_model_menu(supernode_url):
+    try:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            response = await client.get(f"{supernode_url}/get_inference_model_menu")
+            response.raise_for_status()
+            model_menu = response.json()
+            return model_menu
+    except Exception as e:
+        logger.error(f"Error retrieving model menu from Supernode URL: {supernode_url}: {e}")
+        return None
+
+def is_model_supported(model_menu, desired_model_canonical_string, desired_model_inference_type_string, desired_model_parameters_json):
+    if model_menu:
+        desired_parameters = json.loads(desired_model_parameters_json)
+        # Use fuzzy string matching to find the closest matching model name
+        model_names = [model["model_name"] for model in model_menu["models"]]
+        best_match = process.extractOne(desired_model_canonical_string, model_names)
+        if best_match is not None and best_match[1] >= 80:  # Adjust the threshold as needed
+            matched_model = next(model for model in model_menu["models"] if model["model_name"] == best_match[0])
+            if desired_model_inference_type_string in matched_model["supported_inference_type_strings"]:
+                # Check if all desired parameters are supported
+                for desired_param, desired_value in desired_parameters.items():
+                    param_found = False
+                    for param in matched_model["model_parameters"]:
+                        if param["name"] == desired_param:
+                            # Check if the desired parameter value is within the valid range or options
+                            if "type" in param:
+                                if param["type"] == "int" and isinstance(desired_value, int):
+                                    param_found = True
+                                elif param["type"] == "float" and isinstance(desired_value, float):
+                                    param_found = True
+                                elif param["type"] == "string" and isinstance(desired_value, str):
+                                    if "options" in param and desired_value in param["options"]:
+                                        param_found = True
+                                    elif "options" not in param:
+                                        param_found = True
+                            else:
+                                param_found = True
+                            break
+                    if not param_found:
+                        return False
+                return True
+    return False
+        
 async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_pastelid, message_body, message_type):
     supernode_list_df, _ = await check_supernode_list_func()
     n = 4
@@ -796,47 +840,8 @@ async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_past
     logger.info(f"Broadcasted a {message_type} to {len(list_of_supernode_pastelids)} closest supernodes to PastelID: {input_pastelid} (with Supernode IPs of {list_of_supernode_ips}): {message_body}")
     return signed_message
 
-async def get_supernode_model_menu(supernode_url):
-    try:
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.get(f"{supernode_url}/get_inference_model_menu")
-            response.raise_for_status()
-            model_menu = response.json()
-            return model_menu
-    except Exception as e:
-        logger.error(f"Error retrieving model menu from Supernode URL: {supernode_url}: {e}")
-        return None
 
-def is_model_supported(model_menu, desired_model_canonical_string, desired_model_inference_type_string, desired_model_parameters_json):
-    if model_menu:
-        desired_parameters = json.loads(desired_model_parameters_json)
-        for model in model_menu["models"]:
-            if model["model_name"] == desired_model_canonical_string and \
-                desired_model_inference_type_string in model["supported_inference_type_strings"]:
-                # Check if all desired parameters are supported
-                for desired_param, desired_value in desired_parameters.items():
-                    param_found = False
-                    for param in model["model_parameters"]:
-                        if param["name"] == desired_param:
-                            # Check if the desired parameter value is within the valid range or options
-                            if "type" in param:
-                                if param["type"] == "int" and isinstance(desired_value, int):
-                                    param_found = True
-                                elif param["type"] == "float" and isinstance(desired_value, float):
-                                    param_found = True
-                                elif param["type"] == "string" and isinstance(desired_value, str):
-                                    if "options" in param and desired_value in param["options"]:
-                                        param_found = True
-                                    elif "options" not in param:
-                                        param_found = True
-                            else:
-                                param_found = True
-                            break
-                    if not param_found:
-                        return False
-                return True
-    return False
-    
+
 async def retry_on_database_locked(func, *args, max_retries=5, initial_delay=1, backoff_factor=2, jitter_factor=0.1, **kwargs):
     delay = initial_delay
     for attempt in range(max_retries):
