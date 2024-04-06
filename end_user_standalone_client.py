@@ -1348,17 +1348,26 @@ async def main():
             model_inference_type_string = "text_to_image"
             style_strings_list = ["3d-model", "analog-film", "anime", "cinematic", "comic-book", "digital-art", "enhance", "fantasy-art", "isometric", "line-art", "low-poly", "modeling-compound", "neon-punk", "origami", "photographic", "pixel-art", "tile-texture"] 
             style_preset_string = style_strings_list[-3] # "photographic"
+            output_format_list = ["png", "jpeg", "webp"]
+            output_format_string = output_format_list[0] # "png"
+            aspect_ratio_list = ["16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"]
+            aspect_ratio_string = aspect_ratio_list[0] # "16:9"
             model_parameters = {
-                "height": 512,
-                "width": 512,
-                "cfg_scale": 7,
-                "sampler": None,
-                "steps": 50,
-                "seed": 0,
-                "num_samples": 1,
-                "negative_prompt": "low quality, blurry, pixelated",
-                "style_preset": style_preset_string
+                "aspect_ratio": aspect_ratio_string,
+                "seed": 42,
+                "style_preset": style_preset_string,
+                "output_format": output_format_string
             }
+
+            # model_parameters = {
+            #     "height": 512,
+            #     "width": 512,
+            #     "steps": 50,
+            #     "seed": 0,
+            #     "num_samples": 1,
+            #     "negative_prompt": "low quality, blurry, pixelated",
+            #     "style_preset": style_preset_string
+            # }
             max_credit_cost_to_approve_inference_request = 200.0
             inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, requested_model_canonical_string, model_inference_type_string, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
             logger.info(f"Image Generation Inference result data:\n\n {inference_dict}")
@@ -1366,9 +1375,11 @@ async def main():
             
             # Save the generated image to a file
             image_data = base64.b64decode(inference_dict['inference_result_decoded'])
-            with open("generated_image.png", "wb") as f:
+            current_datetime_string = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            generated_image_filename = f"generated_image_{current_datetime_string}.{output_format_string}"
+            with open(generated_image_filename, "wb") as f:
                 f.write(image_data)
-            logger.info("Generated image saved as 'generated_image.png'")
+            logger.info(f"Generated image saved as '{generated_image_filename}'")
 
 if __name__ == "__main__":
     asyncio.run(main())

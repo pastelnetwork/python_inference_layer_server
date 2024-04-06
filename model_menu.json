@@ -576,34 +576,10 @@
       ],
       "model_parameters": [
         {
-          "name": "height",
-          "type": "int",
-          "default": 512,
-          "description": "The height of the generated image"
-        },
-        {
-          "name": "width",
-          "type": "int",
-          "default": 512,
-          "description": "The width of the generated image"
-        },
-        {
-          "name": "cfg_scale",
-          "type": "float",
-          "default": 7,
-          "description": "CFG scale factor"
-        },
-        {
-          "name": "sampler",
+          "name": "aspect_ratio",
           "type": "string",
-          "default": null,
-          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.)"
-        },
-        {
-          "name": "steps",
-          "type": "int",
-          "default": 50,
-          "description": "Number of steps for generation"
+          "default": "1:1",
+          "description": "The aspect ratio of the generated image"
         },
         {
           "name": "seed",
@@ -612,28 +588,28 @@
           "description": "Random seed to use for generation"
         },
         {
-          "name": "num_samples",
-          "type": "int",
-          "default": 1,
-          "description": "Number of samples to generate"
+          "name": "style_preset",
+          "type": "string",
+          "default": null,
+          "description": "Guides the image model towards a particular style (e.g., 3d-model, analog-film, anime, etc.)"
+        },
+        {
+          "name": "output_format",
+          "type": "string",
+          "default": "png",
+          "description": "The format of the generated image"
         },
         {
           "name": "negative_prompt",
           "type": "string",
           "default": null,
           "description": "A blurb of text describing what you do not wish to see in the output image"
-        },
-        {
-          "name": "style_preset",
-          "type": "string",
-          "default": null,
-          "description": "Guides the image model towards a particular style (e.g., 3d-model, analog-film, anime, etc.)"
-        }
+        }                   
       ],
       "credit_costs": {
         "input_tokens": 0,
         "output_tokens": 0,
-        "compute_cost": 15.0,
+        "compute_cost": 1500.0,
         "memory_cost": 0
       }
     },
@@ -717,7 +693,7 @@
       "credit_costs": {
         "input_tokens": 0,
         "output_tokens": 0,
-        "compute_cost": 10.0,
+        "compute_cost": 750.0,
         "memory_cost": 0
       }
     },
@@ -801,7 +777,7 @@
       "credit_costs": {
         "input_tokens": 0,
         "output_tokens": 0,
-        "compute_cost": 7.5,
+        "compute_cost": 400.0,
         "memory_cost": 0
       }
     },
