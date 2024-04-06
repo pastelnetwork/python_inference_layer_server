@@ -2685,6 +2685,9 @@ use_test_market_price_data = 0
 if use_test_market_price_data:
     current_psl_price = asyncio.run(get_current_psl_market_price())
     
-use_get_inference_model_menu_on_start = 0
+use_get_inference_model_menu_on_start = 1
 if use_get_inference_model_menu_on_start:
+    random_async_wait_duration_in_seconds = random.randint(30, 200)
+    logger.info(f"Checking API keys and getting inference model menu (but first waiting for a random period of {random_async_wait_duration_in_seconds} seconds to not overwhelm the APIs)...")
+    await asyncio.sleep(random_async_wait_duration_in_seconds)
     asyncio.run(get_inference_model_menu())
