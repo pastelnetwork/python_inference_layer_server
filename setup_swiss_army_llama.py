@@ -154,10 +154,10 @@ def setup_swiss_army_llama(security_token):
         shell=True,
         executable="/bin/bash",
         env={"PATH": f"{swiss_army_llama_path}/venv/bin:{os.environ['PATH']}"},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=open("swiss_army_llama_stdout.log", "w"),
+        stderr=open("swiss_army_llama_stderr.log", "w"),
         text=True
-    )    
+    )
     external_ip = get_external_ip_func()
     logger.info(f"Setup complete. Open a browser to {external_ip}:8089 to get to the FastAPI Swagger page. Note that your security token is {security_token}.")
     # Read and log the output of the Swiss Army Llama process

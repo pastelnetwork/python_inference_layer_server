@@ -38,7 +38,6 @@ from stability_sdk import client as stabilityclient
 from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
-from bs4 import BeautifulSoup
 
 encryption_key = None
 magika = Magika()
@@ -1233,7 +1232,7 @@ async def test_openai_api_key():
                 },
                 json={
                     "model": "gpt-3.5-turbo",
-                    "messages": [{"role": "user", "content": "Test"}]
+                    "messages": [{"role": "user", "content": "Test; just reply with the word yes if you're working!"}]
                 }
             )
             return response.status_code == 200
@@ -1243,24 +1242,39 @@ async def test_openai_api_key():
     
 async def test_stability_api_key():
     try:
+        engine_id = "stable-diffusion-v1-6"
+        api_host = "https://api.stability.ai"
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                "https://api.stability.ai/v1/generation/stable-diffusion-v1/text-to-image",
+                f"{api_host}/v1/generation/{engine_id}/text-to-image",
                 headers={
-                    "Authorization": f"Bearer {STABILITY_API_KEY}",
-                    "Content-Type": "application/json"
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {STABILITY_API_KEY}"
                 },
                 json={
-                    "text_prompts": [{"text": "Test"}],
+                    "text_prompts": [
+                        {
+                            "text": "A lighthouse on a cliff"
+                        }
+                    ],
                     "cfg_scale": 7,
-                    "clip_guidance_preset": "FAST_BLUE",
                     "height": 512,
                     "width": 512,
                     "samples": 1,
-                    "steps": 1
-                }
+                    "steps": 10,
+                },
             )
-            return response.status_code == 200
+            if response.status_code != 200:
+                raise Exception("Non-200 response: " + str(response.text))
+            data = response.json()
+            if "artifacts" in data and len(data["artifacts"]) > 0:
+                for artifact in data["artifacts"]:  # Directly iterating over the list of dictionaries
+                    if artifact.get("finishReason") == "SUCCESS":
+                        logger.info("Stability API test passed.")
+                        return True
+            logger.info("Stability API test failed!")                    
+            return False
     except Exception as e:
         logger.warning(f"Stability API key test failed: {str(e)}")
         return False
@@ -1268,11 +1282,18 @@ async def test_stability_api_key():
 async def test_mistral_api_key():
     try:
         client = MistralAsyncClient(api_key=MISTRAL_API_KEY)
-        response = await client.chat.completions.create(
-            messages=[{"role": "user", "content": "Test"}],
-            model="mistral-small-latest"
+        async_response = client.chat_stream(
+            model="mistral-small-latest",
+            messages=[ChatMessage(role="user", content="Test; just reply with the word yes if you're working!")],
+            max_tokens=10,
+            temperature=0.7,
         )
-        return response.choices[0].message.content.strip().lower() == "test"
+        completion_text = ""
+        async for chunk in async_response:
+            if chunk.choices[0].delta.content:
+                completion_text += chunk.choices[0].delta.content
+        logger.info(f"Mistral API test response: {completion_text}")                
+        return len(completion_text) > 0
     except Exception as e:
         logger.warning(f"Mistral API key test failed: {str(e)}")
         return False
@@ -1280,11 +1301,19 @@ async def test_mistral_api_key():
 async def test_groq_api_key():
     try:
         client = AsyncGroq(api_key=GROQ_API_KEY)
-        response = await client.chat.completions.create(
-            messages=[{"role": "user", "content": "Test"}],
-            model="groq-llama2-70b-4096"
+        chat_completion = await client.chat.completions.create(
+            messages=[{"role": "user", "content": "Test; just reply with the word yes if you're working!"}],
+            model="mixtral-8x7b-32768",
+            max_tokens=10,
+            temperature=0.7,
         )
-        return response.choices[0].message.content.strip().lower() == "test"
+        response_string = chat_completion.choices[0].message.content.strip()
+        logger.info(f"Groq API test response: {response_string}")
+        if response_string is not None:
+            test_passed = len(response_string) > 0
+        else:
+            test_passed = False
+        return test_passed
     except Exception as e:
         logger.warning(f"Groq API key test failed: {str(e)}")
         return False
@@ -1292,11 +1321,20 @@ async def test_groq_api_key():
 async def test_claude_api_key():
     try:
         client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
-        response = await client.complete(
-            prompt="Test",
-            model="claude-v1"
-        )
-        return response.completion.strip().lower() == "test"
+        async with client.messages.stream(
+            model="claude-3-haiku-20240307",
+            max_tokens=10,
+            temperature=0.7,
+            messages=[{"role": "user", "content": "Test; just reply with the word yes if you're working!"}],
+        ) as stream:
+            message = await stream.get_final_message()
+            response_string = message.content[0].text.strip()
+            logger.info(f"Anthropic API test response: {response_string}")
+            if response_string is not None:
+                test_passed = len(response_string) > 0
+            else:
+                test_passed = False
+            return test_passed
     except Exception as e:
         logger.warning(f"Claude API key test failed: {str(e)}")
         return False
@@ -1824,41 +1862,48 @@ async def execute_inference_request(inference_request_id: str) -> None:
                             logger.error(f"Error generating image from Stability API: {response.text}")
                             return
                 else:
-                    # Use the Python SDK for other models
-                    stability_api = stabilityclient.StabilityInference(
-                        key=STABILITY_API_KEY, 
-                        verbose=True,
-                        engine=inference_request.requested_model_canonical_string
-                    )
-                    response_generator = stability_api.generate(
-                        prompt=prompt,
-                        height=model_parameters.get("height", 512),
-                        width=model_parameters.get("width", 512),
-                        cfg_scale=model_parameters.get("cfg_scale", 7),
-                        sampler=model_parameters.get("sampler", None),
-                        steps=model_parameters.get("steps", 50),
-                        seed=model_parameters.get("seed", 0),
-                        samples=model_parameters.get("num_samples", 1),
-                        negative_prompt=model_parameters.get("negative_prompt", None),
-                        style_preset=model_parameters.get("style_preset", None),
-                    )
-                    output_results = None
-                    for response in response_generator:
-                        for artifact in response.artifacts:
-                            if artifact.finish_reason == stability_sdk.generation.FILTER:
-                                logger.warning("Your request activated the API's safety filters and could not be processed.")
-                            if artifact.type == stability_sdk.generation.ARTIFACT_IMAGE:
-                                output_results = base64.b64encode(artifact.binary).decode("utf-8")
-                                output_results_file_type_strings = {
-                                    "output_text": "base64_image",
-                                    "output_files": ["NA"]
-                                }
-                                break
-                        if output_results is not None:
-                            break
-                    if output_results is None:
-                        logger.error("No image was generated by the Stability API.")
-                        return
+                    model_parameters = json.loads(inference_request.model_parameters_json)
+                    prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+                    engine_id = inference_request.requested_model_canonical_string
+                    api_host = "https://api.stability.ai"
+                    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
+                        response = await client.post(
+                            f"{api_host}/v1/generation/{engine_id}/text-to-image",
+                            headers={
+                                "Content-Type": "application/json",
+                                "Accept": "application/json",
+                                "Authorization": f"Bearer {STABILITY_API_KEY}"
+                            },
+                            json={
+                                "text_prompts": [{"text": prompt}],
+                                "cfg_scale": model_parameters.get("cfg_scale", 7),
+                                "height": model_parameters.get("height", 512),
+                                "width": model_parameters.get("width", 512),
+                                "samples": model_parameters.get("num_samples", 1),
+                                "steps": model_parameters.get("steps", 50),
+                                "style_preset": model_parameters.get("style_preset", None),
+                            },
+                        )
+                        if response.status_code == 200:
+                            data = response.json()
+                            if "artifacts" in data and len(data["artifacts"]) > 0:
+                                for artifact in data["artifacts"]:
+                                    if artifact.get("finishReason") == "SUCCESS":
+                                        output_results = artifact["base64"]
+                                        output_results_file_type_strings = {
+                                            "output_text": "base64_image",
+                                            "output_files": ["NA"]
+                                        }
+                                        break
+                                else:
+                                    logger.warning("No successful artifact found in the Stability API response.")
+                                    return
+                            else:
+                                logger.error("No artifacts found in the Stability API response.")
+                                return
+                        else:
+                            logger.error(f"Error generating image from Stability API: {response.text}")
+                            return
             elif inference_request.model_inference_type_string == "creative_upscale" and "stability-core" in inference_request.requested_model_canonical_string:
                 model_parameters = json.loads(inference_request.model_parameters_json)
                 input_image = base64.b64decode(inference_request.model_input_data_json_b64)
@@ -2630,6 +2675,10 @@ if use_encrypt_new_secrets:
     encrypted_stability_key = encrypt_sensitive_data("abc123", encryption_key)
     print(f"Encrypted stability key: {encrypted_stability_key}")    
     
-use_test_market_price_data = 1
+use_test_market_price_data = 0
 if use_test_market_price_data:
     current_psl_price = asyncio.run(get_current_psl_market_price())
+    
+use_get_inference_model_menu_on_start = 0
+if use_get_inference_model_menu_on_start:
+    asyncio.run(get_inference_model_menu())

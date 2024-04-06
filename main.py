@@ -10,7 +10,7 @@ import uvloop
 from uvicorn import Config, Server
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from database_code import initialize_db
-from service_functions import monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_fields, decrypt_sensitive_data, get_env_value
+from service_functions import monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value
 from setup_swiss_army_llama import check_and_setup_swiss_army_llama
 
 config = DecoupleConfig(RepositoryEnv('.env'))
