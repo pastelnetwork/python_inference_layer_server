@@ -1082,6 +1082,7 @@ async def get_user_messages_for_pastelid(pastelid: str) -> List[UserMessage]:
 
 
 async def get_inference_model_menu():
+    use_update_to_remote_model_menu = 0
     try:
         # Check if the model menu file exists locally
         if os.path.exists("model_menu.json"):
@@ -1089,18 +1090,20 @@ async def get_inference_model_menu():
                 local_model_menu = json.load(file)
         else:
             local_model_menu = None
-        # Fetch the latest model menu from GitHub
-        async with httpx.AsyncClient() as client:
-            response = await client.get(GITHUB_MODEL_MENU_URL)
-            response.raise_for_status()
-            github_model_menu = response.json()
-        # Compare the local and GitHub model menus
-        if local_model_menu != github_model_menu:
-            # Update the local model menu file
-            with open("model_menu.json", "w") as file:
-                json.dump(github_model_menu, file, indent=2)
-        # Use the updated model menu
-        model_menu = github_model_menu
+        model_menu = local_model_menu         
+        if use_update_to_remote_model_menu:   
+            # Fetch the latest model menu from GitHub
+            async with httpx.AsyncClient() as client:
+                response = await client.get(GITHUB_MODEL_MENU_URL)
+                response.raise_for_status()
+                github_model_menu = response.json()
+            # Compare the local and GitHub model menus
+            if local_model_menu != github_model_menu:
+                # Update the local model menu file
+                with open("model_menu.json", "w") as file:
+                    json.dump(github_model_menu, file, indent=2)
+            # Use the updated model menu
+            model_menu = github_model_menu
         return model_menu
     except Exception as e:
         logger.error(f"Error retrieving inference model menu: {str(e)}")
