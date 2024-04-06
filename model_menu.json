@@ -558,7 +558,8 @@
       "model_url": "",
       "description": "Stable Image Core is the best quality achievable at high speed for text-to-image generation.",
       "supported_inference_type_strings": [
-        "text_to_image"
+        "text_to_image",
+        "creative_upscale"
       ],
       "input_fields": [
         {
