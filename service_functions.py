@@ -33,8 +33,6 @@ import anthropic
 from groq import AsyncGroq
 from mistralai.async_client import MistralAsyncClient
 from mistralai.models.chat_completion import ChatMessage
-import stability_sdk
-from stability_sdk import client as stabilityclient
 from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
@@ -151,6 +149,7 @@ API_KEY_TESTS_FILE = "api_key_tests.json"
 API_KEY_TEST_VALIDITY_HOURS = config.get("API_KEY_TEST_VALIDITY_HOURS", default=72, cast=int)
 TARGET_VALUE_PER_CREDIT_IN_USD = config.get("TARGET_VALUE_PER_CREDIT_IN_USD", default=0.1, cast=float)
 TARGET_PROFIT_MARGIN = config.get("TARGET_PROFIT_MARGIN", default=0.1, cast=float)
+MINIMUM_COST_IN_CREDITS = config.get("MINIMUM_COST_IN_CREDITS", default=0.1, cast=float)
 CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER = config.get("CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER", default=10, cast=int) # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis     
 challenge_store = {}
 
@@ -1473,7 +1472,7 @@ async def calculate_proposed_cost(requested_model_data: Dict, model_parameters: 
         target_profit_margin = TARGET_PROFIT_MARGIN
         # Calculate the proposed cost in inference credits based on the API cost
         proposed_cost_in_credits = api_cost / (target_value_per_credit * (1 - target_profit_margin))
-        final_proposed_cost_in_credits = round(proposed_cost_in_credits, 1)
+        final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, round(proposed_cost_in_credits, 1)])
         logger.info(f"Proposed cost in credits (API-based): {final_proposed_cost_in_credits}")
         return final_proposed_cost_in_credits
     # If it's a local LLM inference request, calculate the cost based on the model's credit costs
@@ -1495,7 +1494,8 @@ async def calculate_proposed_cost(requested_model_data: Dict, model_parameters: 
         (estimated_output_tokens * output_token_cost) +
         compute_cost
     ) + memory_cost
-    final_proposed_cost_in_credits = round(proposed_cost_in_credits * CREDIT_COST_MULTIPLIER_FACTOR, 1)
+    final_proposed_cost_in_credits = round(proposed_cost_in_credits*CREDIT_COST_MULTIPLIER_FACTOR, 1)
+    final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, final_proposed_cost_in_credits])
     logger.info(f"Proposed cost in credits (local LLM): {final_proposed_cost_in_credits}")
     return final_proposed_cost_in_credits
 

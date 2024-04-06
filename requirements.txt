@@ -5,8 +5,6 @@ cryptography
 fastapi
 fuzzywuzzy 
 groq
-grpcio
-grpcio-tools
 httpx
 magika
 mistralai
@@ -15,12 +13,11 @@ psutil
 python-decouple
 python-Levenshtein
 sqlalchemy
-stability-sdk
 starlette
 tiktoken
 torch
-torchvision
 torchaudio
+torchvision
 transformers
 uvicorn[standard]
 uvloop
