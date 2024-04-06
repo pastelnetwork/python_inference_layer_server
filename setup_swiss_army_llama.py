@@ -154,8 +154,8 @@ def setup_swiss_army_llama(security_token):
         shell=True,
         executable="/bin/bash",
         env={"PATH": f"{swiss_army_llama_path}/venv/bin:{os.environ['PATH']}"},
-        stdout=open("swiss_army_llama_stdout.log", "w"),
-        stderr=open("swiss_army_llama_stderr.log", "w"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True
     )
     external_ip = get_external_ip_func()
