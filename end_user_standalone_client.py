@@ -905,10 +905,27 @@ class PastelMessagingClient:
                     if model["model_name"] == model_canonical_string and \
                     model_inference_type_string in model["supported_inference_type_strings"]:
                         # Track unsupported parameters
-                        unsupported_parameters = [
-                            desired_param for desired_param in desired_parameters
-                            if not any(param["name"] == desired_param for param in model["model_parameters"])
-                        ]
+                        unsupported_parameters = []
+                        for desired_param, desired_value in desired_parameters.items():
+                            param_found = False
+                            for param in model["model_parameters"]:
+                                if param["name"] == desired_param:
+                                    # Check if the desired parameter value is within the valid range or options
+                                    if "type" in param:
+                                        if param["type"] == "int" and isinstance(desired_value, int):
+                                            param_found = True
+                                        elif param["type"] == "float" and isinstance(desired_value, float):
+                                            param_found = True
+                                        elif param["type"] == "string" and isinstance(desired_value, str):
+                                            if "options" in param and desired_value in param["options"]:
+                                                param_found = True
+                                            elif "options" not in param:
+                                                param_found = True
+                                    else:
+                                        param_found = True
+                                    break
+                            if not param_found:
+                                unsupported_parameters.append(desired_param)
                         if not unsupported_parameters:
                             return True  # All desired parameters are supported
                         else:
@@ -920,7 +937,7 @@ class PastelMessagingClient:
         except Exception as e:
             logger.error(f"Error in check_if_supernode_supports_desired_model from Supernode URL: {supernode_url}: {e}")
             return False
-
+        
     async def get_closest_supernode_url_that_supports_desired_model(self, desired_model_canonical_string: str, desired_model_inference_type_string: str, desired_model_parameters_json: str):
         supernode_list_df, _ = await check_supernode_list_func()
         n = len(supernode_list_df)
@@ -1158,7 +1175,7 @@ async def send_message_and_check_for_new_incoming_messages(
         
 
 async def handle_inference_request_end_to_end(
-    input_prompt_text_to_llm: str,
+    input_prompt_to_llm: str,
     requested_model_canonical_string: str,
     model_inference_type_string: str,
     model_parameters: dict,
@@ -1195,8 +1212,11 @@ async def handle_inference_request_end_to_end(
     supernode_support_dict, closest_supporting_supernode_pastelid, closest_supporting_supernode_url = await messaging_client.get_closest_supernode_url_that_supports_desired_model(requested_model_canonical_string, model_inference_type_string, model_parameters_json) 
     supernode_url = closest_supporting_supernode_url
     supernode_pastelid = closest_supporting_supernode_pastelid
-    assert(supernode_url is not None)
-    input_prompt_text_to_llm__base64_encoded = base64.b64encode(input_prompt_text_to_llm.encode()).decode('utf-8')
+    try:
+        assert(supernode_url is not None)
+    except AssertionError:
+        logger.error(f"Error! No supporting Supernode found for the desired model: {requested_model_canonical_string} with inference type: {model_inference_type_string}")
+    input_prompt_to_llm__base64_encoded = base64.b64encode(input_prompt_to_llm.encode()).decode('utf-8')
     # Prepare the inference API usage request
     request_data = InferenceAPIUsageRequestModel(
         requesting_pastelid=MY_LOCAL_PASTELID,
@@ -1204,7 +1224,7 @@ async def handle_inference_request_end_to_end(
         requested_model_canonical_string=requested_model_canonical_string,
         model_inference_type_string=model_inference_type_string,
         model_parameters_json=model_parameters_json,
-        model_input_data_json_b64=input_prompt_text_to_llm__base64_encoded
+        model_input_data_json_b64=input_prompt_to_llm__base64_encoded
     )
     # Send the inference API usage request
     usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, request_data)
@@ -1258,10 +1278,14 @@ async def handle_inference_request_end_to_end(
                             "supernode_url": supernode_url,
                             "request_data": request_data.dict(),
                             "usage_request_response": usage_request_response,
-                            "input_prompt_text_to_llm": input_prompt_text_to_llm,
+                            "input_prompt_to_llm": input_prompt_to_llm,
                             "output_results": output_results,
-                            "inference_result_decoded": base64.b64decode(output_results["inference_result_json_base64"]).decode()
                         }
+                        if model_inference_type_string == "text_to_image":
+                            inference_result_dict["generated_image_base64"] = output_results["inference_result_json_base64"]
+                            inference_result_dict["generated_image_decoded"] = base64.b64decode(output_results["inference_result_json_base64"])
+                        else:
+                            inference_result_dict["inference_result_decoded"] = base64.b64decode(output_results["inference_result_json_base64"]).decode()
                         audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
                         validation_results = validate_inference_data(inference_result_dict, audit_results)
                         logger.info(f"Validation results: {validation_results}")                    
@@ -1276,7 +1300,7 @@ async def handle_inference_request_end_to_end(
     else:
         logger.info(f"Quoted price of {proposed_cost_in_credits} credits exceeds the maximum allowed cost of {maximum_inference_cost_in_credits} credits. Inference request not confirmed.")
         return None, None, None
-            
+    
 async def main():
     global rpc_connection
     rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
@@ -1290,6 +1314,8 @@ async def main():
         
     use_test_messaging_functionality = 0
     use_test_inference_request_functionality = 1
+    use_test_llm_text_completion = 0
+    use_test_image_generation = 1
 
     if use_test_messaging_functionality:
         # Sample message data:
@@ -1301,18 +1327,48 @@ async def main():
     #________________________________________________________
 
     if use_test_inference_request_functionality:
-        # input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
-        input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
-        # input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
-        requested_model_canonical_string = "mistralapi-mistral-large-latest" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
-        model_inference_type_string = "text_completion" # "embedding"        
-        # model_parameters = {"number_of_tokens_to_generate": 200, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
-        model_parameters = {"number_of_tokens_to_generate": 600, "number_of_completions_to_generate": 1}
-        max_credit_cost_to_approve_inference_request = 200.0
-        inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, requested_model_canonical_string, model_inference_type_string, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
-        logger.info(f"Inference result data:\n\n {inference_dict}")
-        logger.info("\n_____________________________________________________________________\n") 
-        logger.info(f"\n\nFinal Decoded Inference Result:\n\n {inference_dict['inference_result_decoded']}")
+        if use_test_llm_text_completion:
+            # input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
+            input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
+            # input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
+            requested_model_canonical_string = "mistralapi-mistral-large-latest" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
+            model_inference_type_string = "text_completion" # "embedding"        
+            # model_parameters = {"number_of_tokens_to_generate": 200, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
+            model_parameters = {"number_of_tokens_to_generate": 600, "number_of_completions_to_generate": 1}
+            max_credit_cost_to_approve_inference_request = 200.0
+            inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, requested_model_canonical_string, model_inference_type_string, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
+            logger.info(f"Inference result data:\n\n {inference_dict}")
+            logger.info("\n_____________________________________________________________________\n") 
+            logger.info(f"\n\nFinal Decoded Inference Result:\n\n {inference_dict['inference_result_decoded']}")
+
+        if use_test_image_generation:
+            # Test image generation
+            input_prompt_text_to_llm = "A stunning house with a beautiful garden and a pool, in a photorealistic style."
+            requested_model_canonical_string = "stability-core"
+            model_inference_type_string = "text_to_image"
+            style_strings_list = ["3d-model", "analog-film", "anime", "cinematic", "comic-book", "digital-art", "enhance", "fantasy-art", "isometric", "line-art", "low-poly", "modeling-compound", "neon-punk", "origami", "photographic", "pixel-art", "tile-texture"] 
+            style_preset_string = style_strings_list[-3] # "photographic"
+            model_parameters = {
+                "height": 512,
+                "width": 512,
+                "cfg_scale": 7,
+                "sampler": None,
+                "steps": 50,
+                "seed": 0,
+                "num_samples": 1,
+                "negative_prompt": "low quality, blurry, pixelated",
+                "style_preset": style_preset_string
+            }
+            max_credit_cost_to_approve_inference_request = 200.0
+            inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, requested_model_canonical_string, model_inference_type_string, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
+            logger.info(f"Image Generation Inference result data:\n\n {inference_dict}")
+            logger.info("\n_____________________________________________________________________\n")
+            
+            # Save the generated image to a file
+            image_data = base64.b64decode(inference_dict['inference_result_decoded'])
+            with open("generated_image.png", "wb") as f:
+                f.write(image_data)
+            logger.info("Generated image saved as 'generated_image.png'")
 
 if __name__ == "__main__":
     asyncio.run(main())

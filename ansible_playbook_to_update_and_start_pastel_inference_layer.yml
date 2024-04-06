@@ -45,6 +45,9 @@
           . ~/.bashrc
           pyenv local 3.12
           source venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade setuptools
+          python -m pip install wheel           
           pip install -r requirements.txt
           python main.py
         dest: ~/run_script.sh

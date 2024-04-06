@@ -5,6 +5,8 @@ cryptography
 fastapi
 fuzzywuzzy 
 groq
+grpcio
+grpcio-tools
 httpx
 magika
 mistralai
@@ -13,6 +15,7 @@ psutil
 python-decouple
 python-Levenshtein
 sqlalchemy
+stability-sdk
 starlette
 torch
 torchvision
