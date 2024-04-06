@@ -904,10 +904,19 @@ class PastelMessagingClient:
                 for model in model_menu["models"]:
                     if model["model_name"] == model_canonical_string and \
                     model_inference_type_string in model["supported_inference_type_strings"]:
-                        # Check if all desired parameter names are in the model's parameters
-                        if all(any(param["name"] == desired_param for param in model["model_parameters"]) for desired_param in desired_parameters):
-                            return True
-                return False
+                        # Track unsupported parameters
+                        unsupported_parameters = [
+                            desired_param for desired_param in desired_parameters
+                            if not any(param["name"] == desired_param for param in model["model_parameters"])
+                        ]
+                        if not unsupported_parameters:
+                            return True  # All desired parameters are supported
+                        else:
+                            # Log unsupported parameters and return False
+                            unsupported_param_str = ", ".join(unsupported_parameters)
+                            logger.error(f"Unsupported model parameters for {model_canonical_string}: {unsupported_param_str}")
+                            return False
+                return False  # Model not found or does not support the desired inference type
         except Exception as e:
             logger.error(f"Error in check_if_supernode_supports_desired_model from Supernode URL: {supernode_url}: {e}")
             return False
@@ -1186,8 +1195,7 @@ async def handle_inference_request_end_to_end(
     supernode_support_dict, closest_supporting_supernode_pastelid, closest_supporting_supernode_url = await messaging_client.get_closest_supernode_url_that_supports_desired_model(requested_model_canonical_string, model_inference_type_string, model_parameters_json) 
     supernode_url = closest_supporting_supernode_url
     supernode_pastelid = closest_supporting_supernode_pastelid
-    assert(len(supernode_url)>0)
-    assert(len(supernode_pastelid)>0)
+    assert(supernode_url is not None)
     input_prompt_text_to_llm__base64_encoded = base64.b64encode(input_prompt_text_to_llm.encode()).decode('utf-8')
     # Prepare the inference API usage request
     request_data = InferenceAPIUsageRequestModel(
@@ -1296,9 +1304,10 @@ async def main():
         # input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
         input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
         # input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
-        requested_model_canonical_string = "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
+        requested_model_canonical_string = "mistralapi-mistral-large-latest" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
         model_inference_type_string = "text_completion" # "embedding"        
-        model_parameters = {"number_of_tokens_to_generate": 200, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
+        # model_parameters = {"number_of_tokens_to_generate": 200, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
+        model_parameters = {"number_of_tokens_to_generate": 600, "number_of_completions_to_generate": 1}
         max_credit_cost_to_approve_inference_request = 200.0
         inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, requested_model_canonical_string, model_inference_type_string, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
         logger.info(f"Inference result data:\n\n {inference_dict}")

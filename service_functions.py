@@ -1483,11 +1483,17 @@ async def execute_inference_request(inference_request_id: str) -> None:
                         temperature=model_parameters.get("temperature", 0.7),
                     )
                     completion_text = ""
+                    prompt_tokens = 0
+                    completion_tokens = 0
                     async for chunk in async_response:
-                        completion_text += chunk.choices[0].delta.content
+                        if chunk.choices[0].delta.content:
+                            completion_text += chunk.choices[0].delta.content
+                            completion_tokens += 1
+                        else:
+                            prompt_tokens += 1
                     output_results.append(completion_text)
-                    total_input_tokens += async_response.usage.prompt_tokens
-                    total_output_tokens += async_response.usage.completion_tokens
+                    total_input_tokens += prompt_tokens
+                    total_output_tokens += completion_tokens
                 logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
                 logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
                 if num_completions == 1:
@@ -1514,8 +1520,8 @@ async def execute_inference_request(inference_request_id: str) -> None:
                 }
             else:
                 logger.warning(f"Unsupported inference type for Mistral model: {inference_request.model_inference_type_string}")
-                return        
-        if inference_request.requested_model_canonical_string.startswith("groq-"):
+                return
+        elif inference_request.requested_model_canonical_string.startswith("groq-"):
             # Integrate with the Groq API to perform the inference task
             client = AsyncGroq(api_key=GROQ_API_KEY)
             if inference_request.model_inference_type_string == "text_completion":
