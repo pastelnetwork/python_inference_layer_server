@@ -914,7 +914,7 @@ class PastelMessagingClient:
 
     async def get_closest_supernode_url_that_supports_desired_model(self, desired_model_canonical_string: str, desired_model_inference_type_string: str, desired_model_parameters_json: str):
         supernode_list_df, _ = await check_supernode_list_func()
-        n = min([len(supernode_list_df), 10])
+        n = len(supernode_list_df)
         supernode_urls_and_pastelids = await get_n_closest_supernodes_to_pastelid_urls(n, self.pastelid, supernode_list_df)
         list_of_supernode_pastelids = [x[1] for x in supernode_urls_and_pastelids]
         list_of_supernode_urls = [x[0] for x in supernode_urls_and_pastelids]
@@ -1186,6 +1186,8 @@ async def handle_inference_request_end_to_end(
     supernode_support_dict, closest_supporting_supernode_pastelid, closest_supporting_supernode_url = await messaging_client.get_closest_supernode_url_that_supports_desired_model(requested_model_canonical_string, model_inference_type_string, model_parameters_json) 
     supernode_url = closest_supporting_supernode_url
     supernode_pastelid = closest_supporting_supernode_pastelid
+    assert(len(supernode_url)>0)
+    assert(len(supernode_pastelid)>0)
     input_prompt_text_to_llm__base64_encoded = base64.b64encode(input_prompt_text_to_llm.encode()).decode('utf-8')
     # Prepare the inference API usage request
     request_data = InferenceAPIUsageRequestModel(
@@ -1292,9 +1294,9 @@ async def main():
 
     if use_test_inference_request_functionality:
         # input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
-        # input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
-        input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
-        requested_model_canonical_string = "mistral-7b-instruct-v0.2" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2",
+        input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
+        # input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
+        requested_model_canonical_string = "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
         model_inference_type_string = "text_completion" # "embedding"        
         model_parameters = {"number_of_tokens_to_generate": 200, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
         max_credit_cost_to_approve_inference_request = 200.0

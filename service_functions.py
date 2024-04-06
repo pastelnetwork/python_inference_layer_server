@@ -29,17 +29,22 @@ from typing import List, Tuple, Dict
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from magika import Magika
 import anthropic
+from groq import AsyncGroq
+from mistralai.async_client import MistralAsyncClient
+from mistralai.models.chat_completion import ChatMessage
 from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast
 
 encryption_key = None
 magika = Magika()
-SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "MY_PASTELID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "CLAUDE3_API_KEY"]
+SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "MY_PASTELID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "CLAUDE3_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY"]
 LOCAL_PASTEL_ID_PASSPHRASE = None
 MY_PASTELID_PASSPHRASE = None
 SWISS_ARMY_LLAMA_SECURITY_TOKEN = None
 CLAUDE3_API_KEY = None
+GROQ_API_KEY = None
+MISTRAL_API_KEY = None
 
 def get_env_value(key):
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -103,13 +108,22 @@ def decrypt_sensitive_data(url_encoded_encrypted_data, encryption_key):
     decrypted_data = cipher_suite.decrypt(encrypted_data.encode()).decode()  # Ensure this is a bytes-like object
     return decrypted_data
 
+def encrypt_sensitive_data(data, encryption_key):
+    cipher_suite = Fernet(encryption_key)
+    encrypted_data = cipher_suite.encrypt(data.encode()).decode()
+    url_encoded_encrypted_data = quote_plus(encrypted_data)
+    return url_encoded_encrypted_data
+
 def decrypt_sensitive_fields():
-    global LOCAL_PASTEL_ID_PASSPHRASE, MY_PASTELID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, CLAUDE3_API_KEY, encryption_key
+    global LOCAL_PASTEL_ID_PASSPHRASE, MY_PASTELID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, CLAUDE3_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, encryption_key
     LOCAL_PASTEL_ID_PASSPHRASE = decrypt_sensitive_data(get_env_value("LOCAL_PASTEL_ID_PASSPHRASE"), encryption_key)
     MY_PASTELID_PASSPHRASE = decrypt_sensitive_data(get_env_value("MY_PASTELID_PASSPHRASE"), encryption_key)
     SWISS_ARMY_LLAMA_SECURITY_TOKEN = decrypt_sensitive_data(get_env_value("SWISS_ARMY_LLAMA_SECURITY_TOKEN"), encryption_key)
     CLAUDE3_API_KEY = decrypt_sensitive_data(get_env_value("CLAUDE3_API_KEY"), encryption_key)
-    
+    GROQ_API_KEY = decrypt_sensitive_data(get_env_value("GROQ_API_KEY"), encryption_key)
+    MISTRAL_API_KEY = decrypt_sensitive_data(get_env_value("MISTRAL_API_KEY"), encryption_key)
+        
+        
 # Logger setup
 logger = setup_logger()
 
@@ -1450,8 +1464,106 @@ async def execute_inference_request(inference_request_id: str) -> None:
                 select(InferenceAPIUsageResponse).where(InferenceAPIUsageResponse.inference_request_id == inference_request_id)
             )
             inference_response = inference_response.scalar_one_or_none()
-        # Integrate with the Claude API to perform the inference task
-        if "claude" in inference_request.requested_model_canonical_string.lower():
+        if inference_request.requested_model_canonical_string.startswith("mistralapi-"):
+            # Integrate with the Mistral API to perform the inference task
+            client = MistralAsyncClient(api_key=MISTRAL_API_KEY)
+            if inference_request.model_inference_type_string == "text_completion":
+                model_parameters = json.loads(inference_request.model_parameters_json)
+                input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+                num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+                output_results = []
+                total_input_tokens = 0
+                total_output_tokens = 0
+                for i in range(num_completions):
+                    messages = [ChatMessage(role="user", content=input_prompt)]
+                    async_response = client.chat_stream(
+                        model=inference_request.requested_model_canonical_string.replace("mistralapi-",""),
+                        messages=messages,
+                        max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
+                        temperature=model_parameters.get("temperature", 0.7),
+                    )
+                    completion_text = ""
+                    async for chunk in async_response:
+                        completion_text += chunk.choices[0].delta.content
+                    output_results.append(completion_text)
+                    total_input_tokens += async_response.usage.prompt_tokens
+                    total_output_tokens += async_response.usage.completion_tokens
+                logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
+                logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
+                if num_completions == 1:
+                    output_text = output_results[0]
+                else:
+                    output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
+                logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
+                result = magika.identify_bytes(output_text.encode("utf-8"))
+                detected_data_type = result.output.ct_label
+                output_results_file_type_strings = {
+                    "output_text": detected_data_type,
+                    "output_files": ["NA"]
+                }
+            elif inference_request.model_inference_type_string == "embedding":
+                input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+                embeddings_batch_response = client.embeddings(
+                    model=inference_request.requested_model_canonical_string,
+                    input=[input_text],
+                )
+                output_results = embeddings_batch_response.data[0].embedding
+                output_results_file_type_strings = {
+                    "output_text": "embedding",
+                    "output_files": ["NA"]
+                }
+            else:
+                logger.warning(f"Unsupported inference type for Mistral model: {inference_request.model_inference_type_string}")
+                return        
+        if inference_request.requested_model_canonical_string.startswith("groq-"):
+            # Integrate with the Groq API to perform the inference task
+            client = AsyncGroq(api_key=GROQ_API_KEY)
+            if inference_request.model_inference_type_string == "text_completion":
+                model_parameters = json.loads(inference_request.model_parameters_json)
+                input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+                num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+                output_results = []
+                total_input_tokens = 0
+                total_output_tokens = 0
+                for i in range(num_completions):
+                    chat_completion = await client.chat.completions.create(
+                        messages=[{"role": "user", "content": input_prompt}],
+                        model=inference_request.requested_model_canonical_string.replace("groq-",""),
+                        max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
+                        temperature=model_parameters.get("temperature", 0.7),
+                    )
+                    output_results.append(chat_completion.choices[0].message.content)
+                    total_input_tokens += chat_completion.usage.prompt_tokens
+                    total_output_tokens += chat_completion.usage.completion_tokens
+                logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
+                logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
+                if num_completions == 1:
+                    output_text = output_results[0]
+                else:
+                    output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
+                logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
+                result = magika.identify_bytes(output_text.encode("utf-8"))
+                detected_data_type = result.output.ct_label
+                output_results_file_type_strings = {
+                    "output_text": detected_data_type,
+                    "output_files": ["NA"]
+                }
+            elif inference_request.model_inference_type_string == "embedding":
+                input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+                response = await client.embed(
+                    input=input_text,
+                    model=inference_request.requested_model_canonical_string[5:],
+                )
+                output_results = response.embedding
+                output_results_file_type_strings = {
+                    "output_text": "embedding",
+                    "output_files": ["NA"]
+                }
+            else:
+                logger.warning(f"Unsupported inference type for Groq model: {inference_request.model_inference_type_string}")
+                return
+        elif "claude" in inference_request.requested_model_canonical_string.lower():
+            # Integrate with the Claude API to perform the inference task
             client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
             claude3_model_id_string = get_claude3_model_name(inference_request.requested_model_canonical_string)
             if inference_request.model_inference_type_string == "text_completion":
@@ -1981,3 +2093,11 @@ if credit_pack is None:
 
 encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
 decrypt_sensitive_fields()
+
+use_encrypt_new_secrets = 0
+if use_encrypt_new_secrets:
+    encrypted_groq_key = encrypt_sensitive_data("cde456", encryption_key)
+    print(f"Encrypted groq key: {encrypted_groq_key}")
+
+    encrypted_mistral_key = encrypt_sensitive_data("abc123", encryption_key)
+    print(f"Encrypted mistral key: {encrypted_mistral_key}")
