@@ -12,6 +12,7 @@ import urllib.parse as urlparse
 import decimal
 import re
 import random
+import time
 import pandas as pd
 from pydantic import BaseModel
 from datetime import datetime, timezone
@@ -1274,7 +1275,7 @@ async def handle_inference_request_end_to_end(
                     if results_available:
                         output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
                         output_results_size = len(output_results['inference_result_json_base64'])
-                        max_response_size_to_log = 2000
+                        max_response_size_to_log = 20000
                         if output_results_size < max_response_size_to_log:
                             logger.info(f"Retrieved inference output results: {output_results}")
                         # Create the inference_result_dict with all relevant information
@@ -1318,8 +1319,8 @@ async def main():
         
     use_test_messaging_functionality = 0
     use_test_inference_request_functionality = 1
-    use_test_llm_text_completion = 0
-    use_test_image_generation = 1
+    use_test_llm_text_completion = 1
+    use_test_image_generation = 0
 
     if use_test_messaging_functionality:
         # Sample message data:
@@ -1332,21 +1333,27 @@ async def main():
 
     if use_test_inference_request_functionality:
         if use_test_llm_text_completion:
-            # input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
-            input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
+            start_time = time.time()
+            input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
+            # input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
             # input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
-            requested_model_canonical_string = "mistralapi-mistral-large-latest" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
+            # requested_model_canonical_string = "mistralapi-mistral-large-latest" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
+            requested_model_canonical_string = "groq-mixtral-8x7b-32768" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
             model_inference_type_string = "text_completion" # "embedding"        
             # model_parameters = {"number_of_tokens_to_generate": 200, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
-            model_parameters = {"number_of_tokens_to_generate": 600, "number_of_completions_to_generate": 1}
+            model_parameters = {"number_of_tokens_to_generate": 1000, "number_of_completions_to_generate": 1}
             max_credit_cost_to_approve_inference_request = 200.0
             inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, requested_model_canonical_string, model_inference_type_string, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
             logger.info(f"Inference result data:\n\n {inference_dict}")
             logger.info("\n_____________________________________________________________________\n") 
             logger.info(f"\n\nFinal Decoded Inference Result:\n\n {inference_dict['inference_result_decoded']}")
+            end_time = time.time()
+            duration_in_minutes = (end_time - start_time)/60
+            logger.info(f"Total time taken for inference request: {round(duration_in_minutes, 2)} minutes")
 
         if use_test_image_generation:
             # Test image generation
+            start_time = time.time()
             input_prompt_text_to_llm = "A stunning house with a beautiful garden and a pool, in a photorealistic style."
             requested_model_canonical_string = "stability-core"
             model_inference_type_string = "text_to_image"
@@ -1392,6 +1399,9 @@ async def main():
             with open(generated_image_file_path, "wb") as f:
                 f.write(image_data)
             logger.info(f"Generated image saved as '{generated_image_file_path}'")
-
+            end_time = time.time()
+            duration_in_minutes = (end_time - start_time)/60
+            logger.info(f"Total time taken for inference request: {round(duration_in_minutes, 2)} minutes")
+            
 if __name__ == "__main__":
     asyncio.run(main())
