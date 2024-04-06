@@ -782,31 +782,33 @@ def is_model_supported(model_menu, desired_model_canonical_string, desired_model
         # Use fuzzy string matching to find the closest matching model name
         model_names = [model["model_name"] for model in model_menu["models"]]
         best_match = process.extractOne(desired_model_canonical_string, model_names)
-        if best_match is not None and best_match[1] >= 80:  # Adjust the threshold as needed
+        if best_match is not None and best_match[1] >= 95:  # Adjust the threshold as needed
             matched_model = next(model for model in model_menu["models"] if model["model_name"] == best_match[0])
-            if desired_model_inference_type_string in matched_model["supported_inference_type_strings"]:
-                # Check if all desired parameters are supported
-                for desired_param, desired_value in desired_parameters.items():
-                    param_found = False
-                    for param in matched_model["model_parameters"]:
-                        if param["name"] == desired_param:
-                            # Check if the desired parameter value is within the valid range or options
-                            if "type" in param:
-                                if param["type"] == "int" and isinstance(desired_value, int):
-                                    param_found = True
-                                elif param["type"] == "float" and isinstance(desired_value, float):
-                                    param_found = True
-                                elif param["type"] == "string" and isinstance(desired_value, str):
-                                    if "options" in param and desired_value in param["options"]:
+            if "supported_inference_type_strings" in matched_model.keys() and "model_parameters" in matched_model.keys():
+                if desired_model_inference_type_string in matched_model["supported_inference_type_strings"]:
+                    # Check if all desired parameters are supported
+                    for desired_param, desired_value in desired_parameters.items():
+                        param_found = False
+                        for param in matched_model["model_parameters"]:
+                            if param["name"] == desired_param:
+                                # Check if the desired parameter value is within the valid range or options
+                                if "type" in param:
+                                    if param["type"] == "int" and isinstance(desired_value, int):
                                         param_found = True
-                                    elif "options" not in param:
+                                    elif param["type"] == "float" and isinstance(desired_value, float):
                                         param_found = True
-                            else:
-                                param_found = True
-                            break
-                    if not param_found:
-                        return False
-                return True
+                                    elif param["type"] == "string" and isinstance(desired_value, str):
+                                        if "options" in param and desired_value in param["options"]:
+                                            param_found = True
+                                        elif "options" not in param:
+                                            param_found = True
+                                else:
+                                    param_found = True
+                                break
+                        if not param_found:
+                            return False
+                    return True
+            return False
     return False
         
 async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_pastelid, message_body, message_type):
@@ -1151,7 +1153,7 @@ async def get_user_messages_for_pastelid(pastelid: str) -> List[UserMessage]:
 #________________________________________________________________________________________________________________            
 
 
-async def get_inference_model_menu():
+async def get_inference_model_menu(use_verbose=0):
     try:
         # Load the API key test results from the file
         api_key_tests = load_api_key_tests()
@@ -1166,23 +1168,28 @@ async def get_inference_model_menu():
             if model["model_name"].startswith("stability-"):
                 if STABILITY_API_KEY and await is_api_key_valid("stability", api_key_tests):
                     filtered_model_menu["models"].append(model)
-                    logger.info(f"Added Stability model: {model['model_name']} to the filtered model menu.")
+                    if use_verbose:
+                        logger.info(f"Added Stability model: {model['model_name']} to the filtered model menu.")
             elif model["model_name"].startswith("openai-"):
                 if OPENAI_API_KEY and await is_api_key_valid("openai", api_key_tests):
                     filtered_model_menu["models"].append(model)
-                    logger.info(f"Added OpenAImodel: {model['model_name']} to the filtered model menu.")
+                    if use_verbose:
+                        logger.info(f"Added OpenAImodel: {model['model_name']} to the filtered model menu.")
             elif model["model_name"].startswith("mistralapi-"):
                 if MISTRAL_API_KEY and await is_api_key_valid("mistral", api_key_tests):
                     filtered_model_menu["models"].append(model)
-                    logger.info(f"Added MistralAPI model: {model['model_name']} to the filtered model menu.")
+                    if use_verbose:
+                        logger.info(f"Added MistralAPI model: {model['model_name']} to the filtered model menu.")
             elif model["model_name"].startswith("groq-"):
                 if GROQ_API_KEY and await is_api_key_valid("groq", api_key_tests):
                     filtered_model_menu["models"].append(model)
-                    logger.info(f"Added Groq API model: {model['model_name']} to the filtered model menu.")
+                    if use_verbose:
+                        logger.info(f"Added Groq API model: {model['model_name']} to the filtered model menu.")
             elif "claude" in model["model_name"].lower():
                 if CLAUDE3_API_KEY and await is_api_key_valid("claude", api_key_tests):
                     filtered_model_menu["models"].append(model)
-                    logger.info(f"Added Anthropic API model: {model['model_name']} to the filtered model menu.")
+                    if use_verbose:
+                        logger.info(f"Added Anthropic API model: {model['model_name']} to the filtered model menu.")
             else:
                 # Models that don't require API keys can be automatically included
                 filtered_model_menu["models"].append(model)
@@ -1595,28 +1602,33 @@ async def validate_inference_api_usage_request(request_data: dict) -> Tuple[bool
         if requested_model_data is None:
             logger.warning(f"Invalid model requested: {requested_model}")
             return False, 0, credit_pack.current_credit_balance
+        if "api_based_pricing" in requested_model_data['credit_costs']:
+            is_api_based_model = 1
+        else:
+            is_api_based_model = 0
         # Check if the requested inference type is supported by the model
         if model_inference_type_string not in requested_model_data["supported_inference_type_strings"]:
             logger.warning(f"Unsupported inference type '{model_inference_type_string}' for model '{requested_model}'")
             return False, 0, credit_pack.current_credit_balance
-        if is_swiss_army_llama_responding():
-            # Validate the requested model against the Swiss Army Llama API
-            async with httpx.AsyncClient() as client:
-                params = {"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                response = await client.get(f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_list_of_available_model_names/", params=params)
-                if response.status_code == 200:
-                    available_models = response.json()["model_names"]
-                    if requested_model not in available_models:
-                        # Add the new model to Swiss Army Llama
-                        add_model_response = await client.post(f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/add_new_model/", params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "model_url": requested_model_data["model_url"]})
-                        if add_model_response.status_code != 200:
-                            logger.warning(f"Failed to add new model to Swiss Army Llama: {requested_model}")
-                            return False, 0, credit_pack.current_credit_balance
-                else:
-                    logger.warning("Failed to retrieve available models from Swiss Army Llama API")
-                    return False, 0, credit_pack.current_credit_balance
-        else:
-            logger.error(f"Error! Swiss Army Llama is not running on port {SWISS_ARMY_LLAMA_PORT}")
+        if not is_api_based_model:
+            if is_swiss_army_llama_responding():
+                # Validate the requested model against the Swiss Army Llama API
+                async with httpx.AsyncClient() as client:
+                    params = {"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                    response = await client.get(f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_list_of_available_model_names/", params=params)
+                    if response.status_code == 200:
+                        available_models = response.json()["model_names"]
+                        if requested_model not in available_models:
+                            # Add the new model to Swiss Army Llama
+                            add_model_response = await client.post(f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/add_new_model/", params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "model_url": requested_model_data["model_url"]})
+                            if add_model_response.status_code != 200:
+                                logger.warning(f"Failed to add new model to Swiss Army Llama: {requested_model}")
+                                return False, 0, credit_pack.current_credit_balance
+                    else:
+                        logger.warning("Failed to retrieve available models from Swiss Army Llama API")
+                        return False, 0, credit_pack.current_credit_balance
+            else:
+                logger.error(f"Error! Swiss Army Llama is not running on port {SWISS_ARMY_LLAMA_PORT}")
         # Calculate the proposed cost in credits based on the requested model and input data
         model_parameters_dict = json.loads(model_parameters)
         input_data_binary = base64.b64decode(input_data)
@@ -2699,4 +2711,5 @@ if use_get_inference_model_menu_on_start:
     random_async_wait_duration_in_seconds = random.randint(15, 35)
     logger.info(f"Checking API keys and getting inference model menu (but first waiting for a random period of {random_async_wait_duration_in_seconds} seconds to not overwhelm the APIs)...")
     asyncio.run(asyncio.sleep(random_async_wait_duration_in_seconds))
-    asyncio.run(get_inference_model_menu())
+    use_verbose=1
+    asyncio.run(get_inference_model_menu(use_verbose))
