@@ -1,7 +1,6 @@
 aiosqlite
 anthropic
 asyncio
-beautifulsoup4
 cryptography
 fastapi
 fuzzywuzzy 
