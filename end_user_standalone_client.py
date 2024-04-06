@@ -1273,8 +1273,9 @@ async def handle_inference_request_end_to_end(
                     results_available = await messaging_client.check_status_of_inference_request_results(supernode_url, inference_response_id) # Get the inference output results
                     if results_available:
                         output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
-                        output_results_size = len(output_results)
-                        if output_results_size < 2000:
+                        output_results_size = len(output_results['inference_result_json_base64'])
+                        max_response_size_to_log = 2000
+                        if output_results_size < max_response_size_to_log:
                             logger.info(f"Retrieved inference output results: {output_results}")
                         # Create the inference_result_dict with all relevant information
                         inference_result_dict = {
