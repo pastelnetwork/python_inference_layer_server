@@ -162,6 +162,398 @@
       }
     },
     {
+      "model_name": "claude3-opus",
+      "model_url": "",
+      "description": "The Claude3 Opus model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 2.0,
+        "output_tokens": 1.5,
+        "compute_cost": 1.0,
+        "memory_cost": 0.8
+      }
+    },
+    {
+      "model_name": "claude3-sonnet",
+      "model_url": "",
+      "description": "The Claude3 Sonnet model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 2.0,
+        "output_tokens": 1.5,
+        "compute_cost": 1.0,
+        "memory_cost": 0.8
+      }
+    },
+    {
+      "model_name": "groq-llama2-70b-4096",
+      "model_url": "",
+      "description": "LLaMA2 70b is a powerful language model developed by Meta with a context window of 4,096 tokens.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 2.0,
+        "output_tokens": 1.5,
+        "compute_cost": 1.0,
+        "memory_cost": 0.8
+      }
+    },
+    {
+      "model_name": "groq-mixtral-8x7b-32768",
+      "model_url": "",
+      "description": "Mixtral 8x7b is a powerful language model developed by Mistral with a context window of 32,768 tokens.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 2.0,
+        "output_tokens": 1.5,
+        "compute_cost": 1.0,
+        "memory_cost": 0.8
+      }
+    },
+    {
+      "model_name": "groq-gemma-7b-it",
+      "model_url": "",
+      "description": "Gemma 7b is a powerful language model developed by Google with a context window of 8,192 tokens.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 2.0,
+        "output_tokens": 1.5,
+        "compute_cost": 1.0,
+        "memory_cost": 0.8
+      }
+    },
+    {
+      "model_name": "mistralapi-mistral-small-latest",
+      "model_url": "",
+      "description": "Mistral small is a powerful language model developed by Mistral AI.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 2.0,
+        "output_tokens": 1.5,
+        "compute_cost": 1.0,
+        "memory_cost": 0.8
+      }
+    },
+    {
+      "model_name": "mistralapi-mistral-medium-latest",
+      "model_url": "",
+      "description": "Mistral medium is a powerful language model developed by Mistral AI.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 2.0,
+        "output_tokens": 1.5,
+        "compute_cost": 1.0,
+        "memory_cost": 0.8
+      }
+    },
+    {
+      "model_name": "mistralapi-mistral-large-latest",
+      "model_url": "",
+      "description": "Mistral large is a powerful language model developed by Mistral AI.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 2.0,
+        "output_tokens": 1.5,
+        "compute_cost": 1.0,
+        "memory_cost": 0.8
+      }
+    },    
+    {
       "model_name": "stable-diffusion-xl",
       "model_url": "https://huggingface.co/CompVis/stable-diffusion-v1-4",
       "description": "Stable Diffusion XL model for text-to-image generation",

@@ -4,8 +4,10 @@ asyncio
 cryptography
 fastapi
 fuzzywuzzy 
+groq
 httpx
 magika
+mistralai
 pandas
 psutil
 python-decouple
