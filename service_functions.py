@@ -1166,26 +1166,30 @@ async def get_inference_model_menu():
             if model["model_name"].startswith("stability-"):
                 if STABILITY_API_KEY and await is_api_key_valid("stability", api_key_tests):
                     filtered_model_menu["models"].append(model)
+                    logger.info(f"Added Stability model: {model['model_name']} to the filtered model menu.")
             elif model["model_name"].startswith("openai-"):
                 if OPENAI_API_KEY and await is_api_key_valid("openai", api_key_tests):
                     filtered_model_menu["models"].append(model)
+                    logger.info(f"Added OpenAImodel: {model['model_name']} to the filtered model menu.")
             elif model["model_name"].startswith("mistralapi-"):
                 if MISTRAL_API_KEY and await is_api_key_valid("mistral", api_key_tests):
                     filtered_model_menu["models"].append(model)
+                    logger.info(f"Added MistralAPI model: {model['model_name']} to the filtered model menu.")
             elif model["model_name"].startswith("groq-"):
                 if GROQ_API_KEY and await is_api_key_valid("groq", api_key_tests):
                     filtered_model_menu["models"].append(model)
+                    logger.info(f"Added Groq API model: {model['model_name']} to the filtered model menu.")
             elif "claude" in model["model_name"].lower():
                 if CLAUDE3_API_KEY and await is_api_key_valid("claude", api_key_tests):
                     filtered_model_menu["models"].append(model)
+                    logger.info(f"Added Anthropic API model: {model['model_name']} to the filtered model menu.")
             else:
-                # Models that don't require API keys can be included
+                # Models that don't require API keys can be automatically included
                 filtered_model_menu["models"].append(model)
         # Save the filtered model menu locally
         with open("model_menu.json", "w") as file:
             json.dump(filtered_model_menu, file, indent=2)
-        # Save the updated API key test results to the file
-        save_api_key_tests(api_key_tests)
+        save_api_key_tests(api_key_tests) # Save the updated API key test results to file
         return filtered_model_menu
     except Exception as e:
         logger.error(f"Error retrieving inference model menu: {str(e)}")
@@ -2692,7 +2696,7 @@ if use_test_market_price_data:
     
 use_get_inference_model_menu_on_start = 1
 if use_get_inference_model_menu_on_start:
-    random_async_wait_duration_in_seconds = random.randint(30, 200)
+    random_async_wait_duration_in_seconds = random.randint(15, 35)
     logger.info(f"Checking API keys and getting inference model menu (but first waiting for a random period of {random_async_wait_duration_in_seconds} seconds to not overwhelm the APIs)...")
     asyncio.run(asyncio.sleep(random_async_wait_duration_in_seconds))
     asyncio.run(get_inference_model_menu())
