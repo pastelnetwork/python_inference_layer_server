@@ -11,6 +11,7 @@ import hashlib
 import urllib.parse as urlparse
 import decimal
 import re
+import random
 import pandas as pd
 from pydantic import BaseModel
 from datetime import datetime, timezone
@@ -1272,7 +1273,9 @@ async def handle_inference_request_end_to_end(
                     results_available = await messaging_client.check_status_of_inference_request_results(supernode_url, inference_response_id) # Get the inference output results
                     if results_available:
                         output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
-                        logger.info(f"Retrieved inference output results: {output_results}")
+                        output_results_size = len(output_results)
+                        if output_results_size < 2000:
+                            logger.info(f"Retrieved inference output results: {output_results}")
                         # Create the inference_result_dict with all relevant information
                         inference_result_dict = {
                             "supernode_url": supernode_url,
@@ -1352,10 +1355,11 @@ async def main():
             output_format_string = output_format_list[0] # "png"
             aspect_ratio_list = ["16:9", "1:1", "21:9", "2:3", "3:2", "4:5", "5:4", "9:16", "9:21"]
             aspect_ratio_string = aspect_ratio_list[0] # "16:9"
+            random_seed = random.randint(0, 1000)
             if "core" in requested_model_canonical_string:
                 model_parameters = {
                     "aspect_ratio": aspect_ratio_string,
-                    "seed": 42,
+                    "seed": random_seed,
                     "style_preset": style_preset_string,
                     "output_format": output_format_string,
                     "negative_prompt": "low quality, blurry, pixelated"
@@ -1372,16 +1376,21 @@ async def main():
                 }
             max_credit_cost_to_approve_inference_request = 200.0
             inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(input_prompt_text_to_llm, requested_model_canonical_string, model_inference_type_string, model_parameters, max_credit_cost_to_approve_inference_request, burn_address)
-            logger.info(f"Image Generation Inference result data:\n\n {inference_dict}")
+            logger.info(f"Inference result data received at {datetime.now()}; decoded image size in megabytes: {round(len(inference_dict['generated_image_decoded'])/(1024*1024), 2)} MB")
             logger.info("\n_____________________________________________________________________\n")
             
             # Save the generated image to a file
-            image_data = base64.b64decode(inference_dict['inference_result_decoded'])
-            current_datetime_string = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            generated_image_filename = f"generated_image_{current_datetime_string}.{output_format_string}"
-            with open(generated_image_filename, "wb") as f:
+            image_data = base64.b64decode(inference_dict['generated_image_decoded'])
+            current_datetime_string = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+            image_generation_prompt_without_whitespace_or_newlines_abbreviated_to_100_characters = re.sub(r'\s+', '_', input_prompt_text_to_llm)[:100]
+            generated_image_filename = f"generated_image__prompt__{image_generation_prompt_without_whitespace_or_newlines_abbreviated_to_100_characters}__generated_on_{current_datetime_string}.{output_format_string}"
+            generated_image_folder_name = 'generated_images'
+            if not os.path.exists(generated_image_folder_name):
+                os.makedirs(generated_image_folder_name)
+            generated_image_file_path = os.path.join(generated_image_folder_name, generated_image_filename)    
+            with open(generated_image_file_path, "wb") as f:
                 f.write(image_data)
-            logger.info(f"Generated image saved as '{generated_image_filename}'")
+            logger.info(f"Generated image saved as '{generated_image_file_path}'")
 
 if __name__ == "__main__":
     asyncio.run(main())

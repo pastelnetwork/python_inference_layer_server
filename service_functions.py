@@ -1476,7 +1476,7 @@ async def execute_inference_request(inference_request_id: str) -> None:
                 model_parameters = json.loads(inference_request.model_parameters_json)
                 prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
                 if "stability-core" in inference_request.requested_model_canonical_string:
-                    async with httpx.AsyncClient() as client:
+                    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
                         response = await client.post(
                             "https://api.stability.ai/v2beta/stable-image/generate/core",
                             headers={
@@ -1544,7 +1544,7 @@ async def execute_inference_request(inference_request_id: str) -> None:
                 model_parameters = json.loads(inference_request.model_parameters_json)
                 input_image = base64.b64decode(inference_request.model_input_data_json_b64)
                 prompt = model_parameters.get("prompt", "")
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
                     response = await client.post(
                         "https://api.stability.ai/v2beta/stable-image/upscale/creative",
                         headers={
