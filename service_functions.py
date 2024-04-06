@@ -1259,7 +1259,9 @@ async def process_inference_api_usage_request(inference_api_usage_request: Infer
     # Save the inference API usage request
     saved_request = await save_inference_api_usage_request(inference_api_usage_request)
     credit_pack_identifier = inference_api_usage_request.credit_pack_identifier
-    credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    credit_pack_json_file_path = os.path.join(current_dir, CREDIT_PACK_FILE) 
+    credit_pack = InferenceCreditPackMockup.load_from_json(credit_pack_json_file_path)
     if credit_pack.credit_pack_identifier == credit_pack_identifier:
         credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
     # Create and save the InferenceAPIUsageResponse
