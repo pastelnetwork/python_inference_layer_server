@@ -6,6 +6,7 @@
     - name: Close/terminate the application if running
       shell: |
         ps -ef | grep 'supernode_messaging_and_control' | grep -v grep | awk '{print $2}' | xargs -r kill -9
+        ps -ef | grep 'swiss_army_llama' | grep -v grep | awk '{print $2}' | xargs -r kill -9
       ignore_errors: true
 
     - name: Update code
