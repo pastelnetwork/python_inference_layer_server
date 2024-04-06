@@ -554,40 +554,32 @@
       }
     },
     {
-      "model_name": "stable-diffusion-xl",
-      "model_url": "https://huggingface.co/CompVis/stable-diffusion-v1-4",
-      "description": "Stable Diffusion XL model for text-to-image generation",
+      "model_name": "stability-core",
+      "model_url": "",
+      "description": "Stable Image Core is the best quality achievable at high speed for text-to-image generation.",
+      "supported_inference_type_strings": [
+        "text_to_image"
+      ],
       "input_fields": [
         {
           "name": "prompt",
           "file_type": "text",
           "optional": false
-        },
-        {
-          "name": "image",
-          "file_type": "image",
-          "optional": true
         }
       ],
       "output_fields": [
         {
-          "name": "image",
-          "file_type": "image",
+          "name": "generated_image",
+          "file_type": "base64_image",
           "optional": false
         }
       ],
       "model_parameters": [
         {
-          "name": "num_inference_steps",
+          "name": "height",
           "type": "int",
-          "default": 50,
-          "description": "The number of denoising steps"
-        },
-        {
-          "name": "guidance_scale",
-          "type": "float",
-          "default": 7.5,
-          "description": "The scale for classifier-free guidance"
+          "default": 512,
+          "description": "The height of the generated image"
         },
         {
           "name": "width",
@@ -596,17 +588,221 @@
           "description": "The width of the generated image"
         },
         {
+          "name": "cfg_scale",
+          "type": "float",
+          "default": 7,
+          "description": "CFG scale factor"
+        },
+        {
+          "name": "sampler",
+          "type": "string",
+          "default": null,
+          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.)"
+        },
+        {
+          "name": "steps",
+          "type": "int",
+          "default": 50,
+          "description": "Number of steps for generation"
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "default": 0,
+          "description": "Random seed to use for generation"
+        },
+        {
+          "name": "num_samples",
+          "type": "int",
+          "default": 1,
+          "description": "Number of samples to generate"
+        },
+        {
+          "name": "negative_prompt",
+          "type": "string",
+          "default": null,
+          "description": "A blurb of text describing what you do not wish to see in the output image"
+        },
+        {
+          "name": "style_preset",
+          "type": "string",
+          "default": null,
+          "description": "Guides the image model towards a particular style (e.g., 3d-model, analog-film, anime, etc.)"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "compute_cost": 15.0,
+        "memory_cost": 0
+      }
+    },
+    {
+      "model_name": "stability-sdxl-1.0",
+      "model_url": "",
+      "description": "The standard base model for image generation from Stability AI.",
+      "supported_inference_type_strings": [
+        "text_to_image"
+      ],
+      "input_fields": [
+        {
+          "name": "prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_image",
+          "file_type": "base64_image",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
           "name": "height",
           "type": "int",
           "default": 512,
           "description": "The height of the generated image"
+        },
+        {
+          "name": "width",
+          "type": "int",
+          "default": 512,
+          "description": "The width of the generated image"
+        },
+        {
+          "name": "cfg_scale",
+          "type": "float",
+          "default": 7,
+          "description": "CFG scale factor"
+        },
+        {
+          "name": "sampler",
+          "type": "string",
+          "default": null,
+          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.)"
+        },
+        {
+          "name": "steps",
+          "type": "int",
+          "default": 50,
+          "description": "Number of steps for generation"
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "default": 0,
+          "description": "Random seed to use for generation"
+        },
+        {
+          "name": "num_samples",
+          "type": "int",
+          "default": 1,
+          "description": "Number of samples to generate"
+        },
+        {
+          "name": "negative_prompt",
+          "type": "string",
+          "default": null,
+          "description": "A blurb of text describing what you do not wish to see in the output image"
+        },
+        {
+          "name": "style_preset",
+          "type": "string",
+          "default": null,
+          "description": "Guides the image model towards a particular style (e.g., 3d-model, analog-film, anime, etc.)"
         }
       ],
       "credit_costs": {
-        "input_tokens": 2.0,
+        "input_tokens": 0,
         "output_tokens": 0,
-        "compute_cost": 1.5,
-        "memory_cost": 0.8
+        "compute_cost": 10.0,
+        "memory_cost": 0
+      }
+    },
+    {
+      "model_name": "stability-sd-1.6",
+      "model_url": "",
+      "description": "Flexible-resolution base model for image generation from Stability AI.",
+      "supported_inference_type_strings": [
+        "text_to_image"
+      ],
+      "input_fields": [
+        {
+          "name": "prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_image",
+          "file_type": "base64_image",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "height",
+          "type": "int",
+          "default": 512,
+          "description": "The height of the generated image"
+        },
+        {
+          "name": "width",
+          "type": "int",
+          "default": 512,
+          "description": "The width of the generated image"
+        },
+        {
+          "name": "cfg_scale",
+          "type": "float",
+          "default": 7,
+          "description": "CFG scale factor"
+        },
+        {
+          "name": "sampler",
+          "type": "string",
+          "default": null,
+          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.)"
+        },
+        {
+          "name": "steps",
+          "type": "int",
+          "default": 50,
+          "description": "Number of steps for generation"
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "default": 0,
+          "description": "Random seed to use for generation"
+        },
+        {
+          "name": "num_samples",
+          "type": "int",
+          "default": 1,
+          "description": "Number of samples to generate"
+        },
+        {
+          "name": "negative_prompt",
+          "type": "string",
+          "default": null,
+          "description": "A blurb of text describing what you do not wish to see in the output image"
+        },
+        {
+          "name": "style_preset",
+          "type": "string",
+          "default": null,
+          "description": "Guides the image model towards a particular style (e.g., 3d-model, analog-film, anime, etc.)"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "compute_cost": 7.5,
+        "memory_cost": 0
       }
     },
     {
