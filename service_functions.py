@@ -125,7 +125,7 @@ def decrypt_sensitive_fields():
     CLAUDE3_API_KEY = decrypt_sensitive_data(get_env_value("CLAUDE3_API_KEY"), encryption_key)
     GROQ_API_KEY = decrypt_sensitive_data(get_env_value("GROQ_API_KEY"), encryption_key)
     MISTRAL_API_KEY = decrypt_sensitive_data(get_env_value("MISTRAL_API_KEY"), encryption_key)
-        
+    STABILITY_API_KEY = decrypt_sensitive_data(get_env_value("STABILITY_API_KEY"), encryption_key)
         
 # Logger setup
 logger = setup_logger()
@@ -1473,7 +1473,7 @@ async def execute_inference_request(inference_request_id: str) -> None:
         if inference_request.requested_model_canonical_string.startswith("stability-"):
             # Integrate with the Stability API to perform the image generation task
             stability_api = stabilityclient.StabilityInference(
-                key=os.environ['STABILITY_KEY'], 
+                key=STABILITY_API_KEY, 
                 verbose=True,
                 engine=inference_request.requested_model_canonical_string
             )
@@ -2145,11 +2145,11 @@ decrypt_sensitive_fields()
 
 use_encrypt_new_secrets = 0
 if use_encrypt_new_secrets:
-    # encrypted_groq_key = encrypt_sensitive_data("cde456", encryption_key)
-    # print(f"Encrypted groq key: {encrypted_groq_key}")
+    encrypted_groq_key = encrypt_sensitive_data("cde456", encryption_key)
+    print(f"Encrypted groq key: {encrypted_groq_key}")
 
-    # encrypted_mistral_key = encrypt_sensitive_data("abc123", encryption_key)
-    # print(f"Encrypted mistral key: {encrypted_mistral_key}")
+    encrypted_mistral_key = encrypt_sensitive_data("abc123", encryption_key)
+    print(f"Encrypted mistral key: {encrypted_mistral_key}")
     
-    encrypted_stability_key = encrypt_sensitive_data("sk-d1QgBq6Orx5JOSlBTaMibCOCG43y9mRVsOrD4IekYi0gVfnn", encryption_key)
+    encrypted_stability_key = encrypt_sensitive_data("fgh789", encryption_key)
     print(f"Encrypted stability key: {encrypted_stability_key}")    
