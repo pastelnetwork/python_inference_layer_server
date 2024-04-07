@@ -14,9 +14,10 @@ DATABASE_URL = config.get("DATABASE_URL", cast=str, default="sqlite+aiosqlite://
 logger = setup_logger()
 Base = declarative_base()
 
+#SQLAlchemy ORM Models:
+
 class Message(Base):
     __tablename__ = "messages"
-
     id = Column(Integer, primary_key=True, index=True)
     sending_sn_pastelid = Column(String, index=True)
     receiving_sn_pastelid = Column(String, index=True)
@@ -30,6 +31,206 @@ class Message(Base):
     def __repr__(self):
         return f"<Message(id={self.id}, sending_sn_pastelid='{self.sending_sn_pastelid}', receiving_sn_pastelid='{self.receiving_sn_pastelid}', message_type='{self.message_type}', timestamp='{self.timestamp}')>"
 
+class UserMessage(Base):
+    __tablename__ = "user_messages"
+    id = Column(Integer, primary_key=True, index=True)
+    from_pastelid = Column(String, index=True)
+    to_pastelid = Column(String, index=True)
+    message_body = Column(Text)
+    message_signature = Column(String)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+class SupernodeUserMessage(Message):
+    __tablename__ = "supernode_user_messages"
+    id = Column(Integer, ForeignKey("messages.id"), primary_key=True)
+    user_message_id = Column(Integer, ForeignKey("user_messages.id"), index=True)
+    user_message = relationship("UserMessage", backref="supernode_user_messages")
+    __mapper_args__ = {
+        "polymorphic_identity": "supernode_user_message",
+    }
+
+class InferenceAPIUsageRequest(Base):
+    __tablename__ = "inference_api_usage_requests"
+    id = Column(Integer, primary_key=True, index=True)
+    inference_request_id = Column(String, unique=True, index=True)
+    requesting_pastelid = Column(String, index=True)
+    credit_pack_identifier = Column(String, index=True)
+    requested_model_canonical_string = Column(String)
+    model_inference_type_string = Column(String)
+    model_parameters_json = Column(JSON)
+    model_input_data_json_b64 = Column(String)
+    total_psl_cost_for_pack = Column(Numeric(precision=20, scale=8))
+    initial_credit_balance = Column(Numeric(precision=20, scale=8))
+    requesting_pastelid_signature = Column(String)
+    class Config:
+        protected_namespaces = ()
+        
+class InferenceAPIUsageResponse(Base):
+    __tablename__ = "inference_api_usage_responses"
+    id = Column(Integer, primary_key=True, index=True)
+    inference_response_id = Column(String, unique=True, index=True)
+    inference_request_id = Column(String, ForeignKey("inference_api_usage_requests.inference_request_id"), index=True)
+    proposed_cost_of_request_in_inference_credits = Column(Numeric(precision=20, scale=8))
+    remaining_credits_in_pack_after_request_processed = Column(Numeric(precision=20, scale=8))
+    credit_usage_tracking_psl_address = Column(String, index=True)
+    request_confirmation_message_amount_in_patoshis = Column(Integer)
+    max_block_height_to_include_confirmation_transaction = Column(Integer)
+    supernode_pastelid_and_signature_on_inference_response_id = Column(String)
+    
+class InferenceAPIOutputResult(Base):
+    __tablename__ = "inference_api_output_results"
+    id = Column(Integer, primary_key=True, index=True)
+    inference_result_id = Column(String, unique=True, index=True)
+    inference_request_id = Column(String, ForeignKey("inference_api_usage_requests.inference_request_id"), index=True)
+    inference_response_id = Column(String, ForeignKey("inference_api_usage_responses.inference_response_id"), index=True)
+    responding_supernode_pastelid = Column(String, index=True)
+    inference_result_json_base64 = Column(String)
+    inference_result_file_type_strings = Column(String)
+    responding_supernode_signature_on_inference_result_id = Column(String)
+        
+# Legacy mockup data model class; TODO: delete once we change code that depends on it    
+# class InferenceCreditPack(Base):
+#     __tablename__ = "inference_credit_packs"
+#     id = Column(Integer, primary_key=True, index=True)
+#     credit_pack_identifier = Column(String, unique=True, index=True)
+#     authorized_pastelids = Column(JSON)
+#     psl_cost_per_credit = Column(Numeric(precision=20, scale=8))
+#     total_psl_cost_for_pack = Column(Numeric(precision=20, scale=8))
+#     initial_credit_balance = Column(Numeric(precision=20, scale=8))
+#     current_credit_balance = Column(Numeric(precision=20, scale=8))
+#     credit_usage_tracking_psl_address = Column(String, index=True)
+#     version = Column(Integer)
+#     purchase_height = Column(Integer)
+#     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+        
+class CreditPackPurchaseRequest(Base):
+    __tablename__ = "credit_pack_purchase_requests"
+    id = Column(Integer, primary_key=True, index=True)
+    requesting_end_user_pastelid = Column(String, index=True)
+    requested_initial_credits_in_credit_pack = Column(Integer)
+    list_of_authorized_pastelids_allowed_to_use_credit_pack = Column(JSON)
+    credit_usage_tracking_psl_address = Column(String, index=True)
+    request_timestamp_utc_iso_string = Column(String)
+    request_pastel_block_height = Column(Integer)
+    request_pastel_block_hash = Column(String)
+    credit_purchase_request_message_version_string = Column(String)
+    credit_pack_purchase_request_version_string = Column(String)
+    sha3_256_hash_of_credit_pack_purchase_request_fields = Column(String, unique=True, index=True)
+    requesting_end_user_pastelid_signature_on_request_hash = Column(String)
+
+class CreditPackPurchaseRequestResponse(Base):
+    __tablename__ = "credit_pack_purchase_request_responses"
+    id = Column(Integer, primary_key=True, index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields = Column(String, ForeignKey("credit_pack_purchase_requests.sha3_256_hash_of_credit_pack_purchase_request_fields"), index=True)
+    credit_pack_purchase_request_json = Column(String)
+    psl_cost_per_credit = Column(Numeric(precision=20, scale=8))
+    proposed_total_cost_of_credit_pack_in_psl = Column(Numeric(precision=20, scale=8))
+    credit_usage_tracking_psl_address = Column(String, index=True)
+    request_response_timestamp_utc_iso_string = Column(String)
+    request_response_pastel_block_height = Column(Integer)
+    request_response_pastel_block_hash = Column(String)
+    credit_purchase_request_response_message_version_string = Column(String)
+    responding_supernode_pastelid = Column(String, index=True)
+    list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = Column(JSON)
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields = Column(String, unique=True, index=True)
+    responding_supernode_signature_on_credit_pack_purchase_request_response_hash = Column(String)
+    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash = Column(JSON)
+    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json = Column(JSON)
+
+class CreditPackPurchaseRequestConfirmation(Base):
+    __tablename__ = "credit_pack_purchase_request_confirmations"
+    id = Column(Integer, primary_key=True, index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields = Column(String, ForeignKey("credit_pack_purchase_requests.sha3_256_hash_of_credit_pack_purchase_request_fields"), index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields = Column(String, ForeignKey("credit_pack_purchase_request_responses.sha3_256_hash_of_credit_pack_purchase_request_response_fields"), index=True)
+    credit_pack_purchase_request_response_json = Column(String)
+    requesting_end_user_pastelid = Column(String, index=True)
+    txid_of_credit_purchase_burn_transaction = Column(String, index=True)
+    credit_purchase_request_confirmation_utc_iso_string = Column(String)
+    credit_purchase_request_confirmation_pastel_block_height = Column(Integer)
+    credit_purchase_request_confirmation_pastel_block_hash = Column(String)
+    credit_purchase_request_confirmation_message_version_string = Column(String)
+    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = Column(String, unique=True, index=True)
+    requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = Column(String)
+
+class CreditPackPurchaseRequestConfirmationResponse(Base):
+    __tablename__ = "credit_pack_purchase_request_confirmation_responses"
+    id = Column(Integer, primary_key=True, index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields = Column(String, ForeignKey("credit_pack_purchase_requests.sha3_256_hash_of_credit_pack_purchase_request_fields"), index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = Column(String, ForeignKey("credit_pack_purchase_request_confirmations.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields"), index=True)
+    credit_pack_confirmation_outcome_string = Column(String)
+    pastel_api_credit_pack_ticket_registration_txid = Column(String, index=True)
+    credit_pack_confirmation_failure_reason_if_applicable = Column(String)
+    credit_purchase_request_confirmation_response_utc_iso_string = Column(String)
+    credit_purchase_request_confirmation_response_pastel_block_height = Column(Integer)
+    credit_purchase_request_confirmation_response_pastel_block_hash = Column(String)
+    credit_purchase_request_confirmation_response_message_version_string = Column(String)
+    responding_supernode_pastelid = Column(String, index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields = Column(String, unique=True, index=True)
+    responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash = Column(String)
+
+class MessageMetadata(Base):
+    __tablename__ = "message_metadata"
+    id = Column(Integer, primary_key=True, index=True)
+    total_messages = Column(Integer)
+    total_senders = Column(Integer)
+    total_receivers = Column(Integer)
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    
+class MessageSenderMetadata(Base):
+    __tablename__ = "message_sender_metadata"
+    id = Column(Integer, primary_key=True, index=True)
+    sending_sn_pastelid = Column(String, index=True)
+    sending_sn_txid_vout = Column(String, index=True)
+    sending_sn_pubkey = Column(String, index=True)    
+    total_messages_sent = Column(Integer)
+    total_data_sent_bytes = Column(Numeric(precision=20, scale=2))
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+class MessageReceiverMetadata(Base):
+    __tablename__ = "message_receiver_metadata"
+    id = Column(Integer, primary_key=True, index=True)
+    receiving_sn_pastelid = Column(String, index=True)
+    receiving_sn_txid_vout = Column(String, index=True)
+    total_messages_received = Column(Integer)
+    total_data_received_bytes = Column(Numeric(precision=20, scale=2))
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+class MessageSenderReceiverMetadata(Base):
+    __tablename__ = "message_sender_receiver_metadata"
+    id = Column(Integer, primary_key=True, index=True)
+    sending_sn_pastelid = Column(String, index=True)
+    receiving_sn_pastelid = Column(String, index=True)
+    total_messages = Column(Integer)
+    total_data_bytes = Column(Numeric(precision=20, scale=2))
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+        
+def to_serializable(val):
+    if isinstance(val, datetime):
+        return val.isoformat()
+    elif isinstance(val, Decimal):
+        return float(val)
+    else:
+        return str(val)
+
+def to_dict(self):
+    d = {}
+    for column in self.__table__.columns:
+        if not isinstance(column.type, LargeBinary):
+            value = getattr(self, column.name)
+            if value is not None:
+                serialized_value = to_serializable(value)
+                d[column.name] = serialized_value if serialized_value is not None else value
+    return d
+
+Message.to_dict = to_dict
+UserMessage.to_dict = to_dict
+SupernodeUserMessage.to_dict = to_dict
+InferenceAPIUsageRequest.to_dict = to_dict
+InferenceAPIUsageResponse.to_dict = to_dict
+
+#_____________________________________________________________________________
+# Pydantic Response Models:
+
 class MessageModel(BaseModel):
     message: str
     message_type: str
@@ -41,27 +242,6 @@ class MessageModel(BaseModel):
             datetime: lambda v: v.isoformat()
         }
 
-class UserMessage(Base):
-    __tablename__ = "user_messages"
-
-    id = Column(Integer, primary_key=True, index=True)
-    from_pastelid = Column(String, index=True)
-    to_pastelid = Column(String, index=True)
-    message_body = Column(Text)
-    message_signature = Column(String)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-
-class SupernodeUserMessage(Message):
-    __tablename__ = "supernode_user_messages"
-
-    id = Column(Integer, ForeignKey("messages.id"), primary_key=True)
-    user_message_id = Column(Integer, ForeignKey("user_messages.id"), index=True)
-    user_message = relationship("UserMessage", backref="supernode_user_messages")
-    
-    __mapper_args__ = {
-        "polymorphic_identity": "supernode_user_message",
-    }
-    
 class SendMessageResponse(BaseModel):
     status: str
     message: str
@@ -75,7 +255,6 @@ class UserMessageCreate(BaseModel):
 class UserMessageModel(UserMessageCreate):
     id: int
     timestamp: datetime
-
     class Config:
         from_attributes = True
 
@@ -85,7 +264,6 @@ class SupernodeUserMessageCreate(MessageModel):
 class SupernodeUserMessageModel(MessageModel):
     id: int
     user_message: UserMessageModel
-
     class Config:
         from_attributes = True
 
@@ -104,7 +282,6 @@ class SupernodeData(BaseModel):
     extP2P: Optional[str]
     extKey: Optional[str]
     activedays: float
-    
     class Config:
         from_attributes = True
         populate_by_name = True
@@ -140,43 +317,10 @@ class InferenceAPIUsageRequestModel(BaseModel):
     model_inference_type_string: str
     model_parameters_json: str
     model_input_data_json_b64: str
-
     class Config:
         protected_namespaces = ()
-
     def dict(self, *args, **kwargs):
         return super().dict(*args, **kwargs)
-    
-class InferenceAPIUsageRequest(Base):
-    __tablename__ = "inference_api_usage_requests"
-
-    id = Column(Integer, primary_key=True, index=True)
-    inference_request_id = Column(String, unique=True, index=True)
-    requesting_pastelid = Column(String, index=True)
-    credit_pack_identifier = Column(String, index=True)
-    requested_model_canonical_string = Column(String)
-    model_inference_type_string = Column(String)
-    model_parameters_json = Column(JSON)
-    model_input_data_json_b64 = Column(String)
-    total_psl_cost_for_pack = Column(Numeric(precision=20, scale=8))
-    initial_credit_balance = Column(Numeric(precision=20, scale=8))
-    requesting_pastelid_signature = Column(String)
-
-    class Config:
-        protected_namespaces = ()
-        
-class InferenceAPIUsageResponse(Base):
-    __tablename__ = "inference_api_usage_responses"
-
-    id = Column(Integer, primary_key=True, index=True)
-    inference_response_id = Column(String, unique=True, index=True)
-    inference_request_id = Column(String, ForeignKey("inference_api_usage_requests.inference_request_id"), index=True)
-    proposed_cost_of_request_in_inference_credits = Column(Numeric(precision=20, scale=8))
-    remaining_credits_in_pack_after_request_processed = Column(Numeric(precision=20, scale=8))
-    credit_usage_tracking_psl_address = Column(String, index=True)
-    request_confirmation_message_amount_in_patoshis = Column(Integer)
-    max_block_height_to_include_confirmation_transaction = Column(Integer)
-    supernode_pastelid_and_signature_on_inference_response_id = Column(String)
     
 class InferenceAPIUsageResponseModel(BaseModel):
     inference_response_id: str
@@ -187,18 +331,7 @@ class InferenceAPIUsageResponseModel(BaseModel):
     request_confirmation_message_amount_in_patoshis: int
     max_block_height_to_include_confirmation_transaction: int
     supernode_pastelid_and_signature_on_inference_response_id: str
-        
-class InferenceAPIOutputResult(Base):
-    __tablename__ = "inference_api_output_results"
 
-    id = Column(Integer, primary_key=True, index=True)
-    inference_result_id = Column(String, unique=True, index=True)
-    inference_request_id = Column(String, ForeignKey("inference_api_usage_requests.inference_request_id"), index=True)
-    inference_response_id = Column(String, ForeignKey("inference_api_usage_responses.inference_response_id"), index=True)
-    responding_supernode_pastelid = Column(String, index=True)
-    inference_result_json_base64 = Column(String)
-    inference_result_file_type_strings = Column(String)
-    responding_supernode_signature_on_inference_result_id = Column(String)
 
 class InferenceOutputResultsModel(BaseModel):
     inference_result_id: str
@@ -208,20 +341,6 @@ class InferenceOutputResultsModel(BaseModel):
     inference_result_json_base64: str
     inference_result_file_type_strings: str
     responding_supernode_signature_on_inference_result_id: str
-    
-class InferenceCreditPack(Base):
-    __tablename__ = "inference_credit_packs"
-    id = Column(Integer, primary_key=True, index=True)
-    credit_pack_identifier = Column(String, unique=True, index=True)
-    authorized_pastelids = Column(JSON)
-    psl_cost_per_credit = Column(Numeric(precision=20, scale=8))
-    total_psl_cost_for_pack = Column(Numeric(precision=20, scale=8))
-    initial_credit_balance = Column(Numeric(precision=20, scale=8))
-    current_credit_balance = Column(Numeric(precision=20, scale=8))
-    credit_usage_tracking_psl_address = Column(String, index=True)
-    version = Column(Integer)
-    purchase_height = Column(Integer)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
 
 class CreditPackPurchaseRequestModel(BaseModel):
     requesting_end_user_pastelid: str
@@ -385,69 +504,8 @@ class CreditPackStorageRetryRequestResponseModel(BaseModel):
     sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields: str
     closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash: str
 
-class MessageMetadata(Base):
-    __tablename__ = "message_metadata"
+#_____________________________________________________________________________
 
-    id = Column(Integer, primary_key=True, index=True)
-    total_messages = Column(Integer)
-    total_senders = Column(Integer)
-    total_receivers = Column(Integer)
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-    
-class MessageSenderMetadata(Base):
-    __tablename__ = "message_sender_metadata"
-
-    id = Column(Integer, primary_key=True, index=True)
-    sending_sn_pastelid = Column(String, index=True)
-    sending_sn_txid_vout = Column(String, index=True)
-    sending_sn_pubkey = Column(String, index=True)    
-    total_messages_sent = Column(Integer)
-    total_data_sent_bytes = Column(Numeric(precision=20, scale=2))
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-
-class MessageReceiverMetadata(Base):
-    __tablename__ = "message_receiver_metadata"
-
-    id = Column(Integer, primary_key=True, index=True)
-    receiving_sn_pastelid = Column(String, index=True)
-    receiving_sn_txid_vout = Column(String, index=True)
-    total_messages_received = Column(Integer)
-    total_data_received_bytes = Column(Numeric(precision=20, scale=2))
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-
-class MessageSenderReceiverMetadata(Base):
-    __tablename__ = "message_sender_receiver_metadata"
-
-    id = Column(Integer, primary_key=True, index=True)
-    sending_sn_pastelid = Column(String, index=True)
-    receiving_sn_pastelid = Column(String, index=True)
-    total_messages = Column(Integer)
-    total_data_bytes = Column(Numeric(precision=20, scale=2))
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-        
-def to_serializable(val):
-    if isinstance(val, datetime):
-        return val.isoformat()
-    elif isinstance(val, Decimal):
-        return float(val)
-    else:
-        return str(val)
-
-def to_dict(self):
-    d = {}
-    for column in self.__table__.columns:
-        if not isinstance(column.type, LargeBinary):
-            value = getattr(self, column.name)
-            if value is not None:
-                serialized_value = to_serializable(value)
-                d[column.name] = serialized_value if serialized_value is not None else value
-    return d
-
-Message.to_dict = to_dict
-UserMessage.to_dict = to_dict
-SupernodeUserMessage.to_dict = to_dict
-InferenceAPIUsageRequest.to_dict = to_dict
-InferenceAPIUsageResponse.to_dict = to_dict
 
 async def get_db():
     db = AsyncSessionLocal()

@@ -39,7 +39,8 @@ from database_code import (AsyncSessionLocal, Message, MessageMetadata, MessageS
                         InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage, InferenceAPIUsageRequestModel, InferenceConfirmationModel, InferenceOutputResultsModel,
                         CreditPackPurchaseRequestModel, CreditPackPurchaseRequestRejectionModel, CreditPackPurchaseRequestPreliminaryPriceQuote, CreditPackPurchaseRequestPreliminaryPriceQuoteResponse, CreditPackPurchasePriceAgreementRequestModel,
                         CreditPackPurchasePriceAgreementRequestResponseModel, CreditPackRequestStatusCheckModel, CreditPackPurchaseRequestResponseTerminationModel, CreditPackPurchaseRequestResponseModel, CreditPackPurchaseRequestConfirmationModel,
-                        CreditPackPurchaseRequestConfirmationResponseModel, CreditPackStorageRetryRequestModel, CreditPackStorageRetryRequestResponseModel)
+                        CreditPackPurchaseRequestConfirmationResponseModel, CreditPackStorageRetryRequestModel, CreditPackStorageRetryRequestResponseModel, CreditPackPurchaseRequestResponse, CreditPackPurchaseRequest, CreditPackPurchaseRequestConfirmation,
+                        CreditPackPurchaseRequestConfirmationResponse, CreditPackPurchaseRequestStatusModel)
 
 encryption_key = None
 magika = Magika()
@@ -564,6 +565,11 @@ async def get_local_machine_supernode_data_func():
         local_sn_pastelid = local_machine_supernode_data['extKey'].values[0]
     return local_machine_supernode_data, local_sn_rank, local_sn_pastelid, local_machine_ip_with_proper_port
 
+async def get_my_local_pastelid_func():
+    local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
+    my_local_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]    
+    return my_local_pastelid
+
 async def get_sn_data_from_pastelid_func(specified_pastelid):
     supernode_list_full_df, _ = await check_supernode_list_func()
     specified_machine_supernode_data = supernode_list_full_df[supernode_list_full_df['extKey'] == specified_pastelid]
@@ -599,17 +605,14 @@ async def list_sn_messages_func():
     datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
     supernode_list_df, _ = await check_supernode_list_func()
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
-
     async with AsyncSessionLocal() as db:
         # Retrieve messages from the database that meet the timestamp criteria
         result = await db.execute(select(Message).where(Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages).order_by(Message.timestamp.desc()))
         db_messages = result.scalars().all()
         existing_messages = {(message.sending_sn_pastelid, message.receiving_sn_pastelid, message.timestamp) for message in db_messages}
-
     # Retrieve new messages from the RPC interface
     new_messages = await rpc_connection.masternode('message', 'list')
     new_messages_data = []
-
     for message in new_messages:
         message_key = list(message.keys())[0]
         message = message[message_key]
@@ -617,30 +620,24 @@ async def list_sn_messages_func():
         receiving_sn_txid_vout = message['To']
         sending_pastelid = txid_vout_to_pastelid_dict.get(sending_sn_txid_vout)
         receiving_pastelid = txid_vout_to_pastelid_dict.get(receiving_sn_txid_vout)
-
         if sending_pastelid is None or receiving_pastelid is None:
             logger.warning(f"Skipping message due to missing PastelID for txid_vout: {sending_sn_txid_vout} or {receiving_sn_txid_vout}")
             continue
-
         message_timestamp = parse_timestamp(datetime.fromtimestamp(message['Timestamp']).isoformat())
-
         # Check if the message already exists in the database
         if (sending_pastelid, receiving_pastelid, message_timestamp) in existing_messages:
             logger.debug("Message already exists in the database. Skipping...")
             continue
-
         message_body = base64.b64decode(message['Message'].encode('utf-8'))
         verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
         decompressed_message = await decompress_data_with_zstd_func(message_body)
         decompressed_message = decompressed_message.decode('utf-8')
-
         try:
             message_dict = json.loads(decompressed_message)
         except json.JSONDecodeError as e:
             logger.error(f"Error parsing JSON: {e}")
             logger.error(f"Decompressed message: {decompressed_message}")
             continue
-
         if verification_status == 'OK':
             new_message = {
                 'sending_sn_pastelid': sending_pastelid,
@@ -653,13 +650,10 @@ async def list_sn_messages_func():
                 'receiving_sn_txid_vout': receiving_sn_txid_vout
             }
             new_messages_data.append(new_message)
-
     combined_messages_df = pd.DataFrame(new_messages_data)
-
     if not combined_messages_df.empty:
         combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
         combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
-
     return combined_messages_df
 
 async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase) -> str:
@@ -840,8 +834,6 @@ async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_past
     signed_message = await broadcast_message_to_list_of_sns_using_pastelid_func(message_body, message_type, list_of_supernode_pastelids, LOCAL_PASTEL_ID_PASSPHRASE)
     logger.info(f"Broadcasted a {message_type} to {len(list_of_supernode_pastelids)} closest supernodes to PastelID: {input_pastelid} (with Supernode IPs of {list_of_supernode_ips}): {message_body}")
     return signed_message
-
-
 
 async def retry_on_database_locked(func, *args, max_retries=5, initial_delay=1, backoff_factor=2, jitter_factor=0.1, **kwargs):
     delay = initial_delay
@@ -1150,8 +1142,528 @@ async def get_user_messages_for_pastelid(pastelid: str) -> List[UserMessage]:
             
             
 #________________________________________________________________________________________________________________            
+# Credit pack related service functions:
 
 
+async def get_credit_pack_purchase_request(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> CreditPackPurchaseRequest:
+    async with AsyncSessionLocal() as db_session:
+        result = await db_session.execute(
+            select(CreditPackPurchaseRequest).where(CreditPackPurchaseRequest.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
+        )
+        return result.scalar_one_or_none()
+
+async def get_credit_pack_purchase_request_response(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> CreditPackPurchaseRequestResponse:
+    async with AsyncSessionLocal() as db_session:
+        result = await db_session.execute(
+            select(CreditPackPurchaseRequestResponse).where(CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == sha3_256_hash_of_credit_pack_purchase_request_response_fields)
+        )
+        return result.scalar_one_or_none()
+
+async def check_credit_pack_purchase_request_status(credit_pack_purchase_request: CreditPackPurchaseRequest) -> str:
+    async with AsyncSessionLocal() as db_session:
+        response = await db_session.execute(
+            select(CreditPackPurchaseRequestResponse).where(CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_fields == credit_pack_purchase_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
+        )
+        response = response.scalar_one_or_none()
+
+        if response is None:
+            return "pending"
+        else:
+            confirmation = await db_session.execute(
+                select(CreditPackPurchaseRequestConfirmation).where(CreditPackPurchaseRequestConfirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields == response.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
+            )
+            confirmation = confirmation.scalar_one_or_none()
+
+            if confirmation is None:
+                return "approved"
+            else:
+                confirmation_response = await db_session.execute(
+                    select(CreditPackPurchaseRequestConfirmationResponse).where(CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields == confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
+                )
+                confirmation_response = confirmation_response.scalar_one_or_none()
+
+                if confirmation_response is None:
+                    return "confirmed"
+                else:
+                    if confirmation_response.credit_pack_confirmation_outcome_string == "success":
+                        return "completed"
+                    else:
+                        return "failed"
+
+async def store_credit_pack_purchase_request_final_response(response: CreditPackPurchaseRequestResponse) -> None:
+    async with AsyncSessionLocal() as db_session:
+        db_session.add(response)
+        await db_session.commit()
+        
+async def select_potentially_agreeing_supernodes() -> List[str]:
+    try:
+        # Get the current block hash and merkle root
+        _, merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
+        
+        # Get the list of supernodes
+        supernode_list_df, _ = await check_supernode_list_func()
+        
+        # Select the 12 supernodes with the closest XOR distance to the merkle root
+        potentially_agreeing_supernodes = await get_n_closest_supernodes_to_pastelid_urls(12, merkle_root, supernode_list_df)
+        
+        return [supernode[1] for supernode in potentially_agreeing_supernodes]
+    except Exception as e:
+        logger.error(f"Error selecting potentially agreeing supernodes: {str(e)}")
+        raise
+
+async def send_price_agreement_request_to_supernodes(request: CreditPackPurchasePriceAgreementRequestModel, supernodes: List[str]) -> None:
+    try:
+        async with httpx.AsyncClient() as client:
+            tasks = []
+            for supernode in supernodes:
+                url = f"http://{supernode}:7123/credit_pack_price_agreement_request"
+                task = asyncio.create_task(client.post(url, json=request.dict()))
+                tasks.append(task)
+            
+            responses = await asyncio.gather(*tasks)
+            
+            for response in responses:
+                if response.status_code != 200:
+                    logger.warning(f"Error sending price agreement request to supernode {response.url}: {response.text}")
+    except Exception as e:
+        logger.error(f"Error sending price agreement request to supernodes: {str(e)}")
+        raise
+
+async def determine_agreement_with_proposed_price(credit_pack_purchase_request_response_fields_json: str) -> bool:
+    try:
+        # Load the credit pack purchase request response fields
+        credit_pack_purchase_request_response_fields = json.loads(credit_pack_purchase_request_response_fields_json)
+        
+        # Determine if the supernode agrees with the proposed price
+        # Implement your own logic here based on the credit pack purchase request response fields
+        # For example, you can compare the proposed price with a threshold or use a custom algorithm
+        
+        # Placeholder logic: agree if the proposed price is less than or equal to 10 PSL per credit
+        agree_with_proposed_price = credit_pack_purchase_request_response_fields["psl_cost_per_credit"] <= 10
+        
+        return agree_with_proposed_price
+    except Exception as e:
+        logger.error(f"Error determining agreement with proposed price: {str(e)}")
+        raise
+
+async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: str, total_cost_in_psl: float, request_response_pastel_block_height: int) -> bool:
+    try:
+        # Check the burn transaction
+        # Implement your own logic here to verify the transaction details
+        # For example, you can use the `get_and_decode_raw_transaction` function to retrieve the transaction details
+        
+        # Placeholder logic: return True if the transaction ID is not empty
+        transaction_confirmed = bool(txid)
+        
+        return transaction_confirmed
+    except Exception as e:
+        logger.error(f"Error checking burn transaction: {str(e)}")
+        raise
+
+async def store_credit_pack_ticket(credit_pack_purchase_request_response: CreditPackPurchaseRequestResponseModel) -> str:
+    try:
+        # Store the credit pack ticket on the blockchain
+        # Implement your own logic here to write the ticket data to the blockchain using the PayToFakeMultiSig approach
+        # You can use the `store_data` function from the `BlockchainUTXOStorage` class as a reference
+        
+        # Placeholder logic: return a dummy transaction ID
+        pastel_api_credit_pack_ticket_registration_txid = "dummyTxID"
+        
+        return pastel_api_credit_pack_ticket_registration_txid
+    except Exception as e:
+        logger.error(f"Error storing credit pack ticket: {str(e)}")
+        raise
+
+async def store_credit_pack_purchase_completion_announcement(confirmation: CreditPackPurchaseRequestConfirmationModel) -> None:
+    try:
+        # Store the credit pack purchase completion announcement
+        # Implement your own storage logic here
+        # For example, you can use a database or a key-value store
+        
+        # Placeholder logic: print the confirmation
+        logger.info(f"Storing credit pack purchase completion announcement: {confirmation.json()}")
+    except Exception as e:
+        logger.error(f"Error storing credit pack purchase completion announcement: {str(e)}")
+        raise
+
+async def store_credit_pack_storage_completion_announcement(response: CreditPackPurchaseRequestConfirmationResponseModel) -> None:
+    try:
+        # Store the credit pack storage completion announcement
+        # Implement your own storage logic here
+        # For example, you can use a database or a key-value store
+        
+        # Placeholder logic: print the response
+        logger.info(f"Storing credit pack storage completion announcement: {response.json()}")
+    except Exception as e:
+        logger.error(f"Error storing credit pack storage completion announcement: {str(e)}")
+        raise
+
+async def check_original_supernode_storage_confirmation(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> bool:
+    try:
+        # Check if the original responding supernode has confirmed the storage
+        # Implement your own logic here to verify the storage confirmation
+        # For example, you can check a database or a key-value store
+        
+        # Placeholder logic: return False
+        original_supernode_confirmed_storage = False
+        
+        return original_supernode_confirmed_storage
+    except Exception as e:
+        logger.error(f"Error checking original supernode storage confirmation: {str(e)}")
+        raise
+
+
+async def calculate_preliminary_price_per_credit():
+    try:
+        # Get the current PSL market price in USD
+        psl_price_usd = await get_current_psl_market_price()
+        # Calculate the cost per credit in USD, considering the profit margin
+        cost_per_credit_usd = TARGET_VALUE_PER_CREDIT_IN_USD / (1 - TARGET_PROFIT_MARGIN)
+        # Convert the cost per credit from USD to PSL
+        cost_per_credit_psl = cost_per_credit_usd / psl_price_usd
+        # Round the cost per credit to the nearest 0.1
+        rounded_cost_per_credit_psl = round(cost_per_credit_psl, 1)
+        logger.info(f"Calculated preliminary price per credit: {rounded_cost_per_credit_psl:.1f} PSL")
+        return rounded_cost_per_credit_psl
+    except (ValueError, ZeroDivisionError) as e:
+        logger.error(f"Error calculating preliminary price per credit: {str(e)}")
+        raise
+
+async def process_credit_purchase_initial_request(request: CreditPackPurchaseRequestModel) -> CreditPackPurchaseRequestResponseModel:
+    try:
+        # Validate the request fields
+        if not request.requesting_end_user_pastelid or not request.requested_initial_credits_in_credit_pack or not request.credit_usage_tracking_psl_address:
+            raise ValueError("Invalid credit purchase request")
+        # Determine the preliminary price quote
+        preliminary_quoted_price_per_credit_in_psl = await calculate_preliminary_price_per_credit()
+        preliminary_total_cost_of_credit_pack_in_psl = preliminary_quoted_price_per_credit_in_psl * request.requested_initial_credits_in_credit_pack
+        # Create the response
+        response = CreditPackPurchaseRequestPreliminaryPriceQuote(
+            sha3_256_hash_of_credit_pack_purchase_request_fields=request.sha3_256_hash_of_credit_pack_purchase_request_fields,
+            credit_pack_purchase_request_response_fields_json=request.json(),
+            preliminary_quoted_price_per_credit_in_psl=preliminary_quoted_price_per_credit_in_psl,
+            preliminary_total_cost_of_credit_pack_in_psl=preliminary_total_cost_of_credit_pack_in_psl,
+            preliminary_price_quote_timestamp_utc_iso_string=datetime.utcnow().isoformat(),
+            preliminary_price_quote_pastel_block_height=await get_current_pastel_block_height_func(),
+            preliminary_price_quote_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
+            preliminary_price_quote_message_version_string="1.0",
+            responding_supernode_pastelid=MY_PASTELID,
+            sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields=compute_sha3_256_hexdigest(
+                request.requesting_end_user_pastelid +
+                str(request.requested_initial_credits_in_credit_pack) +
+                request.credit_usage_tracking_psl_address +
+                str(preliminary_quoted_price_per_credit_in_psl) +
+                str(preliminary_total_cost_of_credit_pack_in_psl)
+            ),
+            responding_supernode_signature_on_credit_pack_purchase_request_preliminary_price_quote_hash=await sign_message_with_pastelid_func(
+                MY_PASTELID,
+                compute_sha3_256_hexdigest(
+                    request.requesting_end_user_pastelid +
+                    str(request.requested_initial_credits_in_credit_pack) +
+                    request.credit_usage_tracking_psl_address +
+                    str(preliminary_quoted_price_per_credit_in_psl) +
+                    str(preliminary_total_cost_of_credit_pack_in_psl)
+                ),
+                MY_PASTELID_PASSPHRASE
+            )
+        )
+        return response
+    except Exception as e:
+        logger.error(f"Error processing credit purchase initial request: {str(e)}")
+        raise
+
+async def process_credit_purchase_preliminary_price_quote_response(response: CreditPackPurchaseRequestPreliminaryPriceQuoteResponse) -> CreditPackPurchasePriceAgreementRequestModel:
+    try:
+        # Validate the response fields
+        if not response.agree_with_preliminary_price_quote:
+            raise ValueError("End user does not agree with preliminary price quote")
+        # Select the potentially agreeing supernodes
+        potentially_agreeing_supernodes = await select_potentially_agreeing_supernodes()
+        # Create the price agreement request
+        request = CreditPackPurchasePriceAgreementRequestModel(
+            sha3_256_hash_of_credit_pack_purchase_request_response_fields=response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields,
+            supernode_requesting_price_agreement_pastelid=MY_PASTELID,
+            credit_pack_purchase_request_response_fields_json=response.json(),
+            price_agreement_request_timestamp_utc_iso_string=datetime.utcnow().isoformat(),
+            price_agreement_request_pastel_block_height=await get_current_pastel_block_height_func(),
+            price_agreement_request_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
+            price_agreement_request_message_version_string="1.0",
+            sha3_256_hash_of_price_agreement_request_fields=compute_sha3_256_hexdigest(
+                response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields +
+                MY_PASTELID +
+                response.json()
+            ),
+            supernode_requesting_price_agreement_pastelid_signature_on_request_hash=await sign_message_with_pastelid_func(
+                MY_PASTELID,
+                compute_sha3_256_hexdigest(
+                    response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields +
+                    MY_PASTELID +
+                    response.json()
+                ),
+                MY_PASTELID_PASSPHRASE
+            )
+        )
+        # Send the price agreement request to the potentially agreeing supernodes
+        await send_price_agreement_request_to_supernodes(request, potentially_agreeing_supernodes)
+        return request
+    except Exception as e:
+        logger.error(f"Error processing credit purchase preliminary price quote response: {str(e)}")
+        raise
+
+async def process_credit_pack_price_agreement_request(request: CreditPackPurchasePriceAgreementRequestModel) -> CreditPackPurchasePriceAgreementRequestResponseModel:
+    try:
+        # Validate the request fields
+        if not request.supernode_requesting_price_agreement_pastelid or not request.credit_pack_purchase_request_response_fields_json:
+            raise ValueError("Invalid price agreement request")
+        # Determine if the supernode agrees with the proposed price
+        agree_with_proposed_price = await determine_agreement_with_proposed_price(request.credit_pack_purchase_request_response_fields_json)
+        # Create the response
+        response = CreditPackPurchasePriceAgreementRequestResponseModel(
+            sha3_256_hash_of_price_agreement_request_fields=request.sha3_256_hash_of_price_agreement_request_fields,
+            credit_pack_purchase_request_response_fields_json=request.credit_pack_purchase_request_response_fields_json,
+            agree_with_proposed_price=agree_with_proposed_price,
+            proposed_price_agreement_response_timestamp_utc_iso_string=datetime.utcnow().isoformat(),
+            proposed_price_agreement_response_pastel_block_height=await get_current_pastel_block_height_func(),
+            proposed_price_agreement_response_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
+            proposed_price_agreement_response_message_version_string="1.0",
+            responding_supernode_pastelid=MY_PASTELID,
+            sha3_256_hash_of_price_agreement_request_response_fields=compute_sha3_256_hexdigest(
+                request.sha3_256_hash_of_price_agreement_request_fields +
+                request.credit_pack_purchase_request_response_fields_json +
+                str(agree_with_proposed_price)
+            ),
+            responding_supernode_signature_on_price_agreement_request_response_hash=await sign_message_with_pastelid_func(
+                MY_PASTELID,
+                compute_sha3_256_hexdigest(
+                    request.sha3_256_hash_of_price_agreement_request_fields +
+                    request.credit_pack_purchase_request_response_fields_json +
+                    str(agree_with_proposed_price)
+                ),
+                MY_PASTELID_PASSPHRASE
+            ),
+            responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json=await sign_message_with_pastelid_func(
+                MY_PASTELID,
+                request.credit_pack_purchase_request_response_fields_json,
+                MY_PASTELID_PASSPHRASE
+            )
+        )
+        return response
+    except Exception as e:
+        logger.error(f"Error processing credit pack price agreement request: {str(e)}")
+        raise
+
+async def get_credit_purchase_request_status(request: CreditPackRequestStatusCheckModel) -> CreditPackPurchaseRequestStatusModel:
+    try:
+        # Validate the request fields
+        if not request.sha3_256_hash_of_credit_pack_purchase_request_fields or not request.requesting_end_user_pastelid:
+            raise ValueError("Invalid status check request")
+        # Retrieve the credit pack purchase request
+        credit_pack_purchase_request = await get_credit_pack_purchase_request(request.sha3_256_hash_of_credit_pack_purchase_request_fields)
+        # Check the status of the credit pack purchase request
+        status = await check_credit_pack_purchase_request_status(credit_pack_purchase_request)
+        # Create the response
+        response = CreditPackPurchaseRequestStatusModel(
+            sha3_256_hash_of_credit_pack_purchase_request_fields=request.sha3_256_hash_of_credit_pack_purchase_request_fields,
+            status=status
+        )
+        return response
+    except Exception as e:
+        logger.error(f"Error getting credit purchase request status: {str(e)}")
+        raise
+
+async def process_credit_pack_purchase_request_final_response_announcement(response: CreditPackPurchaseRequestResponseModel) -> None:
+    try:
+        # Validate the response fields
+        if not response.sha3_256_hash_of_credit_pack_purchase_request_fields or not response.credit_pack_purchase_request_json:
+            raise ValueError("Invalid final response announcement")
+        # Store the final response
+        await store_credit_pack_purchase_request_final_response(response)
+    except Exception as e:
+        logger.error(f"Error processing credit pack purchase request final response announcement: {str(e)}")
+        raise
+
+async def process_credit_purchase_request_confirmation(confirmation: CreditPackPurchaseRequestConfirmationModel) -> CreditPackPurchaseRequestConfirmationResponseModel:
+    try:
+        # Validate the confirmation fields
+        if not confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields or not confirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields or not confirmation.txid_of_credit_purchase_burn_transaction:
+            raise ValueError("Invalid credit purchase request confirmation")
+        # Retrieve the credit pack purchase request response
+        credit_pack_purchase_request_response = await get_credit_pack_purchase_request_response(confirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
+        # Check the burn transaction
+        transaction_confirmed = await check_burn_transaction(
+            confirmation.txid_of_credit_purchase_burn_transaction,
+            credit_pack_purchase_request_response.credit_usage_tracking_psl_address,
+            credit_pack_purchase_request_response.proposed_total_cost_of_credit_pack_in_psl,
+            credit_pack_purchase_request_response.request_response_pastel_block_height
+        )
+        if transaction_confirmed:
+            # Store the credit pack ticket on the blockchain
+            pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket(credit_pack_purchase_request_response)
+            # Create the confirmation response
+            response = CreditPackPurchaseRequestConfirmationResponseModel(
+                sha3_256_hash_of_credit_pack_purchase_request_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields,
+                sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields,
+                credit_pack_confirmation_outcome_string="success",
+                pastel_api_credit_pack_ticket_registration_txid=pastel_api_credit_pack_ticket_registration_txid,
+                credit_pack_confirmation_failure_reason_if_applicable="",
+                credit_purchase_request_confirmation_response_utc_iso_string=datetime.utcnow().isoformat(),
+                credit_purchase_request_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
+                credit_purchase_request_confirmation_response_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
+                credit_purchase_request_confirmation_response_message_version_string="1.0",
+                responding_supernode_pastelid=MY_PASTELID,
+                sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields=compute_sha3_256_hexdigest(
+                    confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields +
+                    confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields +
+                    "success" +
+                    pastel_api_credit_pack_ticket_registration_txid
+                ),
+                responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash=await sign_message_with_pastelid_func(
+                    MY_PASTELID,
+                    compute_sha3_256_hexdigest(
+                        confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields +
+                        confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields +
+                        "success" +
+                        pastel_api_credit_pack_ticket_registration_txid
+                    ),
+                    MY_PASTELID_PASSPHRASE
+                )
+            )
+        else:
+            # Create the confirmation response with failure
+            response = CreditPackPurchaseRequestConfirmationResponseModel(
+                sha3_256_hash_of_credit_pack_purchase_request_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields,
+                sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields,
+                credit_pack_confirmation_outcome_string="failure",
+                pastel_api_credit_pack_ticket_registration_txid="",
+                credit_pack_confirmation_failure_reason_if_applicable="Burn transaction not confirmed",
+                credit_purchase_request_confirmation_response_utc_iso_string=datetime.utcnow().isoformat(),
+                credit_purchase_request_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
+                credit_purchase_request_confirmation_response_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
+                credit_purchase_request_confirmation_response_message_version_string="1.0",
+                responding_supernode_pastelid=MY_PASTELID,
+                sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields=compute_sha3_256_hexdigest(
+                    confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields +
+                    confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields +
+                    "failure" +
+                    "Burn transaction not confirmed"
+                ),
+                responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash=await sign_message_with_pastelid_func(
+                                    MY_PASTELID,
+                                    compute_sha3_256_hexdigest(
+                                        confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields +
+                                        confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields +
+                                        "failure" +
+                                        "Burn transaction not confirmed"
+                                    ),
+                                    MY_PASTELID_PASSPHRASE
+                                )
+                            )
+        return response
+    except Exception as e:
+        logger.error(f"Error processing credit purchase request confirmation: {str(e)}")
+        raise
+    
+async def process_credit_pack_purchase_completion_announcement(confirmation: CreditPackPurchaseRequestConfirmationModel) -> None:
+    try:
+        # Validate the confirmation fields
+        if not confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields or not confirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields:
+            raise ValueError("Invalid credit pack purchase completion announcement")
+        # Store the completion announcement
+        await store_credit_pack_purchase_completion_announcement(confirmation)
+    except Exception as e:
+        logger.error(f"Error processing credit pack purchase completion announcement: {str(e)}")
+        raise
+
+async def process_credit_pack_storage_completion_announcement(response: CreditPackPurchaseRequestConfirmationResponseModel) -> None:
+    try:
+        # Validate the response fields
+        if not response.sha3_256_hash_of_credit_pack_purchase_request_fields or not response.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields:
+            raise ValueError("Invalid credit pack storage completion announcement")
+        # Store the storage completion announcement
+        await store_credit_pack_storage_completion_announcement(response)
+    except Exception as e:
+        logger.error(f"Error processing credit pack storage completion announcement: {str(e)}")
+        raise
+
+async def process_credit_pack_storage_retry_request(request: CreditPackStorageRetryRequestModel) -> CreditPackStorageRetryRequestResponseModel:
+    try:
+        # Validate the request fields
+        if not request.sha3_256_hash_of_credit_pack_purchase_request_response_fields or not request.credit_pack_purchase_request_response_json:
+            raise ValueError("Invalid credit pack storage retry request")
+        # Check if the original responding supernode has confirmed the storage
+        original_supernode_confirmed_storage = await check_original_supernode_storage_confirmation(request.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
+        if not original_supernode_confirmed_storage:
+            # Store the credit pack ticket on the blockchain
+            pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket(json.loads(request.credit_pack_purchase_request_response_json))
+            # Create the retry request response
+            response = CreditPackStorageRetryRequestResponseModel(
+                sha3_256_hash_of_credit_pack_purchase_request_fields=request.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
+                sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=request.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
+                credit_pack_storage_retry_confirmation_outcome_string="success",
+                pastel_api_credit_pack_ticket_registration_txid=pastel_api_credit_pack_ticket_registration_txid,
+                credit_pack_storage_retry_confirmation_failure_reason_if_applicable="",
+                credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.utcnow().isoformat(),
+                credit_pack_storage_retry_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
+                credit_pack_storage_retry_confirmation_response_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
+                credit_pack_storage_retry_confirmation_response_message_version_string="1.0",
+                closest_agreeing_supernode_to_retry_storage_pastelid=MY_PASTELID,
+                sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields=compute_sha3_256_hexdigest(
+                    request.sha3_256_hash_of_credit_pack_purchase_request_response_fields +
+                    request.sha3_256_hash_of_credit_pack_purchase_request_response_fields +
+                    "success" +
+                    pastel_api_credit_pack_ticket_registration_txid
+                ),
+                closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash=await sign_message_with_pastelid_func(
+                    MY_PASTELID,
+                    compute_sha3_256_hexdigest(
+                        request.sha3_256_hash_of_credit_pack_purchase_request_response_fields +
+                        request.sha3_256_hash_of_credit_pack_purchase_request_response_fields +
+                        "success" +
+                        pastel_api_credit_pack_ticket_registration_txid
+                    ),
+                    MY_PASTELID_PASSPHRASE
+                )
+            )
+        else:
+            # Create the retry request response with failure
+            response = CreditPackStorageRetryRequestResponseModel(
+                sha3_256_hash_of_credit_pack_purchase_request_fields=request.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
+                sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=request.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
+                credit_pack_storage_retry_confirmation_outcome_string="failure",
+                pastel_api_credit_pack_ticket_registration_txid="",
+                credit_pack_storage_retry_confirmation_failure_reason_if_applicable="Original responding supernode already confirmed storage",
+                credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.utcnow().isoformat(),
+                credit_pack_storage_retry_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
+                credit_pack_storage_retry_confirmation_response_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
+                credit_pack_storage_retry_confirmation_response_message_version_string="1.0",
+                closest_agreeing_supernode_to_retry_storage_pastelid=MY_PASTELID,
+                sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields=compute_sha3_256_hexdigest(
+                    request.sha3_256_hash_of_credit_pack_purchase_request_response_fields +
+                    request.sha3_256_hash_of_credit_pack_purchase_request_response_fields +
+                    "failure" +
+                    "Original responding supernode already confirmed storage"
+                ),
+                closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash=await sign_message_with_pastelid_func(
+                    MY_PASTELID,
+                    compute_sha3_256_hexdigest(
+                        request.sha3_256_hash_of_credit_pack_purchase_request_response_fields +
+                        request.sha3_256_hash_of_credit_pack_purchase_request_response_fields +
+                        "failure" +
+                        "Original responding supernode already confirmed storage"
+                    ),
+                    MY_PASTELID_PASSPHRASE
+                )
+            )
+        return response
+    except Exception as e:
+        logger.error(f"Error processing credit pack storage retry request: {str(e)}")
+        raise
+                    
+#________________________________________________________________________________________________________________            
+                
+# Inference request related service functions:
+                
+                
 async def get_inference_model_menu(use_verbose=0):
     try:
         # Load the API key test results from the file
@@ -2693,6 +3205,7 @@ if credit_pack is None:
 
 encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
 decrypt_sensitive_fields()
+MY_PASTELID = asyncio.run(get_my_local_pastelid_func())
 
 use_encrypt_new_secrets = 0
 if use_encrypt_new_secrets:
