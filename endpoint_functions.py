@@ -496,9 +496,9 @@ async def sign_credit_pack_ticket_endpoint(
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         # Verify that the request is coming from the highest-ranked supernode
-        best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
-        supernode_list_df, _ = await check_supernode_list_func()
-        closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, best_block_merkle_root, supernode_list_df)
+        best_block_hash, best_block_merkle_root, _ = await service_functions.get_best_block_hash_and_merkle_root_func()
+        supernode_list_df, _ = await service_functions.check_supernode_list_func()
+        closest_supernodes = await service_functions.get_n_closest_supernodes_to_pastelid_urls(3, best_block_merkle_root, supernode_list_df)
         highest_ranked_supernode_pastelid = closest_supernodes[0][1]
         if primary_supernode_pastelid != highest_ranked_supernode_pastelid:
             raise HTTPException(status_code=403, detail="Unauthorized request. Only the highest-ranked supernode can initiate signing.")
@@ -524,9 +524,9 @@ async def store_credit_pack_ticket_endpoint(
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         # Verify that the request is coming from the highest-ranked supernode
-        best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
-        supernode_list_df, _ = await check_supernode_list_func()
-        closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, best_block_merkle_root, supernode_list_df)
+        best_block_hash, best_block_merkle_root, _ = await service_functions.get_best_block_hash_and_merkle_root_func()
+        supernode_list_df, _ = await service_functions.check_supernode_list_func()
+        closest_supernodes = await service_functions.get_n_closest_supernodes_to_pastelid_urls(3, best_block_merkle_root, supernode_list_df)
         highest_ranked_supernode_pastelid = closest_supernodes[0][1]
         if pastelid != highest_ranked_supernode_pastelid:
             raise HTTPException(status_code=403, detail="Unauthorized request. Only the highest-ranked supernode can store the ticket.")
