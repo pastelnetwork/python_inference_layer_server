@@ -460,82 +460,209 @@ async def get_user_messages(
 #__________________________________________________________________________________________________________
 
 
-@router.post("/create_credit_pack_ticket", response_model=CreditPackTicketModel)
-async def create_credit_pack_ticket_endpoint(
-    credit_pack_request: CreditPackRequestModel,
-    pastelid: str = Query(..., description="The PastelID of the requesting party"),
-    challenge: str = Query(..., description="The challenge string"),
-    challenge_id: str = Query(..., description="The ID of the challenge string"),
-    challenge_signature: str = Query(..., description="The signature of the PastelID on the challenge string"),
+@router.post("/credit_purchase_initial_request", response_model=db.CreditPackPurchaseRequestResponseModel)
+async def credit_purchase_initial_request_endpoint(
+    request: db.CreditPackPurchaseRequestModel = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
     rpc_connection=Depends(get_rpc_connection),
 ):
     try:
-        is_valid_signature = await service_functions.verify_challenge_signature(pastelid, challenge_signature, challenge_id)
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            request.requesting_end_user_pastelid, challenge_signature, challenge_id
+        )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        credit_pack_ticket = await service_functions.create_credit_pack_ticket(credit_pack_request, pastelid)
-        return credit_pack_ticket
+        response = await service_functions.process_credit_purchase_initial_request(request)
+        response_dict = response.dict()
+        logger.info(f"Processed credit purchase initial request: {response_dict}")
+        return response
     except Exception as e:
-        logger.error(f"Error creating credit pack ticket: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error creating credit pack ticket: {str(e)}")
+        logger.error(f"Error processing credit purchase initial request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing credit purchase initial request: {str(e)}")
 
 
-# Endpoint function for signing supernodes
-@router.post("/sign_credit_pack_ticket", response_model=SignedCreditPackTicketModel)
-async def sign_credit_pack_ticket_endpoint(
-    credit_pack_ticket: CreditPackTicketModel,
-    pastelid: str = Query(..., description="The PastelID of the signing supernode"),
-    challenge: str = Query(..., description="The challenge string"),
-    challenge_id: str = Query(..., description="The ID of the challenge string"),
-    challenge_signature: str = Query(..., description="The signature of the PastelID on the challenge string"),
-    primary_supernode_pastelid: str = Query(..., description="The PastelID of the primary supernode"),
+@router.post("/credit_purchase_preliminary_price_quote_response", response_model=db.CreditPackPurchaseRequestPreliminaryPriceQuoteResponse)
+async def credit_purchase_preliminary_price_quote_response_endpoint(
+    response: db.CreditPackPurchaseRequestPreliminaryPriceQuoteResponse = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
     rpc_connection=Depends(get_rpc_connection),
 ):
     try:
-        is_valid_signature = await service_functions.verify_challenge_signature(pastelid, challenge_signature, challenge_id)
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            response.requesting_end_user_pastelid, challenge_signature, challenge_id
+        )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        # Verify that the request is coming from the highest-ranked supernode
-        best_block_hash, best_block_merkle_root, _ = await service_functions.get_best_block_hash_and_merkle_root_func()
-        supernode_list_df, _ = await service_functions.check_supernode_list_func()
-        closest_supernodes = await service_functions.get_n_closest_supernodes_to_pastelid_urls(3, best_block_merkle_root, supernode_list_df)
-        highest_ranked_supernode_pastelid = closest_supernodes[0][1]
-        if primary_supernode_pastelid != highest_ranked_supernode_pastelid:
-            raise HTTPException(status_code=403, detail="Unauthorized request. Only the highest-ranked supernode can initiate signing.")
-        signed_ticket = await service_functions.sign_credit_pack_ticket(credit_pack_ticket, pastelid)
-        return signed_ticket
+        result = await service_functions.process_credit_purchase_preliminary_price_quote_response(response)
+        result_dict = result.dict()
+        logger.info(f"Processed credit purchase preliminary price quote response: {result_dict}")
+        return result
     except Exception as e:
-        logger.error(f"Error signing credit pack ticket: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error signing credit pack ticket: {str(e)}")
+        logger.error(f"Error processing credit purchase preliminary price quote response: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing credit purchase preliminary price quote response: {str(e)}")
 
 
-# Endpoint function for storing the credit pack ticket
-@router.post("/store_credit_pack_ticket", response_model=str)
-async def store_credit_pack_ticket_endpoint(
-    signed_credit_pack_ticket: SignedCreditPackTicketModel,
-    pastelid: str = Query(..., description="The PastelID of the primary supernode"),
-    challenge: str = Query(..., description="The challenge string"),
-    challenge_id: str = Query(..., description="The ID of the challenge string"),
-    challenge_signature: str = Query(..., description="The signature of the PastelID on the challenge string"),
+@router.post("/credit_pack_price_agreement_request", response_model=db.CreditPackPurchasePriceAgreementRequestResponseModel)
+async def credit_pack_price_agreement_request_endpoint(
+    request: db.CreditPackPurchasePriceAgreementRequestModel = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
     rpc_connection=Depends(get_rpc_connection),
 ):
     try:
-        is_valid_signature = await service_functions.verify_challenge_signature(pastelid, challenge_signature, challenge_id)
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            request.supernode_requesting_price_agreement_pastelid, challenge_signature, challenge_id
+        )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        # Verify that the request is coming from the highest-ranked supernode
-        best_block_hash, best_block_merkle_root, _ = await service_functions.get_best_block_hash_and_merkle_root_func()
-        supernode_list_df, _ = await service_functions.check_supernode_list_func()
-        closest_supernodes = await service_functions.get_n_closest_supernodes_to_pastelid_urls(3, best_block_merkle_root, supernode_list_df)
-        highest_ranked_supernode_pastelid = closest_supernodes[0][1]
-        if pastelid != highest_ranked_supernode_pastelid:
-            raise HTTPException(status_code=403, detail="Unauthorized request. Only the highest-ranked supernode can store the ticket.")
-        transaction_id = await service_functions.store_credit_pack_ticket(signed_credit_pack_ticket)
-        return transaction_id
+        response = await service_functions.process_credit_pack_price_agreement_request(request)
+        response_dict = response.dict()
+        logger.info(f"Processed credit pack price agreement request: {response_dict}")
+        return response
     except Exception as e:
-        logger.error(f"Error storing credit pack ticket: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error storing credit pack ticket: {str(e)}")
+        logger.error(f"Error processing credit pack price agreement request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing credit pack price agreement request: {str(e)}")
 
+
+@router.post("/check_status_of_credit_purchase_request", response_model=db.CreditPackPurchaseRequestStatusModel)
+async def check_status_of_credit_purchase_request_endpoint(
+    request: db.CreditPackRequestStatusCheckModel = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            request.requesting_end_user_pastelid, challenge_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        status = await service_functions.get_credit_purchase_request_status(request)
+        status_dict = status.dict()
+        logger.info(f"Checked status of credit purchase request: {status_dict}")
+        return status
+    except Exception as e:
+        logger.error(f"Error checking status of credit purchase request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error checking status of credit purchase request: {str(e)}")
+
+
+@router.post("/credit_pack_purchase_request_final_response_announcement")
+async def credit_pack_purchase_request_final_response_announcement_endpoint(
+    response: db.CreditPackPurchaseRequestResponseModel = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            response.responding_supernode_pastelid, challenge_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        await service_functions.process_credit_pack_purchase_request_final_response_announcement(response)
+        logger.info("Processed credit pack purchase request final response announcement")
+        return {"message": "Announcement processed successfully"}
+    except Exception as e:
+        logger.error(f"Error processing credit pack purchase request final response announcement: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing credit pack purchase request final response announcement: {str(e)}")
+
+
+@router.post("/confirm_credit_purchase_request", response_model=db.CreditPackPurchaseRequestConfirmationResponseModel)
+async def confirm_credit_purchase_request_endpoint(
+    confirmation: db.CreditPackPurchaseRequestConfirmationModel = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            confirmation.requesting_end_user_pastelid, challenge_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        response = await service_functions.process_credit_purchase_request_confirmation(confirmation)
+        response_dict = response.dict()
+        logger.info(f"Processed credit purchase request confirmation: {response_dict}")
+        return response
+    except Exception as e:
+        logger.error(f"Error processing credit purchase request confirmation: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing credit purchase request confirmation: {str(e)}")
+
+
+@router.post("/credit_pack_purchase_completion_announcement")
+async def credit_pack_purchase_completion_announcement_endpoint(
+    confirmation: db.CreditPackPurchaseRequestConfirmationModel = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            confirmation.requesting_end_user_pastelid, challenge_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        await service_functions.process_credit_pack_purchase_completion_announcement(confirmation)
+        logger.info("Processed credit pack purchase completion announcement")
+        return {"message": "Announcement processed successfully"}
+    except Exception as e:
+        logger.error(f"Error processing credit pack purchase completion announcement: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing credit pack purchase completion announcement: {str(e)}")
+
+
+@router.post("/credit_pack_storage_completion_announcement")
+async def credit_pack_storage_completion_announcement_endpoint(
+    response: db.CreditPackPurchaseRequestConfirmationResponseModel = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            response.responding_supernode_pastelid, challenge_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        await service_functions.process_credit_pack_storage_completion_announcement(response)
+        logger.info("Processed credit pack storage completion announcement")
+        return {"message": "Announcement processed successfully"}
+    except Exception as e:
+        logger.error(f"Error processing credit pack storage completion announcement: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing credit pack storage completion announcement: {str(e)}")
+
+
+@router.post("/credit_pack_storage_retry_request", response_model=db.CreditPackStorageRetryRequestResponseModel)
+async def credit_pack_storage_retry_request_endpoint(
+    request: db.CreditPackStorageRetryRequestModel = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            request.requesting_end_user_pastelid, challenge_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        response = await service_functions.process_credit_pack_storage_retry_request(request)
+        response_dict = response.dict()
+        logger.info(f"Processed credit pack storage retry request: {response_dict}")
+        return response
+    except Exception as e:
+        logger.error(f"Error processing credit pack storage retry request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing credit pack storage retry request: {str(e)}")
+    
 #__________________________________________________________________________________________________________
 
 

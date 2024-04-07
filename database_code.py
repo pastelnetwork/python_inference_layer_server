@@ -211,7 +211,6 @@ class InferenceOutputResultsModel(BaseModel):
     
 class InferenceCreditPack(Base):
     __tablename__ = "inference_credit_packs"
-
     id = Column(Integer, primary_key=True, index=True)
     credit_pack_identifier = Column(String, unique=True, index=True)
     authorized_pastelids = Column(JSON)
@@ -224,31 +223,167 @@ class InferenceCreditPack(Base):
     purchase_height = Column(Integer)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
 
-class CreditPackRequestModel(BaseModel):
-    number_of_credits: float
-    psl_cost_per_credit: float
+class CreditPackPurchaseRequestModel(BaseModel):
+    requesting_end_user_pastelid: str
+    requested_initial_credits_in_credit_pack: int
+    list_of_authorized_pastelids_allowed_to_use_credit_pack: List[str]
     credit_usage_tracking_psl_address: str
+    request_timestamp_utc_iso_string: str
+    request_pastel_block_height: int
+    request_pastel_block_hash: str
+    credit_purchase_request_message_version_string: str
+    credit_pack_purchase_request_version_string: str
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    requesting_end_user_pastelid_signature_on_request_hash: str
 
-class CreditPackTicketModel(BaseModel):
-    credit_pack_identifier: str
-    authorized_pastelids: List[str]
+class CreditPackPurchaseRequestRejectionModel(BaseModel):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    credit_pack_purchase_request_response_fields_json: str
+    rejection_reason_string: str
+    rejection_timestamp_utc_iso_string: str
+    rejection_pastel_block_height: int
+    rejection_pastel_block_hash: str
+    credit_purchase_request_rejection_message_version_string: str
+    responding_supernode_pastelid: str
+    sha3_256_hash_of_credit_pack_purchase_request_rejection_fields: str
+    responding_supernode_signature_on_credit_pack_purchase_request_rejection_hash: str
+    
+class CreditPackPurchaseRequestPreliminaryPriceQuote(BaseModel):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    credit_pack_purchase_request_response_fields_json: str
+    preliminary_quoted_price_per_credit_in_psl: float
+    preliminary_total_cost_of_credit_pack_in_psl: float
+    preliminary_price_quote_timestamp_utc_iso_string: str
+    preliminary_price_quote_pastel_block_height: int
+    preliminary_price_quote_pastel_block_hash: str
+    preliminary_price_quote_message_version_string: str
+    responding_supernode_pastelid: str
+    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields: str
+    responding_supernode_signature_on_credit_pack_purchase_request_preliminary_price_quote_hash: str
+    
+class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(BaseModel):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields: str
+    credit_pack_purchase_request_response_fields_json: str
+    agree_with_preliminary_price_quote: bool
+    preliminary_price_quote_response_timestamp_utc_iso_string: str
+    preliminary_price_quote_response_pastel_block_height: int
+    preliminary_price_quote_response_pastel_block_hash: str
+    preliminary_price_quote_response_message_version_string: str
+    requesting_end_user_pastelid: str
+    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields: str
+    requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash: str
+    
+class CreditPackPurchasePriceAgreementRequestModel(BaseModel):
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
+    supernode_requesting_price_agreement_pastelid: str 
+    credit_pack_purchase_request_response_fields_json: str
+    price_agreement_request_timestamp_utc_iso_string: str
+    price_agreement_request_pastel_block_height: int
+    price_agreement_request_pastel_block_hash: str
+    price_agreement_request_message_version_string: str
+    sha3_256_hash_of_price_agreement_request_fields: str
+    supernode_requesting_price_agreement_pastelid_signature_on_request_hash: str
+
+class CreditPackPurchasePriceAgreementRequestResponseModel(BaseModel):
+    sha3_256_hash_of_price_agreement_request_fields: str
+    credit_pack_purchase_request_response_fields_json: str
+    agree_with_proposed_price: bool
+    proposed_price_agreement_response_timestamp_utc_iso_string: str
+    proposed_price_agreement_response_pastel_block_height: int
+    proposed_price_agreement_response_pastel_block_hash: str
+    proposed_price_agreement_response_message_version_string: str
+    responding_supernode_pastelid: str
+    sha3_256_hash_of_price_agreement_request_response_fields: str
+    responding_supernode_signature_on_price_agreement_request_response_hash: str
+    responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json: str
+    
+class CreditPackRequestStatusCheckModel(BaseModel):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    requesting_end_user_pastelid: str
+    requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    
+class CreditPackPurchaseRequestResponseTerminationModel(BaseModel):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    credit_pack_purchase_request_json: str
+    termination_reason_string: str
+    termination_timestamp_utc_iso_string: str
+    termination_pastel_block_height: int
+    termination_pastel_block_hash: str
+    credit_purchase_request_termination_message_version_string: str
+    responding_supernode_pastelid: str
+    sha3_256_hash_of_credit_pack_purchase_request_termination_fields: str
+    responding_supernode_signature_on_credit_pack_purchase_request_termination_hash: str    
+    
+class CreditPackPurchaseRequestResponseModel(BaseModel):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    credit_pack_purchase_request_json: str
     psl_cost_per_credit: float
-    total_psl_cost_for_pack: float
-    initial_credit_balance: float
-    current_credit_balance: float
+    proposed_total_cost_of_credit_pack_in_psl: float
     credit_usage_tracking_psl_address: str
-    version: int
-    purchase_height: int
-    timestamp: datetime
+    request_response_timestamp_utc_iso_string: str
+    request_response_pastel_block_height: int
+    request_response_pastel_block_hash: str
+    credit_purchase_request_response_message_version_string: str
+    responding_supernode_pastelid: str
+    list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms: List[str]
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
+    responding_supernode_signature_on_credit_pack_purchase_request_response_hash: str
+    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash: List[str]
+    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json: List[str]
 
-class SignatureModel(BaseModel):
-    pastelid: str
-    signature: str
-    role: str
+class CreditPackPurchaseRequestConfirmationModel(BaseModel):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
+    credit_pack_purchase_request_response_json: str
+    requesting_end_user_pastelid: str
+    txid_of_credit_purchase_burn_transaction: str
+    credit_purchase_request_confirmation_utc_iso_string: str
+    credit_purchase_request_confirmation_pastel_block_height: int
+    credit_purchase_request_confirmation_pastel_block_hash: str
+    credit_purchase_request_confirmation_message_version_string: str
+    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str
+    requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str
+    
+class CreditPackPurchaseRequestConfirmationResponseModel(BaseModel):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str
+    credit_pack_confirmation_outcome_string: str
+    pastel_api_credit_pack_ticket_registration_txid: str
+    credit_pack_confirmation_failure_reason_if_applicable: str
+    credit_purchase_request_confirmation_response_utc_iso_string: str
+    credit_purchase_request_confirmation_response_pastel_block_height: int
+    credit_purchase_request_confirmation_response_pastel_block_hash: str
+    credit_purchase_request_confirmation_response_message_version_string: str
+    responding_supernode_pastelid: str
+    sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields: str
+    responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash: str
 
-class SignedCreditPackTicketModel(BaseModel):
-    credit_pack_ticket: CreditPackTicketModel
-    signatures: List[SignatureModel]
+class CreditPackStorageRetryRequestModel(BaseModel):
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
+    credit_pack_purchase_request_response_json: str
+    requesting_end_user_pastelid: str
+    closest_agreeing_supernode_to_retry_storage_pastelid: str
+    credit_pack_storage_retry_request_timestamp_utc_iso_string: str
+    credit_pack_storage_retry_request_pastel_block_height: int
+    credit_pack_storage_retry_request_pastel_block_hash: str
+    credit_pack_storage_retry_request_message_version_string: str
+    sha3_256_hash_of_credit_pack_storage_retry_request_fields: str
+    requesting_end_user_pastelid_signature_on_credit_pack_storage_retry_request_hash: str
+
+class CreditPackStorageRetryRequestResponseModel(BaseModel):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str
+    credit_pack_storage_retry_confirmation_outcome_string: str
+    pastel_api_credit_pack_ticket_registration_txid: str
+    credit_pack_storage_retry_confirmation_failure_reason_if_applicable: str
+    credit_pack_storage_retry_confirmation_response_utc_iso_string: str
+    credit_pack_storage_retry_confirmation_response_pastel_block_height: int
+    credit_pack_storage_retry_confirmation_response_pastel_block_hash: str
+    credit_pack_storage_retry_confirmation_response_message_version_string: str
+    closest_agreeing_supernode_to_retry_storage_pastelid: str
+    sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields: str
+    closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash: str
 
 class MessageMetadata(Base):
     __tablename__ = "message_metadata"

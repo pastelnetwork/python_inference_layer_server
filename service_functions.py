@@ -22,8 +22,6 @@ import urllib.parse as urlparse
 from logger_config import setup_logger
 from blockchain_ticket_storage import BlockchainUTXOStorage
 import zstandard as zstd
-from database_code import AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata
-from database_code import InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage, InferenceAPIUsageRequestModel, InferenceConfirmationModel, InferenceOutputResultsModel
 from sqlalchemy import select, func
 from sqlalchemy.exc import OperationalError, InvalidRequestError
 from typing import List, Tuple, Dict
@@ -37,6 +35,11 @@ from mistralai.models.chat_completion import ChatMessage
 from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
+from database_code import (AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata,
+                        InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage, InferenceAPIUsageRequestModel, InferenceConfirmationModel, InferenceOutputResultsModel,
+                        CreditPackPurchaseRequestModel, CreditPackPurchaseRequestRejectionModel, CreditPackPurchaseRequestPreliminaryPriceQuote, CreditPackPurchaseRequestPreliminaryPriceQuoteResponse, CreditPackPurchasePriceAgreementRequestModel,
+                        CreditPackPurchasePriceAgreementRequestResponseModel, CreditPackRequestStatusCheckModel, CreditPackPurchaseRequestResponseTerminationModel, CreditPackPurchaseRequestResponseModel, CreditPackPurchaseRequestConfirmationModel,
+                        CreditPackPurchaseRequestConfirmationResponseModel, CreditPackStorageRetryRequestModel, CreditPackStorageRetryRequestResponseModel)
 
 encryption_key = None
 magika = Magika()
@@ -234,23 +237,18 @@ async def get_n_closest_supernodes_to_pastelid_urls(n, input_pastelid, supernode
         # Compute SHA3-256 hash of the input_pastelid
         input_pastelid_hash = compute_sha3_256_hexdigest(input_pastelid)
         input_pastelid_int = int(input_pastelid_hash, 16)
-
         list_of_supernode_pastelids = supernode_list_df['extKey'].values.tolist()
         xor_distances = []
-
         # Compute XOR distances for each supernode PastelID
         for supernode_pastelid in list_of_supernode_pastelids:
             supernode_pastelid_hash = compute_sha3_256_hexdigest(supernode_pastelid)
             supernode_pastelid_int = int(supernode_pastelid_hash, 16)
             distance = input_pastelid_int ^ supernode_pastelid_int
             xor_distances.append((supernode_pastelid, distance))
-
         # Sort the XOR distances in ascending order
         sorted_xor_distances = sorted(xor_distances, key=lambda x: x[1])
-
         # Get the N closest supernodes
         closest_supernodes = sorted_xor_distances[:n]
-
         # Retrieve the URLs and PastelIDs of the N closest supernodes
         supernode_urls_and_pastelids = []
         for supernode_pastelid, _ in closest_supernodes:
@@ -2406,104 +2404,6 @@ async def get_inference_api_usage_result_for_audit(inference_response_id: str) -
         )
         return result.scalar_one_or_none()            
     
-async def create_credit_pack_ticket(credit_pack_request: CreditPackRequestModel, pastelid: str) -> CreditPackTicketModel:
-    # Generate a unique identifier for the credit pack ticket
-    credit_pack_identifier = str(uuid.uuid4())
-    # Calculate the total PSL cost for the pack based on the requested number of credits and cost per credit
-    total_psl_cost_for_pack = credit_pack_request.number_of_credits * credit_pack_request.psl_cost_per_credit
-    # Create a new credit pack ticket
-    credit_pack_ticket = CreditPackTicketModel(
-        credit_pack_identifier=credit_pack_identifier,
-        authorized_pastelids=[pastelid],
-        psl_cost_per_credit=credit_pack_request.psl_cost_per_credit,
-        total_psl_cost_for_pack=total_psl_cost_for_pack,
-        initial_credit_balance=credit_pack_request.number_of_credits,
-        current_credit_balance=credit_pack_request.number_of_credits,
-        credit_usage_tracking_psl_address=credit_pack_request.credit_usage_tracking_psl_address,
-        version=1,
-        purchase_height=await get_current_pastel_block_height_func(),
-        timestamp=datetime.utcnow()
-    )
-    return credit_pack_ticket
-
-# Service function for signing supernodes
-async def sign_credit_pack_ticket(credit_pack_ticket: CreditPackTicketModel, pastelid: str) -> SignedCreditPackTicketModel:
-    # Serialize the credit pack ticket to JSON
-    ticket_json = credit_pack_ticket.json()
-    # Sign the JSON representation of the ticket with the provided PastelID
-    signature = await sign_message_with_pastelid_func(pastelid, ticket_json, LOCAL_PASTEL_ID_PASSPHRASE)
-    # Create a signed credit pack ticket model
-    signed_ticket = SignedCreditPackTicketModel(
-        credit_pack_ticket=credit_pack_ticket,
-        signatures=[SignatureModel(pastelid=pastelid, signature=signature, role="signing_supernode")]
-    )
-    return signed_ticket
-
-async def check_burn_payment_for_credit_pack_ticket(credit_pack_ticket: CreditPackTicketModel, burn_address: str) -> bool:
-    """
-    Checks if the burn payment has been made for a credit pack ticket.
-
-    Args:
-        credit_pack_ticket: The credit pack ticket object containing the credit usage tracking PSL address and total PSL cost.
-        burn_address: The burn address to which the burn payment should be sent.
-
-    Returns:
-        bool: True if the burn payment is found, False otherwise.
-    """
-    global rpc_connection
-    credit_usage_tracking_psl_address = credit_pack_ticket.credit_usage_tracking_psl_address
-    total_psl_cost = credit_pack_ticket.total_psl_cost_for_pack
-    # Get all transactions sent to the burn address
-    transactions = await rpc_connection.listtransactions("*", 100000, 0, True)
-    burn_address_transactions = [
-        tx for tx in transactions
-        if tx.get("address") == burn_address and tx.get("category") == "receive"
-    ]
-    burn_address_txids = [tx.get("txid") for tx in burn_address_transactions]
-    number_of_burn_address_txids = len(burn_address_txids)
-    logger.info(f"Number of transactions sent to the burn address: {number_of_burn_address_txids}")
-    # Fetch and decode raw transactions in parallel using asyncio.gather
-    decoded_tx_data_list = await asyncio.gather(*[get_and_decode_raw_transaction(txid) for txid in burn_address_txids])
-    # Check if the burn payment exists
-    for decoded_tx_data in decoded_tx_data_list:
-        decoded_tx_data_as_string = json.dumps(decoded_tx_data)
-        if credit_usage_tracking_psl_address in decoded_tx_data_as_string:
-            for vout in decoded_tx_data.get("vout", []):
-                if vout.get("scriptPubKey", {}).get("addresses", [None])[0] == burn_address:
-                    if vout["value"] == total_psl_cost:
-                        logger.info(f"Burn payment found for credit pack ticket with tracking address: {credit_usage_tracking_psl_address}")
-                        return True
-    logger.info(f"Burn payment not found for credit pack ticket with tracking address: {credit_usage_tracking_psl_address}")
-    return False
-
-async def store_credit_pack_ticket(signed_credit_pack_ticket: SignedCreditPackTicketModel) -> str:
-    # Serialize the signed credit pack ticket to JSON
-    ticket_json = signed_credit_pack_ticket.credit_pack_ticket.json()
-    signatures_json = [signature.json() for signature in signed_credit_pack_ticket.signatures]
-    combined_json = json.dumps({"ticket": ticket_json, "signatures": signatures_json})
-    # Store the combined JSON on the blockchain using the pay-to-fake-multisig approach
-    storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, base_transaction_amount, fee_per_kb)
-    transaction_id = await storage.store_data(combined_json)
-    return transaction_id
-
-async def retrieve_credit_pack_ticket(transaction_id: str) -> SignedCreditPackTicketModel:
-    storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, base_transaction_amount, fee_per_kb)
-    combined_json = await storage.retrieve_data(transaction_id)
-    combined_data = json.loads(combined_json)
-    ticket_json = combined_data["ticket"]
-    signatures_json = combined_data["signatures"]
-    ticket = CreditPackTicketModel.parse_raw(ticket_json)
-    signatures = [SignatureModel.parse_raw(signature_json) for signature_json in signatures_json]
-    signed_ticket = SignedCreditPackTicketModel(credit_pack_ticket=ticket, signatures=signatures)
-    return signed_ticket
-
-async def verify_credit_pack_ticket_signatures(signed_credit_pack_ticket: SignedCreditPackTicketModel) -> bool:
-    ticket_json = signed_credit_pack_ticket.credit_pack_ticket.json()
-    for signature in signed_credit_pack_ticket.signatures:
-        is_valid = await verify_signature_with_pastelid_func(signature.pastelid, signature.signature, ticket_json)
-        if not is_valid:
-            return False
-    return True
 
     
 # ________________________________________________________________________________________________________________________________
