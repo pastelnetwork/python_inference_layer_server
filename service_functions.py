@@ -20,6 +20,7 @@ import httpx
 from httpx import AsyncClient, Limits, Timeout
 import urllib.parse as urlparse
 from logger_config import setup_logger
+from blockchain_ticket_storage import BlockchainUTXOStorage
 import zstandard as zstd
 from database_code import AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata
 from database_code import InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage, InferenceAPIUsageRequestModel, InferenceConfirmationModel, InferenceOutputResultsModel
