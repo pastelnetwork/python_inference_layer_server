@@ -2814,7 +2814,7 @@ if use_test_market_price_data:
     
 use_get_inference_model_menu_on_start = 1
 if use_get_inference_model_menu_on_start:
-    random_async_wait_duration_in_seconds = random.randint(15, 35)
+    random_async_wait_duration_in_seconds = round(random.random()*10.0, 3)
     logger.info(f"Checking API keys and getting inference model menu (but first waiting for a random period of {random_async_wait_duration_in_seconds} seconds to not overwhelm the APIs)...")
     asyncio.run(asyncio.sleep(random_async_wait_duration_in_seconds))
     use_verbose=1
