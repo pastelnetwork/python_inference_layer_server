@@ -457,6 +457,87 @@ async def get_user_messages(
         logger.error(f"Error retrieving user messages: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving user messages: {str(e)}")
 
+#__________________________________________________________________________________________________________
+
+
+@router.post("/create_credit_pack_ticket", response_model=CreditPackTicketModel)
+async def create_credit_pack_ticket_endpoint(
+    credit_pack_request: CreditPackRequestModel,
+    pastelid: str = Query(..., description="The PastelID of the requesting party"),
+    challenge: str = Query(..., description="The challenge string"),
+    challenge_id: str = Query(..., description="The ID of the challenge string"),
+    challenge_signature: str = Query(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(pastelid, challenge_signature, challenge_id)
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        credit_pack_ticket = await service_functions.create_credit_pack_ticket(credit_pack_request, pastelid)
+        return credit_pack_ticket
+    except Exception as e:
+        logger.error(f"Error creating credit pack ticket: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating credit pack ticket: {str(e)}")
+
+
+# Endpoint function for signing supernodes
+@router.post("/sign_credit_pack_ticket", response_model=SignedCreditPackTicketModel)
+async def sign_credit_pack_ticket_endpoint(
+    credit_pack_ticket: CreditPackTicketModel,
+    pastelid: str = Query(..., description="The PastelID of the signing supernode"),
+    challenge: str = Query(..., description="The challenge string"),
+    challenge_id: str = Query(..., description="The ID of the challenge string"),
+    challenge_signature: str = Query(..., description="The signature of the PastelID on the challenge string"),
+    primary_supernode_pastelid: str = Query(..., description="The PastelID of the primary supernode"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(pastelid, challenge_signature, challenge_id)
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        # Verify that the request is coming from the highest-ranked supernode
+        best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
+        supernode_list_df, _ = await check_supernode_list_func()
+        closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, best_block_merkle_root, supernode_list_df)
+        highest_ranked_supernode_pastelid = closest_supernodes[0][1]
+        if primary_supernode_pastelid != highest_ranked_supernode_pastelid:
+            raise HTTPException(status_code=403, detail="Unauthorized request. Only the highest-ranked supernode can initiate signing.")
+        signed_ticket = await service_functions.sign_credit_pack_ticket(credit_pack_ticket, pastelid)
+        return signed_ticket
+    except Exception as e:
+        logger.error(f"Error signing credit pack ticket: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error signing credit pack ticket: {str(e)}")
+
+
+# Endpoint function for storing the credit pack ticket
+@router.post("/store_credit_pack_ticket", response_model=str)
+async def store_credit_pack_ticket_endpoint(
+    signed_credit_pack_ticket: SignedCreditPackTicketModel,
+    pastelid: str = Query(..., description="The PastelID of the primary supernode"),
+    challenge: str = Query(..., description="The challenge string"),
+    challenge_id: str = Query(..., description="The ID of the challenge string"),
+    challenge_signature: str = Query(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(pastelid, challenge_signature, challenge_id)
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        # Verify that the request is coming from the highest-ranked supernode
+        best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
+        supernode_list_df, _ = await check_supernode_list_func()
+        closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, best_block_merkle_root, supernode_list_df)
+        highest_ranked_supernode_pastelid = closest_supernodes[0][1]
+        if pastelid != highest_ranked_supernode_pastelid:
+            raise HTTPException(status_code=403, detail="Unauthorized request. Only the highest-ranked supernode can store the ticket.")
+        transaction_id = await service_functions.store_credit_pack_ticket(signed_credit_pack_ticket)
+        return transaction_id
+    except Exception as e:
+        logger.error(f"Error storing credit pack ticket: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error storing credit pack ticket: {str(e)}")
+
+#__________________________________________________________________________________________________________
+
 
 @router.post("/make_inference_api_usage_request", response_model=db.InferenceAPIUsageResponseModel)
 async def make_inference_api_usage_request_endpoint(

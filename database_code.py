@@ -209,7 +209,6 @@ class InferenceOutputResultsModel(BaseModel):
     inference_result_file_type_strings: str
     responding_supernode_signature_on_inference_result_id: str
     
-# Add a new model for storing inference credit packs
 class InferenceCreditPack(Base):
     __tablename__ = "inference_credit_packs"
 
@@ -224,6 +223,32 @@ class InferenceCreditPack(Base):
     version = Column(Integer)
     purchase_height = Column(Integer)
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+
+class CreditPackRequestModel(BaseModel):
+    number_of_credits: float
+    psl_cost_per_credit: float
+    credit_usage_tracking_psl_address: str
+
+class CreditPackTicketModel(BaseModel):
+    credit_pack_identifier: str
+    authorized_pastelids: List[str]
+    psl_cost_per_credit: float
+    total_psl_cost_for_pack: float
+    initial_credit_balance: float
+    current_credit_balance: float
+    credit_usage_tracking_psl_address: str
+    version: int
+    purchase_height: int
+    timestamp: datetime
+
+class SignatureModel(BaseModel):
+    pastelid: str
+    signature: str
+    role: str
+
+class SignedCreditPackTicketModel(BaseModel):
+    credit_pack_ticket: CreditPackTicketModel
+    signatures: List[SignatureModel]
 
 class MessageMetadata(Base):
     __tablename__ = "message_metadata"

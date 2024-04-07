@@ -606,6 +606,32 @@ async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase)
     results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
     return results_dict['signature']
 
+class CreditPackRequestModel(BaseModel):
+    number_of_credits: float
+    psl_cost_per_credit: float
+    credit_usage_tracking_psl_address: str
+
+class CreditPackTicketModel(BaseModel):
+    credit_pack_identifier: str
+    authorized_pastelids: List[str]
+    psl_cost_per_credit: float
+    total_psl_cost_for_pack: float
+    initial_credit_balance: float
+    current_credit_balance: float
+    credit_usage_tracking_psl_address: str
+    version: int
+    purchase_height: int
+    timestamp: datetime
+
+class SignatureModel(BaseModel):
+    pastelid: str
+    signature: str
+    role: str
+
+class SignedCreditPackTicketModel(BaseModel):
+    credit_pack_ticket: CreditPackTicketModel
+    signatures: List[SignatureModel]
+
 class InferenceAPIUsageRequestModel(BaseModel):
     requesting_pastelid: str
     credit_pack_identifier: str
@@ -748,12 +774,69 @@ class PastelMessagingClient:
             result = response.json()
             return result
 
+    async def create_credit_pack_ticket(self, supernode_url: str, credit_pack_request: CreditPackRequestModel) -> CreditPackTicketModel:
+        challenge_result = await self.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        challenge_id = challenge_result["challenge_id"]
+        challenge_signature = challenge_result["signature"]
+        payload = {
+            "credit_pack_request": credit_pack_request.dict(),
+            "pastelid": self.pastelid,
+            "challenge": challenge,
+            "challenge_id": challenge_id,
+            "challenge_signature": challenge_signature
+        }
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            response = await client.post(f"{supernode_url}/create_credit_pack_ticket", json=payload)
+            response.raise_for_status()
+            result = response.json()
+            return CreditPackTicketModel.parse_obj(result)
+
+    async def sign_credit_pack_ticket(self, supernode_url: str, credit_pack_ticket: CreditPackTicketModel) -> SignedCreditPackTicketModel:
+        challenge_result = await self.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        challenge_id = challenge_result["challenge_id"]
+        challenge_signature = challenge_result["signature"]
+        # Sign the credit pack ticket with the end user's PastelID
+        ticket_json = credit_pack_ticket.json()
+        signature = await sign_message_with_pastelid_func(self.pastelid, ticket_json, self.passphrase)
+        payload = {
+            "credit_pack_ticket": credit_pack_ticket.dict(),
+            "pastelid": self.pastelid,
+            "challenge": challenge,
+            "challenge_id": challenge_id,
+            "challenge_signature": challenge_signature,
+            "ticket_signature": signature
+        }
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            response = await client.post(f"{supernode_url}/sign_credit_pack_ticket", json=payload)
+            response.raise_for_status()
+            result = response.json()
+            return SignedCreditPackTicketModel.parse_obj(result)
+
+    async def store_credit_pack_ticket(self, supernode_url: str, signed_credit_pack_ticket: SignedCreditPackTicketModel) -> str:
+        challenge_result = await self.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        challenge_id = challenge_result["challenge_id"]
+        challenge_signature = challenge_result["signature"]
+        payload = {
+            "signed_credit_pack_ticket": signed_credit_pack_ticket.dict(),
+            "pastelid": self.pastelid,
+            "challenge": challenge,
+            "challenge_id": challenge_id,
+            "challenge_signature": challenge_signature
+        }
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            response = await client.post(f"{supernode_url}/store_credit_pack_ticket", json=payload)
+            response.raise_for_status()
+            result = response.json()
+            return result["transaction_id"]
+
     async def make_inference_api_usage_request(self, supernode_url: str, request_data: InferenceAPIUsageRequestModel) -> Dict[str, Any]:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-
         payload = {
             "inference_api_usage_request": request_data.dict(),
             "challenge": challenge,
@@ -1176,6 +1259,37 @@ async def send_message_and_check_for_new_incoming_messages(
     return message_dict
         
 
+async def handle_credit_pack_ticket_end_to_end(
+    number_of_credits: float,
+    psl_cost_per_credit: float,
+    credit_usage_tracking_psl_address: str,
+    burn_address: str
+):
+    global MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE
+    # Create messaging client to use:
+    messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)
+    # Get the list of Supernodes
+    supernode_list_df, supernode_list_json = await check_supernode_list_func()
+    # Prepare the credit pack request
+    credit_pack_request = CreditPackRequestModel(
+        number_of_credits=number_of_credits,
+        psl_cost_per_credit=psl_cost_per_credit,
+        credit_usage_tracking_psl_address=credit_usage_tracking_psl_address
+    )
+    # Send the credit pack request to the highest-ranked supernode
+    closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, MY_LOCAL_PASTELID, supernode_list_df)
+    highest_ranked_supernode_url = closest_supernodes[0][0]
+    credit_pack_ticket = await messaging_client.create_credit_pack_ticket(highest_ranked_supernode_url, credit_pack_request)
+    # Calculate the total cost of the credit pack
+    total_psl_cost = number_of_credits * psl_cost_per_credit
+    # Send the required PSL from the credit usage tracking address to the burn address
+    burn_transaction_txid = await send_to_address_func(burn_address, total_psl_cost, "Burn transaction for credit pack ticket")
+    # Sign the credit pack ticket with the end user's PastelID
+    signed_credit_pack_ticket = await messaging_client.sign_credit_pack_ticket(highest_ranked_supernode_url, credit_pack_ticket)
+    # Store the signed credit pack ticket on the blockchain
+    transaction_id = await messaging_client.store_credit_pack_ticket(highest_ranked_supernode_url, signed_credit_pack_ticket)
+    return transaction_id        
+
 async def handle_inference_request_end_to_end(
     input_prompt_to_llm: str,
     requested_model_canonical_string: str,
@@ -1318,6 +1432,7 @@ async def main():
         burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
         
     use_test_messaging_functionality = 0
+    use_test_credit_pack_ticket_functionality = 0
     use_test_inference_request_functionality = 1
     use_test_llm_text_completion = 1
     use_test_image_generation = 0
@@ -1331,14 +1446,30 @@ async def main():
 
     #________________________________________________________
 
+    if use_test_credit_pack_ticket_functionality:
+        # Test credit pack ticket functionality
+        number_of_credits = 1000
+        psl_cost_per_credit = 0.1
+        credit_usage_tracking_psl_address = "YOUR_CREDIT_USAGE_TRACKING_PSL_ADDRESS"
+        burn_address = "YOUR_BURN_ADDRESS"
+
+        transaction_id = await handle_credit_pack_ticket_end_to_end(
+            number_of_credits,
+            psl_cost_per_credit,
+            credit_usage_tracking_psl_address,
+            burn_address
+        )
+        logger.info(f"Credit pack ticket stored on the blockchain with transaction ID: {transaction_id}")
+
+
     if use_test_inference_request_functionality:
         if use_test_llm_text_completion:
             start_time = time.time()
             input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
             # input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
             # input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
-            # requested_model_canonical_string = "mistralapi-mistral-large-latest" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
-            requested_model_canonical_string = "groq-mixtral-8x7b-32768" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
+            requested_model_canonical_string = "mistralapi-mistral-large-latest" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
+            # requested_model_canonical_string = "groq-mixtral-8x7b-32768" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
             model_inference_type_string = "text_completion" # "embedding"        
             # model_parameters = {"number_of_tokens_to_generate": 200, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
             model_parameters = {"number_of_tokens_to_generate": 1000, "number_of_completions_to_generate": 1}
