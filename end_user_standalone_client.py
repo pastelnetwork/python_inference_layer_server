@@ -9,15 +9,15 @@ import zstandard as zstd
 import base64
 import hashlib
 import urllib.parse as urlparse
-import decimal
 import re
 import random
 import time
 import uuid
 from decimal import Decimal
 import pandas as pd
-from pydantic import BaseModel, validator
-from datetime import datetime, timezone, date
+from pydantic import field_validator
+from datetime import datetime, date
+import datetime as dt
 from typing import List, Dict, Any, Optional
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from httpx import AsyncClient, Limits, Timeout
@@ -31,9 +31,11 @@ logger = logging.getLogger("pastel_supernode_messaging_client")
 config = DecoupleConfig(RepositoryEnv('.env'))
 MESSAGING_TIMEOUT_IN_SECONDS = config.get("MESSAGING_TIMEOUT_IN_SECONDS", default=60, cast=int)
 MY_LOCAL_PASTELID = config.get("MY_LOCAL_PASTELID", cast=str)
-MY_PASTELID_PASSPHRASE = config.get("MY_PASTELID_PASSPHRASE", cast=str)
+# MY_PASTELID_PASSPHRASE = config.get("MY_PASTELID_PASSPHRASE", cast=str)
+MY_PASTELID_PASSPHRASE = "5QcX9nX67buxyeC"
 LOCAL_CREDIT_TRACKING_PSL_ADDRESS = config.get("LOCAL_CREDIT_TRACKING_PSL_ADDRESS", cast=str)
 CREDIT_PACK_FILE = config.get("CREDIT_PACK_FILE", cast=str)
+MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
 
 def setup_logger():
     if logger.handlers:
@@ -126,7 +128,7 @@ class JSONRPCException(Exception):
         return '<%s \'%s\'>' % (self.__class__.__name__, self)
 
 def EncodeDecimal(o):
-    if isinstance(o, decimal.Decimal):
+    if isinstance(o, Decimal):
         return float(round(o, 8))
     raise TypeError(repr(o) + " is not JSON serializable")
     
@@ -279,7 +281,7 @@ def compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance: SQLModel) 
             return value.isoformat()
         elif isinstance(value, (list, dict)):
             return json.dumps(value, sort_keys=True)
-        elif isinstance(value, decimal.Decimal):
+        elif isinstance(value, Decimal):
             return str(value)
         return value
     concatenated_fields = ""
@@ -295,6 +297,65 @@ def compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance: SQLModel) 
     # Compute and return the SHA3-256 hash
     sha256_hash_of_concatenated_fields = get_sha256_hash_of_input_data_func(concatenated_fields)
     return sha256_hash_of_concatenated_fields
+
+def compare_datetimes(datetime_input1, datetime_input2):
+    # Check if the inputs are datetime objects, otherwise parse them
+    if not isinstance(datetime_input1, datetime):
+        datetime_input1 = pd.to_datetime(datetime_input1)
+    if not isinstance(datetime_input2, datetime):
+        datetime_input2 = pd.to_datetime(datetime_input2)
+    # Calculate the difference in seconds
+    difference_in_seconds = abs((datetime_input2 - datetime_input1).total_seconds())
+    # Check if the difference is within the acceptable range
+    datetimes_are_close_enough_to_consider_them_matching = (
+        difference_in_seconds <= MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING
+    )
+    return difference_in_seconds, datetimes_are_close_enough_to_consider_them_matching
+
+async def verify_message_with_pastelid_func(pastelid, message_to_verify, pastelid_signature_on_message) -> str:
+    global rpc_connection
+    verification_result = await rpc_connection.pastelid('verify', message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
+    return verification_result['verification']
+
+async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel):
+    validation_errors = []
+    # Validate timestamp fields
+    for field_name, field_value in model_instance.__dict__.items():
+        if field_name.endswith("_timestamp_utc_iso_string"):
+            try:
+                pd.to_datetime(field_value)
+            except ValueError:
+                validation_errors.append(f"Invalid timestamp format for field {field_name}")
+            # Check if the timestamp is within an acceptable range of the current time
+            current_timestamp = pd.to_datetime(datetime.now(dt.UTC))
+            timestamp_diff, timestamps_match = compare_datetimes(field_value, current_timestamp)
+            if not timestamps_match:
+                validation_errors.append(f"Timestamp in field {field_name} is too far from the current time")
+    # Validate pastel block height and hash fields
+    best_block_hash, best_block_merkle_root, best_block_height = await get_best_block_hash_and_merkle_root_func()
+    for field_name, field_value in model_instance.__dict__.items():
+        if field_name.endswith("_pastel_block_height"):
+            if field_value != best_block_height:
+                validation_errors.append(f"Pastel block height in field {field_name} does not match the current block height")
+        elif field_name.endswith("_pastel_block_hash"):
+            if field_value != best_block_hash:
+                validation_errors.append(f"Pastel block hash in field {field_name} does not match the current block hash")
+    # Validate hash fields
+    expected_hash = compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance)
+    for field_name, field_value in model_instance.__dict__.items():
+        if "sha3_256_hash_of_" in field_name and field_name.endswith("_fields"):
+            if field_value != expected_hash:
+                validation_errors.append(f"SHA3-256 hash in field {field_name} does not match the computed hash of the response fields")
+    # Validate pastelid signature fields
+    for field_name, field_value in model_instance.__dict__.items():
+        if field_name.endswith("_pastelid_signature_on_request_hash"):
+            pastelid_field_name = field_name.replace("_signature_on_request_hash", "")
+            pastelid = getattr(model_instance, pastelid_field_name)
+            message_to_verify = getattr(model_instance, f"sha3_256_hash_of_{pastelid_field_name}_fields")
+            verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, field_value)
+            if verification_result != 'OK':
+                validation_errors.append(f"Pastelid signature in field {field_name} failed verification")
+    return validation_errors        
 
 def get_closest_supernode_to_pastelid_url(input_pastelid, supernode_list_df):
     if not supernode_list_df.empty:
@@ -723,13 +784,12 @@ class CreditPackPurchaseRequest(SQLModel, table=True):
                 "requesting_end_user_pastelid_signature_on_request_hash": "0xabcd..."
             }
         }
-    # Use validators to serialize/deserialize the list to/from JSON
-    @validator('list_of_authorized_pastelids_allowed_to_use_credit_pack', pre=True, always=True)
+    @field_validator("list_of_authorized_pastelids_allowed_to_use_credit_pack", mode="before")
     def serialize_list_to_json(cls, v):
         if isinstance(v, list):
             return json.dumps(v)
         return v
-    @validator('list_of_authorized_pastelids_allowed_to_use_credit_pack', pre=False, always=True)
+    @field_validator("list_of_authorized_pastelids_allowed_to_use_credit_pack", mode="after")
     def deserialize_json_to_list(cls, v):
         try:
             return json.loads(v)
@@ -740,8 +800,8 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     credit_pack_purchase_request_json: str
-    psl_cost_per_credit: Decimal
-    proposed_total_cost_of_credit_pack_in_psl: Decimal
+    psl_cost_per_credit: float
+    proposed_total_cost_of_credit_pack_in_psl: float
     credit_usage_tracking_psl_address: str = Field(index=True)
     request_response_timestamp_utc_iso_string: str
     request_response_pastel_block_height: int
@@ -773,18 +833,18 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
                 "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json": '["0xabcd...", "0xef01...", ...]'
             }
         }
-    @validator('list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json', pre=True, always=True)
+    @field_validator("list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms", "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash", "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json", mode="before")
     def serialize_lists_to_json(cls, v):
         if isinstance(v, list):
             return json.dumps(v)
         return v
-    @validator('list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json', pre=False, always=True)
+    @field_validator("list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms", "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash", "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json", mode="after")
     def deserialize_json_to_lists(cls, v):
         try:
             return json.loads(v)
         except ValueError:
             return []
-
+        
 class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
@@ -1058,7 +1118,6 @@ class CreditPackStorageRetryRequestResponse(SQLModel):
             }
         }
 
-
 class InferenceAPIUsageRequest(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     inference_request_id: str = Field(unique=True, index=True)
@@ -1068,15 +1127,18 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
     model_inference_type_string: str
     model_parameters_json: str = Field()  # Store the dict serialized as a JSON string
     model_input_data_json_b64: str
-    total_psl_cost_for_pack: Decimal
-    initial_credit_balance: Decimal
-    requesting_pastelid_signature: str
-    @validator('model_parameters_json', pre=True, always=True)
+    inference_request_utc_iso_string: str
+    inference_request_pastel_block_height: int
+    inference_request_pastel_block_hash: str
+    inference_request_message_version_string: str
+    sha3_256_hash_of_inference_request_fields: str
+    requesting_pastelid_signature_on_request_hash: str
+    @field_validator("model_parameters_json", mode="before")
     def serialize_dict_to_json(cls, v):
         if isinstance(v, dict):
             return json.dumps(v)
         return v
-    @validator('model_parameters_json', pre=False, always=True)
+    @field_validator("model_parameters_json", mode="after")
     def deserialize_json_to_dict(cls, v):
         try:
             return json.loads(v)
@@ -1093,9 +1155,12 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
                 "model_inference_type_string": "text-completion",
                 "model_parameters_json": '{"max_tokens": 100, "temperature": 0.7}',
                 "model_input_data_json_b64": "eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9",
-                "total_psl_cost_for_pack": 1000,
-                "initial_credit_balance": 1000,
-                "requesting_pastelid_signature": "0xabcd..."
+                "inference_request_utc_iso_string": "2023-06-01T12:00:00Z",
+                "inference_request_pastel_block_height": 123456,
+                "inference_request_pastel_block_hash": "0x1234...",
+                "inference_request_message_version_string": "1.0",
+                "sha3_256_hash_of_inference_request_fields": "0x5678...",
+                "requesting_pastelid_signature_on_request_hash": "0xabcd..."
             }
         }
 
@@ -1103,12 +1168,17 @@ class InferenceAPIUsageResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     inference_response_id: str = Field(unique=True, index=True)
     inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
-    proposed_cost_of_request_in_inference_credits: Decimal
-    remaining_credits_in_pack_after_request_processed: Decimal
+    proposed_cost_of_request_in_inference_credits: float
+    remaining_credits_in_pack_after_request_processed: float
     credit_usage_tracking_psl_address: str = Field(index=True)
     request_confirmation_message_amount_in_patoshis: int
     max_block_height_to_include_confirmation_transaction: int
-    supernode_pastelid_and_signature_on_inference_response_id: str
+    inference_request_response_utc_iso_string: str
+    inference_request_response_pastel_block_height: int
+    inference_request_response_pastel_block_hash: str
+    inference_request_response_message_version_string: str    
+    sha3_256_hash_of_inference_request_response_fields: str
+    supernode_pastelid_and_signature_on_inference_request_response_hash: str
     class Config:
         json_schema_extra = {
             "example": {
@@ -1119,7 +1189,12 @@ class InferenceAPIUsageResponse(SQLModel, table=True):
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
                 "request_confirmation_message_amount_in_patoshis": 1000,
                 "max_block_height_to_include_confirmation_transaction": 123456,
-                "supernode_pastelid_and_signature_on_inference_response_id": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk:0xabcd..."
+                "inference_request_response_utc_iso_string": "2023-06-01T12:00:00Z",
+                "inference_request_response_pastel_block_height": 123456,
+                "inference_request_response_pastel_block_hash": "0x1234...",
+                "inference_request_response_message_version_string": "1.0",
+                "sha3_256_hash_of_inference_request_response_fields": "0x5678...",
+                "supernode_pastelid_and_signature_on_inference_request_response_hash": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk:0xabcd..."
             }
         }
         
@@ -1131,6 +1206,11 @@ class InferenceAPIOutputResult(SQLModel, table=True):
     responding_supernode_pastelid: str = Field(index=True)
     inference_result_json_base64: str
     inference_result_file_type_strings: str
+    inference_result_utc_iso_string: str
+    inference_result_pastel_block_height: int
+    inference_result_pastel_block_hash: str
+    inference_result_message_version_string: str    
+    sha3_256_hash_of_inference_result_fields: str    
     responding_supernode_signature_on_inference_result_id: str
     class Config:
         json_schema_extra = {
@@ -1141,38 +1221,15 @@ class InferenceAPIOutputResult(SQLModel, table=True):
                 "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "inference_result_json_base64": "eyJvdXRwdXQiOiAiSGVsbG8sIEknbSBkb2luZyBncmVhdCEgSG93IGFib3V0IHlvdT8ifQ==",
                 "inference_result_file_type_strings": "json",
+                "inference_result_utc_iso_string": "2023-06-01T12:00:00Z",
+                "inference_result_pastel_block_height": 123456,
+                "inference_result_pastel_block_hash": "0x1234...",
+                "inference_result_message_version_string": "1.0",
+                "sha3_256_hash_of_inference_result_fields": "0x5678...",
                 "responding_supernode_signature_on_inference_result_id": "0xdef0..."
             }
         }
-
-class InferenceCreditPackRequest(SQLModel):
-    authorized_pastelids_to_use_credits: str = Field()
-    psl_cost_per_credit: float
-    total_psl_cost_for_pack: float
-    initial_credit_balance: float
-    credit_usage_tracking_psl_address: str
-    @validator('authorized_pastelids_to_use_credits', pre=True, always=True)
-    def serialize_list_to_json(cls, v):
-        if isinstance(v, list):
-            return json.dumps(v)
-        return v
-    @validator('authorized_pastelids_to_use_credits', pre=False, always=True)
-    def deserialize_json_to_list(cls, v):
-        try:
-            return json.loads(v)
-        except ValueError:
-            return []
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "authorized_pastelids_to_use_credits": '["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk"]',
-                "psl_cost_per_credit": 0.1,
-                "total_psl_cost_for_pack": 1000,
-                "initial_credit_balance": 1000,
-                "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV"
-            }
-        }
-
+        
 class InferenceConfirmation(SQLModel):
     inference_request_id: str
     confirmation_transaction: dict
@@ -1188,107 +1245,10 @@ class InferenceConfirmation(SQLModel):
             }
         }
 
-class CreditPackRequestModel(BaseModel):
-    number_of_credits: float
-    psl_cost_per_credit: float
-    credit_usage_tracking_psl_address: str
+#____________________________________________________________________________________________
 
-class CreditPackTicketModel(BaseModel):
-    credit_pack_identifier: str
-    authorized_pastelids: List[str]
-    psl_cost_per_credit: float
-    total_psl_cost_for_pack: float
-    initial_credit_balance: float
-    current_credit_balance: float
-    credit_usage_tracking_psl_address: str
-    version: int
-    purchase_height: int
-    timestamp: datetime
+# Class for handling interactions with the supernode servers:
 
-class SignatureModel(BaseModel):
-    pastelid: str
-    signature: str
-    role: str
-
-class SignedCreditPackTicketModel(BaseModel):
-    credit_pack_ticket: CreditPackTicketModel
-    signatures: List[SignatureModel]
-
-class InferenceAPIUsageRequestModel(BaseModel):
-    requesting_pastelid: str
-    credit_pack_identifier: str
-    requested_model_canonical_string: str
-    model_inference_type_string: str
-    model_parameters_json: str
-    model_input_data_json_b64: str
-
-    class Config:
-        protected_namespaces = ()
-
-class InferenceConfirmationModel(BaseModel):
-    inference_request_id: str
-    confirmation_transaction: dict
-
-class InferenceCreditPackMockup:
-    def __init__(self, credit_pack_identifier: str, authorized_pastelids: List[str], psl_cost_per_credit: float, total_psl_cost_for_pack: float, initial_credit_balance: float, credit_usage_tracking_psl_address: str):
-        self.credit_pack_identifier = credit_pack_identifier
-        self.authorized_pastelids = authorized_pastelids
-        self.psl_cost_per_credit = psl_cost_per_credit
-        self.total_psl_cost_for_pack = total_psl_cost_for_pack
-        self.current_credit_balance = initial_credit_balance
-        self.initial_credit_balance = initial_credit_balance
-        self.credit_usage_tracking_psl_address = credit_usage_tracking_psl_address
-        self.version = 1
-        self.purchase_height = 0
-        self.timestamp = datetime.now(timezone.utc)
-
-    def is_authorized(self, pastelid: str) -> bool:
-        return pastelid in self.authorized_pastelids
-
-    def has_sufficient_credits(self, requested_credits: float) -> bool:
-        return self.current_credit_balance >= requested_credits
-
-    def deduct_credits(self, credits_to_deduct: float):
-        if self.has_sufficient_credits(credits_to_deduct):
-            self.current_credit_balance -= credits_to_deduct
-        else:
-            raise ValueError("Insufficient credits in the pack.")
-
-    def to_dict(self):
-        return {
-            "credit_pack_identifier": self.credit_pack_identifier,
-            "authorized_pastelids": self.authorized_pastelids,
-            "psl_cost_per_credit": self.psl_cost_per_credit,
-            "total_psl_cost_for_pack": self.total_psl_cost_for_pack,
-            "initial_credit_balance": self.initial_credit_balance,
-            "current_credit_balance": self.current_credit_balance,
-            "credit_usage_tracking_psl_address": self.credit_usage_tracking_psl_address,
-            "version": self.version,
-            "purchase_height": self.purchase_height,
-            "timestamp": self.timestamp.isoformat()
-        }
-        
-    @classmethod
-    def load_from_json(cls, file_path):
-        try:
-            with open(file_path, "r") as file:
-                data = json.load(file)
-                return cls(
-                    credit_pack_identifier=data["credit_pack_identifier"],
-                    authorized_pastelids=data["authorized_pastelids"],
-                    psl_cost_per_credit=data["psl_cost_per_credit"],
-                    total_psl_cost_for_pack=data["total_psl_cost_for_pack"],
-                    initial_credit_balance=data["initial_credit_balance"],
-                    credit_usage_tracking_psl_address=data["credit_usage_tracking_psl_address"]
-                )
-        except FileNotFoundError:
-            return None
-
-    def save_to_json(self, file_path):
-        data = self.to_dict()
-        with open(file_path, "w") as file:
-            json.dump(data, file, indent=2)      
-            
 class PastelMessagingClient:
     def __init__(self, pastelid: str, passphrase: str):
         self.pastelid = pastelid
@@ -1316,14 +1276,17 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         # Prepare the user message payload
-        payload = {
-            "user_message": user_message.dict(),
-            "challenge": challenge,
-            "challenge_id": challenge_id,
-            "challenge_signature": challenge_signature
-        }
+        payload = user_message.model_dump()
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.post(f"{supernode_url}/send_user_message", json=payload)
+            response = await client.post(
+                f"{supernode_url}/send_user_message",
+                json={
+                    "user_message": payload,
+                    "challenge": challenge,
+                    "challenge_id": challenge_id,
+                    "challenge_signature": challenge_signature
+                }
+            )
             response.raise_for_status()
             result = response.json()
             return result
@@ -1345,79 +1308,105 @@ class PastelMessagingClient:
             response = await client.get(f"{supernode_url}/get_user_messages", params=params)
             response.raise_for_status()
             result = response.json()
-            return [UserMessage.parse_obj(message) for message in result]
+            return [UserMessage.model_validate(message) for message in result]
 
     async def create_credit_pack_ticket(self, supernode_url: str, credit_pack_request: CreditPackPurchaseRequest) -> CreditPackPurchaseRequestResponse:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        payload = credit_pack_request.dict()
-        payload["challenge"] = challenge
-        payload["challenge_id"] = challenge_id
-        payload["challenge_signature"] = challenge_signature
+        payload = credit_pack_request.model_dump()
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.post(f"{supernode_url}/credit_purchase_initial_request", json=payload)
+            response = await client.post(
+                f"{supernode_url}/credit_purchase_initial_request",
+                json={
+                    "credit_pack_request": payload,
+                    "challenge": challenge,
+                    "challenge_id": challenge_id,
+                    "challenge_signature": challenge_signature
+                }
+            )
             response.raise_for_status()
             result = response.json()
-            return CreditPackPurchaseRequestResponse.parse_obj(result)
+            return CreditPackPurchaseRequestResponse.model_validate(result)
 
     async def sign_credit_pack_ticket(self, supernode_url: str, preliminary_price_quote_response: CreditPackPurchaseRequestPreliminaryPriceQuoteResponse) -> CreditPackPurchaseRequestResponse:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        payload = preliminary_price_quote_response.dict()
-        payload["challenge"] = challenge
-        payload["challenge_id"] = challenge_id
-        payload["challenge_signature"] = challenge_signature
+        payload = preliminary_price_quote_response.model_dump()
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.post(f"{supernode_url}/credit_purchase_preliminary_price_quote_response", json=payload)
+            response = await client.post(
+                f"{supernode_url}/credit_purchase_preliminary_price_quote_response",
+                json={
+                    "preliminary_price_quote_response": payload,
+                    "challenge": challenge,
+                    "challenge_id": challenge_id,
+                    "challenge_signature": challenge_signature
+                }
+            )
             response.raise_for_status()
             result = response.json()
-            return CreditPackPurchaseRequestResponse.parse_obj(result)
+            return CreditPackPurchaseRequestResponse.model_validate(result)
 
     async def store_credit_pack_ticket(self, supernode_url: str, credit_pack_purchase_request_confirmation: CreditPackPurchaseRequestConfirmation) -> CreditPackPurchaseRequestConfirmationResponse:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        payload = credit_pack_purchase_request_confirmation.dict()
-        payload["challenge"] = challenge
-        payload["challenge_id"] = challenge_id
-        payload["challenge_signature"] = challenge_signature
+        payload = credit_pack_purchase_request_confirmation.model_dump()
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.post(f"{supernode_url}/confirm_credit_purchase_request", json=payload)
+            response = await client.post(
+                f"{supernode_url}/confirm_credit_purchase_request",
+                json={
+                    "credit_pack_purchase_request_confirmation": payload,
+                    "challenge": challenge,
+                    "challenge_id": challenge_id,
+                    "challenge_signature": challenge_signature
+                }
+            )
             response.raise_for_status()
             result = response.json()
-            return CreditPackPurchaseRequestConfirmationResponse.parse_obj(result)
+            return CreditPackPurchaseRequestConfirmationResponse.model_validate(result)
 
     async def make_inference_api_usage_request(self, supernode_url: str, request_data: InferenceAPIUsageRequest) -> InferenceAPIUsageResponse:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        payload = request_data.dict()
-        payload["challenge"] = challenge
-        payload["challenge_id"] = challenge_id
-        payload["challenge_signature"] = challenge_signature
+        payload = request_data.model_dump()
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.post(f"{supernode_url}/make_inference_api_usage_request", json=payload)
+            logger.info(f"Payload for inference usage request:\n{payload}")
+            response = await client.post(
+                f"{supernode_url}/make_inference_api_usage_request",
+                json={
+                    "inference_api_usage_request": payload,
+                    "challenge": challenge,
+                    "challenge_id": challenge_id,
+                    "challenge_signature": challenge_signature
+                }
+            )
             response.raise_for_status()
             result = response.json()
-            return InferenceAPIUsageResponse.parse_obj(result)
+            return InferenceAPIUsageResponse.model_validate(result)
 
     async def send_inference_confirmation(self, supernode_url: str, confirmation_data: InferenceConfirmation) -> Dict[str, Any]:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        payload = confirmation_data.dict()
-        payload["challenge"] = challenge
-        payload["challenge_id"] = challenge_id
-        payload["challenge_signature"] = challenge_signature
+        payload = confirmation_data.model_dump()
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
-            response = await client.post(f"{supernode_url}/confirm_inference_request", json=payload)
+            response = await client.post(
+                f"{supernode_url}/confirm_inference_request",
+                json={
+                    "inference_confirmation": payload,
+                    "challenge": challenge,
+                    "challenge_id": challenge_id,
+                    "challenge_signature": challenge_signature
+                }
+            )
             response.raise_for_status()
             result = response.json()
             return result
@@ -1452,7 +1441,7 @@ class PastelMessagingClient:
             response = await client.post(f"{supernode_url}/retrieve_inference_output_results", params=params)
             response.raise_for_status()
             result = response.json()
-            return InferenceAPIOutputResult.parse_obj(result)
+            return InferenceAPIOutputResult.model_validate(result)
 
     async def call_audit_inference_request_response(self, supernode_url: str, inference_response_id: str) -> InferenceAPIUsageResponse:
         try:
@@ -1466,7 +1455,7 @@ class PastelMessagingClient:
                 response = await client.post(f"{supernode_url}/audit_inference_request_response", json=payload)
                 response.raise_for_status()
                 result = response.json()
-                return InferenceAPIUsageResponse.parse_obj(result)
+                return InferenceAPIUsageResponse.model_validate(result)
         except Exception as e:
             logger.error(f"Error in audit_inference_request_response from Supernode URL: {supernode_url}: {e}")
             raise
@@ -1483,7 +1472,7 @@ class PastelMessagingClient:
                 response = await client.post(f"{supernode_url}/audit_inference_request_result", json=payload)
                 response.raise_for_status()
                 result = response.json()
-                return InferenceAPIOutputResult.parse_obj(result)
+                return InferenceAPIOutputResult.model_validate(result)
         except Exception as e:
             logger.error(f"Error in audit_inference_request_result from Supernode URL: {supernode_url}: {e}")
             raise
@@ -1651,9 +1640,9 @@ def validate_inference_result_fields(result_audit_results: List[InferenceAPIOutp
             
 def validate_inference_data(inference_result_dict: Dict[str, Any]) -> Dict[str, Dict[str, bool]]:
     # Extract relevant fields from inference_result_dict
-    usage_request_response = InferenceAPIUsageResponse.parse_obj(inference_result_dict["usage_request_response"])
-    usage_result = InferenceAPIOutputResult.parse_obj(inference_result_dict["output_results"])
-    audit_results = [InferenceAPIUsageResponse.parse_obj(result) for result in inference_result_dict["audit_results"][:len(inference_result_dict["audit_results"])//2]] + [InferenceAPIOutputResult.parse_obj(result) for result in inference_result_dict["audit_results"][len(inference_result_dict["audit_results"])//2:]]
+    usage_request_response = InferenceAPIUsageResponse.model_validate(inference_result_dict["usage_request_response"])
+    usage_result = InferenceAPIOutputResult.model_validate(inference_result_dict["output_results"])
+    audit_results = [InferenceAPIUsageResponse.model_validate(result) for result in inference_result_dict["audit_results"][:len(inference_result_dict["audit_results"])//2]] + [InferenceAPIOutputResult.model_validate(result) for result in inference_result_dict["audit_results"][len(inference_result_dict["audit_results"])//2:]]
     # Validate InferenceAPIUsageResponse fields
     response_validation_results = validate_inference_response_fields(
         [result for result in audit_results if isinstance(result, InferenceAPIUsageResponse)],
@@ -1669,7 +1658,7 @@ def validate_inference_data(inference_result_dict: Dict[str, Any]) -> Dict[str, 
         "response_validation": response_validation_results,
         "result_validation": result_validation_results
     }
-    return validation_results
+    return validation_results      
         
 async def send_message_and_check_for_new_incoming_messages(
     to_pastelid: str,
@@ -1744,12 +1733,12 @@ async def handle_credit_pack_ticket_end_to_end(
         requested_initial_credits_in_credit_pack=number_of_credits,
         list_of_authorized_pastelids_allowed_to_use_credit_pack=[MY_LOCAL_PASTELID],
         credit_usage_tracking_psl_address=credit_usage_tracking_psl_address,
-        request_timestamp_utc_iso_string=datetime.utcnow().isoformat(),
+        request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
         request_pastel_block_height=await get_current_pastel_block_height_func(),
         request_pastel_block_hash=(await get_best_block_hash_and_merkle_root_func())[0],
         credit_purchase_request_message_version_string="1.0",
     )
-    sha3_256_hash_of_credit_pack_purchase_request_fields = compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_request.dict())
+    sha3_256_hash_of_credit_pack_purchase_request_fields = compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_request)
     credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields = sha3_256_hash_of_credit_pack_purchase_request_fields
     requesting_end_user_pastelid_signature_on_request_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_credit_pack_purchase_request_fields, MY_PASTELID_PASSPHRASE)
     credit_pack_request.requesting_end_user_pastelid_signature_on_request_hash = requesting_end_user_pastelid_signature_on_request_hash
@@ -1763,13 +1752,13 @@ async def handle_credit_pack_ticket_end_to_end(
         sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields=preliminary_price_quote.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields,
         credit_pack_purchase_request_response_fields_json=preliminary_price_quote.credit_pack_purchase_request_response_fields_json,
         agree_with_preliminary_price_quote=True,
-        preliminary_price_quote_response_timestamp_utc_iso_string=datetime.utcnow().isoformat(),
+        preliminary_price_quote_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
         preliminary_price_quote_response_pastel_block_height=await get_current_pastel_block_height_func(),
         preliminary_price_quote_response_pastel_block_hash=(await get_best_block_hash_and_merkle_root_func())[0],
         preliminary_price_quote_response_message_version_string="1.0",
         requesting_end_user_pastelid=MY_LOCAL_PASTELID,
     )
-    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields = compute_sha3_256_hash_of_sqlmodel_response_fields(preliminary_price_quote_response.dict())
+    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields = compute_sha3_256_hash_of_sqlmodel_response_fields(preliminary_price_quote_response)
     preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields = sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields
     requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields, MY_PASTELID_PASSPHRASE)
     preliminary_price_quote_response.requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash = requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash
@@ -1786,12 +1775,12 @@ async def handle_credit_pack_ticket_end_to_end(
         credit_pack_purchase_request_response_json=signed_credit_pack_ticket.credit_pack_purchase_request_json,
         requesting_end_user_pastelid=MY_LOCAL_PASTELID,
         txid_of_credit_purchase_burn_transaction=burn_transaction_txid,
-        credit_purchase_request_confirmation_utc_iso_string=datetime.utcnow().isoformat(),
+        credit_purchase_request_confirmation_utc_iso_string=datetime.now(dt.UTC).isoformat(),
         credit_purchase_request_confirmation_pastel_block_height=await get_current_pastel_block_height_func(),
         credit_purchase_request_confirmation_pastel_block_hash=(await get_best_block_hash_and_merkle_root_func())[0],
         credit_purchase_request_confirmation_message_version_string="1.0"
     )
-    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_purchase_request_confirmation.dict())
+    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_purchase_request_confirmation)
     credit_pack_purchase_request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields
     requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields, MY_PASTELID_PASSPHRASE)
     credit_pack_purchase_request_confirmation.requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields
@@ -1830,7 +1819,7 @@ async def handle_inference_request_end_to_end(
         logger.error(f"Error! No supporting Supernode found for the desired model: {requested_model_canonical_string} with inference type: {model_inference_type_string}")
     input_prompt_to_llm__base64_encoded = base64.b64encode(input_prompt_to_llm.encode()).decode('utf-8')
     # Prepare the inference API usage request
-    request_data = InferenceAPIUsageRequest(
+    inference_request_data = InferenceAPIUsageRequest(
         inference_request_id=str(uuid.uuid4()),
         requesting_pastelid=MY_LOCAL_PASTELID,
         credit_pack_identifier="credit_pack_123",  # TODO: Use the actual credit pack identifier
@@ -1838,24 +1827,34 @@ async def handle_inference_request_end_to_end(
         model_inference_type_string=model_inference_type_string,
         model_parameters_json=model_parameters_json,
         model_input_data_json_b64=input_prompt_to_llm__base64_encoded,
-        total_psl_cost_for_pack=10000.0,  # TODO: Use the actual total PSL cost for the credit pack
-        initial_credit_balance=100000.0,  # TODO: Use the actual initial credit balance
-        requesting_pastelid_signature="signature_placeholder"  # TODO: Sign the request with the actual PastelID signature
+        inference_request_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+        inference_request_pastel_block_height=await get_current_pastel_block_height_func(),
+        inference_request_pastel_block_hash=(await get_best_block_hash_and_merkle_root_func())[0],
+        inference_request_message_version_string="1.0"
     )
+    sha3_256_hash_of_inference_request_fields = compute_sha3_256_hash_of_sqlmodel_response_fields(inference_request_data)
+    inference_request_data.sha3_256_hash_of_inference_request_fields = sha3_256_hash_of_inference_request_fields
+    requesting_pastelid_signature_on_request_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_inference_request_fields, MY_PASTELID_PASSPHRASE)
+    inference_request_data.requesting_pastelid_signature_on_request_hash = requesting_pastelid_signature_on_request_hash    
     # Send the inference API usage request
-    usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, request_data)
+    usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, inference_request_data)
     logger.info(f"Received inference API usage request response from SN:\n {usage_request_response}")
+    # Check the validity of the response
+    validation_errors = await validate_credit_pack_ticket_message_data_func(usage_request_response)
+    if validation_errors:
+        raise ValueError(f"Invalid inference request response from Supernode URL {supernode_url}: {', '.join(validation_errors)}")    
     # Extract the relevant information from the response
-    inference_request_id = usage_request_response["inference_request_id"]
-    inference_response_id = usage_request_response["inference_response_id"]
-    proposed_cost_in_credits = float(usage_request_response["proposed_cost_of_request_in_inference_credits"])
-    credit_usage_tracking_psl_address = usage_request_response["credit_usage_tracking_psl_address"]
+    usage_request_response_dict = usage_request_response.model_dump()
+    inference_request_id = usage_request_response_dict["inference_request_id"]
+    inference_response_id = usage_request_response_dict["inference_response_id"]
+    proposed_cost_in_credits = float(usage_request_response_dict["proposed_cost_of_request_in_inference_credits"])
+    credit_usage_tracking_psl_address = usage_request_response_dict["credit_usage_tracking_psl_address"]
     try:
         assert(credit_usage_tracking_psl_address == LOCAL_CREDIT_TRACKING_PSL_ADDRESS)
     except AssertionError:
         logger.error(f"Error! Inference request response has a different tracking address than the local tracking address used in the request: {credit_usage_tracking_psl_address} vs {LOCAL_CREDIT_TRACKING_PSL_ADDRESS}")
         return None, None, None
-    credit_usage_tracking_amount_in_psl = float(usage_request_response["request_confirmation_message_amount_in_patoshis"])/(10**5) # Divide by number of Patoshis per PSL
+    credit_usage_tracking_amount_in_psl = float(usage_request_response_dict["request_confirmation_message_amount_in_patoshis"])/(10**5) # Divide by number of Patoshis per PSL
     # Check if tracking address contains enough PSL to send tracking amount:
     tracking_address_balance = await check_psl_address_balance_alternative_func(credit_usage_tracking_psl_address)
     if tracking_address_balance < credit_usage_tracking_amount_in_psl:
@@ -1892,8 +1891,8 @@ async def handle_inference_request_end_to_end(
                     # Create the inference_result_dict with all relevant information
                     inference_result_dict = {
                         "supernode_url": supernode_url,
-                        "request_data": request_data.dict(),
-                        "usage_request_response": usage_request_response,
+                        "request_data": inference_request_data.model_dump(),
+                        "usage_request_response": usage_request_response_dict,
                         "input_prompt_to_llm": input_prompt_to_llm,
                         "output_results": output_results,
                     }
