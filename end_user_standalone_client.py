@@ -13,8 +13,10 @@ import decimal
 import re
 import random
 import time
+import uuid
+from decimal import Decimal
 import pandas as pd
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from datetime import datetime, timezone, date
 from typing import List, Dict, Any, Optional
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
@@ -645,44 +647,148 @@ async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase)
     results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
     return results_dict['signature']
 
-
+#____________________________________________________________________________________________________________________________
 # SQLModel model classes based on the server's database_code.py
+
+# Messaging related models:
+
+class Message(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    sending_sn_pastelid: str = Field(index=True)
+    receiving_sn_pastelid: str = Field(index=True)
+    sending_sn_txid_vout: str = Field(index=True)
+    receiving_sn_txid_vout: str = Field(index=True)
+    message_type: str = Field(index=True)
+    message_body: str
+    signature: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    def __repr__(self):
+        return f"<Message(id={self.id}, sending_sn_pastelid='{self.sending_sn_pastelid}', receiving_sn_pastelid='{self.receiving_sn_pastelid}', message_type='{self.message_type}', timestamp='{self.timestamp}')>"
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sending_sn_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "receiving_sn_pastelid": "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP",
+                "sending_sn_txid_vout": "0x1234...:0",
+                "receiving_sn_txid_vout": "0x5678...:0",
+                "message_type": "text",
+                "message_body": "Hello, how are you?",
+                "signature": "0xabcd...",
+                "timestamp": "2023-06-01T12:00:00Z"
+            }
+        }
+
+class UserMessage(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    from_pastelid: str = Field(index=True)
+    to_pastelid: str = Field(index=True)
+    message_body: str
+    message_signature: str
+    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "from_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "to_pastelid": "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP",
+                "message_body": "Hey, let's meet up!",
+                "message_signature": "0xdef0...",
+                "timestamp": "2023-06-01T12:30:00Z"
+            }
+        }
+        
 class CreditPackPurchaseRequest(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     requesting_end_user_pastelid: str = Field(index=True)
     requested_initial_credits_in_credit_pack: int
-    list_of_authorized_pastelids_allowed_to_use_credit_pack: List[str]
+    list_of_authorized_pastelids_allowed_to_use_credit_pack: str = Field()
     credit_usage_tracking_psl_address: str = Field(index=True)
     request_timestamp_utc_iso_string: str
     request_pastel_block_height: int
     request_pastel_block_hash: str
     credit_purchase_request_message_version_string: str
-    credit_pack_purchase_request_version_string: str
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(unique=True, index=True)
     requesting_end_user_pastelid_signature_on_request_hash: str
-
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "requested_initial_credits_in_credit_pack": 1000,
+                "list_of_authorized_pastelids_allowed_to_use_credit_pack": '["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk"]',
+                "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
+                "request_timestamp_utc_iso_string": "2023-06-01T12:00:00Z",
+                "request_pastel_block_height": 123456,
+                "request_pastel_block_hash": "0x1234...",
+                "credit_purchase_request_message_version_string": "1.0",
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x5678...",
+                "requesting_end_user_pastelid_signature_on_request_hash": "0xabcd..."
+            }
+        }
+    # Use validators to serialize/deserialize the list to/from JSON
+    @validator('list_of_authorized_pastelids_allowed_to_use_credit_pack', pre=True, always=True)
+    def serialize_list_to_json(cls, v):
+        if isinstance(v, list):
+            return json.dumps(v)
+        return v
+    @validator('list_of_authorized_pastelids_allowed_to_use_credit_pack', pre=False, always=True)
+    def deserialize_json_to_list(cls, v):
+        try:
+            return json.loads(v)
+        except ValueError:
+            return []
+        
 class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="credit_pack_purchase_requests.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     credit_pack_purchase_request_json: str
-    psl_cost_per_credit: decimal.Decimal
-    proposed_total_cost_of_credit_pack_in_psl: decimal.Decimal
+    psl_cost_per_credit: Decimal
+    proposed_total_cost_of_credit_pack_in_psl: Decimal
     credit_usage_tracking_psl_address: str = Field(index=True)
     request_response_timestamp_utc_iso_string: str
     request_response_pastel_block_height: int
     request_response_pastel_block_hash: str
     credit_purchase_request_response_message_version_string: str
     responding_supernode_pastelid: str = Field(index=True)
-    list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms: List[str]
+    list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms: str = Field()
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(unique=True, index=True)
     responding_supernode_signature_on_credit_pack_purchase_request_response_hash: str
-    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash: List[str]
-    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json: List[str]
+    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash: str = Field()
+    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json: str = Field()
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "credit_pack_purchase_request_json": '{"requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", ...}',
+                "psl_cost_per_credit": 0.1,
+                "proposed_total_cost_of_credit_pack_in_psl": 100,
+                "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
+                "request_response_timestamp_utc_iso_string": "2023-06-01T12:15:00Z",
+                "request_response_pastel_block_height": 123457,
+                "request_response_pastel_block_hash": "0x5678...",
+                "credit_purchase_request_response_message_version_string": "1.0",
+                "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms": '["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP", ...]',
+                "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x9abc...",
+                "responding_supernode_signature_on_credit_pack_purchase_request_response_hash": "0xdef0...",
+                "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash": '["0x1234...", "0x5678...", ...]',
+                "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json": '["0xabcd...", "0xef01...", ...]'
+            }
+        }
+    @validator('list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json', pre=True, always=True)
+    def serialize_lists_to_json(cls, v):
+        if isinstance(v, list):
+            return json.dumps(v)
+        return v
+    @validator('list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json', pre=False, always=True)
+    def deserialize_json_to_lists(cls, v):
+        try:
+            return json.loads(v)
+        except ValueError:
+            return []
 
 class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="credit_pack_purchase_requests.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="credit_pack_purchase_request_responses.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
     credit_pack_purchase_request_response_json: str
     requesting_end_user_pastelid: str = Field(index=True)
     txid_of_credit_purchase_burn_transaction: str = Field(index=True)
@@ -692,11 +798,27 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
     credit_purchase_request_confirmation_message_version_string: str
     sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str = Field(unique=True, index=True)
     requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x5678...",
+                "credit_pack_purchase_request_response_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "txid_of_credit_purchase_burn_transaction": "0xabcd...",
+                "credit_purchase_request_confirmation_utc_iso_string": "2023-06-01T12:30:00Z",
+                "credit_purchase_request_confirmation_pastel_block_height": 123458,
+                "credit_purchase_request_confirmation_pastel_block_hash": "0x9abc...",
+                "credit_purchase_request_confirmation_message_version_string": "1.0",
+                "sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields": "0xdef0...",
+                "requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields": "0x1234..."
+            }
+        }
 
 class CreditPackPurchaseRequestConfirmationResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="credit_pack_purchase_requests.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str = Field(foreign_key="credit_pack_purchase_request_confirmations.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str = Field(foreign_key="creditpackpurchaserequestconfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields", index=True)
     credit_pack_confirmation_outcome_string: str
     pastel_api_credit_pack_ticket_registration_txid: str = Field(index=True)
     credit_pack_confirmation_failure_reason_if_applicable: str
@@ -707,6 +829,23 @@ class CreditPackPurchaseRequestConfirmationResponse(SQLModel, table=True):
     responding_supernode_pastelid: str = Field(index=True)
     sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields: str = Field(unique=True, index=True)
     responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash: str
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields": "0x5678...",
+                "credit_pack_confirmation_outcome_string": "success",
+                "pastel_api_credit_pack_ticket_registration_txid": "0xabcd...",
+                "credit_pack_confirmation_failure_reason_if_applicable": "",
+                "credit_purchase_request_confirmation_response_utc_iso_string": "2023-06-01T12:45:00Z",
+                "credit_purchase_request_confirmation_response_pastel_block_height": 123459,
+                "credit_purchase_request_confirmation_response_pastel_block_hash": "0x9abc...",
+                "credit_purchase_request_confirmation_response_message_version_string": "1.0",
+                "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields": "0xdef0...",
+                "responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash": "0x1234..."
+            }
+        }
 
 class CreditPackPurchaseRequestRejection(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str
@@ -719,7 +858,22 @@ class CreditPackPurchaseRequestRejection(SQLModel):
     responding_supernode_pastelid: str
     sha3_256_hash_of_credit_pack_purchase_request_rejection_fields: str
     responding_supernode_signature_on_credit_pack_purchase_request_rejection_hash: str
-
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "rejection_reason_string": "Invalid credit usage tracking PSL address",
+                "rejection_timestamp_utc_iso_string": "2023-06-01T12:10:00Z",
+                "rejection_pastel_block_height": 123457,
+                "rejection_pastel_block_hash": "0x5678...",
+                "credit_purchase_request_rejection_message_version_string": "1.0",
+                "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "sha3_256_hash_of_credit_pack_purchase_request_rejection_fields": "0xabcd...",
+                "responding_supernode_signature_on_credit_pack_purchase_request_rejection_hash": "0xdef0..."
+            }
+        }
+        
 class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str
     credit_pack_purchase_request_response_fields_json: str
@@ -732,6 +886,22 @@ class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel):
     responding_supernode_pastelid: str
     sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields: str
     responding_supernode_signature_on_credit_pack_purchase_request_preliminary_price_quote_hash: str
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "preliminary_quoted_price_per_credit_in_psl": 0.1,
+                "preliminary_total_cost_of_credit_pack_in_psl": 100,
+                "preliminary_price_quote_timestamp_utc_iso_string": "2023-06-01T12:05:00Z",
+                "preliminary_price_quote_pastel_block_height": 123456,
+                "preliminary_price_quote_pastel_block_hash": "0x5678...",
+                "preliminary_price_quote_message_version_string": "1.0",
+                "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields": "0xabcd...",
+                "responding_supernode_signature_on_credit_pack_purchase_request_preliminary_price_quote_hash": "0xdef0..."
+            }
+        }
 
 class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str
@@ -745,36 +915,64 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel):
     requesting_end_user_pastelid: str
     sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields: str
     requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash: str
-
-class CreditPackPurchasePriceAgreementRequest(SQLModel):
-    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
-    supernode_requesting_price_agreement_pastelid: str
-    credit_pack_purchase_request_response_fields_json: str
-    price_agreement_request_timestamp_utc_iso_string: str
-    price_agreement_request_pastel_block_height: int
-    price_agreement_request_pastel_block_hash: str
-    price_agreement_request_message_version_string: str
-    sha3_256_hash_of_price_agreement_request_fields: str
-    supernode_requesting_price_agreement_pastelid_signature_on_request_hash: str
-    
-class CreditPackPurchasePriceAgreementRequestResponse(SQLModel):
-    sha3_256_hash_of_price_agreement_request_fields: str
-    credit_pack_purchase_request_response_fields_json: str
-    agree_with_proposed_price: bool
-    proposed_price_agreement_response_timestamp_utc_iso_string: str
-    proposed_price_agreement_response_pastel_block_height: int
-    proposed_price_agreement_response_pastel_block_hash: str
-    proposed_price_agreement_response_message_version_string: str
-    responding_supernode_pastelid: str
-    sha3_256_hash_of_price_agreement_request_response_fields: str
-    responding_supernode_signature_on_price_agreement_request_response_hash: str
-    responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json: str
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields": "0x5678...",
+                "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "agree_with_preliminary_price_quote": True,
+                "preliminary_price_quote_response_timestamp_utc_iso_string": "2023-06-01T12:10:00Z",
+                "preliminary_price_quote_response_pastel_block_height": 123457,
+                "preliminary_price_quote_response_pastel_block_hash": "0x9abc...",
+                "preliminary_price_quote_response_message_version_string": "1.0",
+                "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields": "0xdef0...",
+                "requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash": "0x1234..."
+            }
+        }
 
 class CreditPackRequestStatusCheck(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str
     requesting_end_user_pastelid: str
     requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_fields": "0x5678..."
+            }
+        }
 
+class CreditPackPurchaseRequestStatus(SQLModel):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
+    status: str
+    status_details: str
+    status_update_timestamp_utc_iso_string: str
+    status_update_pastel_block_height: int
+    status_update_pastel_block_hash: str
+    credit_purchase_request_status_message_version_string: str
+    responding_supernode_pastelid: str = Field(index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_status_fields: str = Field(unique=True, index=True)
+    responding_supernode_signature_on_credit_pack_purchase_request_status_hash: str
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "status": "in_progress",
+                "status_details": "Waiting for price agreement responses from supernodes",
+                "status_update_timestamp_utc_iso_string": "2023-06-01T12:30:00Z",
+                "status_update_pastel_block_height": 123456,
+                "status_update_pastel_block_hash": "0xabcd...",
+                "credit_purchase_request_status_message_version_string": "1.0",
+                "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "sha3_256_hash_of_credit_pack_purchase_request_status_fields": "0x5678...",
+                "responding_supernode_signature_on_credit_pack_purchase_request_status_hash": "0xef01..."
+            }
+        }
+        
 class CreditPackPurchaseRequestResponseTermination(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str
     credit_pack_purchase_request_json: str
@@ -786,7 +984,22 @@ class CreditPackPurchaseRequestResponseTermination(SQLModel):
     responding_supernode_pastelid: str
     sha3_256_hash_of_credit_pack_purchase_request_termination_fields: str
     responding_supernode_signature_on_credit_pack_purchase_request_termination_hash: str
-
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "credit_pack_purchase_request_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "termination_reason_string": "Insufficient agreeing supernodes",
+                "termination_timestamp_utc_iso_string": "2023-06-01T12:30:00Z",
+                "termination_pastel_block_height": 123459,
+                "termination_pastel_block_hash": "0x5678...",
+                "credit_purchase_request_termination_message_version_string": "1.0",
+                "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "sha3_256_hash_of_credit_pack_purchase_request_termination_fields": "0xabcd...",
+                "responding_supernode_signature_on_credit_pack_purchase_request_termination_hash": "0xdef0..."
+            }
+        }
+        
 class CreditPackStorageRetryRequest(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
     credit_pack_purchase_request_response_json: str
@@ -798,6 +1011,21 @@ class CreditPackStorageRetryRequest(SQLModel):
     credit_pack_storage_retry_request_message_version_string: str
     sha3_256_hash_of_credit_pack_storage_retry_request_fields: str
     requesting_end_user_pastelid_signature_on_credit_pack_storage_retry_request_hash: str
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x1234...",
+                "credit_pack_purchase_request_response_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "closest_agreeing_supernode_to_retry_storage_pastelid": "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP",
+                "credit_pack_storage_retry_request_timestamp_utc_iso_string": "2023-06-01T12:50:00Z",
+                "credit_pack_storage_retry_request_pastel_block_height": 123460,
+                "credit_pack_storage_retry_request_pastel_block_hash": "0x5678...",
+                "credit_pack_storage_retry_request_message_version_string": "1.0",
+                "sha3_256_hash_of_credit_pack_storage_retry_request_fields": "0xabcd...",
+                "requesting_end_user_pastelid_signature_on_credit_pack_storage_retry_request_hash": "0xdef0..."
+            }
+        }
 
 class CreditPackStorageRetryRequestResponse(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str
@@ -811,7 +1039,25 @@ class CreditPackStorageRetryRequestResponse(SQLModel):
     credit_pack_storage_retry_confirmation_response_message_version_string: str
     closest_agreeing_supernode_to_retry_storage_pastelid: str
     sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields: str
-    closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash: str
+    closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash: str    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields": "0x5678...",
+                "credit_pack_storage_retry_confirmation_outcome_string": "success",
+                "pastel_api_credit_pack_ticket_registration_txid": "0xabcd...",
+                "credit_pack_storage_retry_confirmation_failure_reason_if_applicable": "",
+                "credit_pack_storage_retry_confirmation_response_utc_iso_string": "2023-06-01T12:55:00Z",
+                "credit_pack_storage_retry_confirmation_response_pastel_block_height": 123461,
+                "credit_pack_storage_retry_confirmation_response_pastel_block_hash": "0x9abc...",
+                "credit_pack_storage_retry_confirmation_response_message_version_string": "1.0",
+                "closest_agreeing_supernode_to_retry_storage_pastelid": "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP",
+                "sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields": "0xdef0...",
+                "closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash": "0x1234..."
+            }
+        }
+
 
 class InferenceAPIUsageRequest(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
@@ -820,45 +1066,128 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
     credit_pack_identifier: str = Field(index=True)
     requested_model_canonical_string: str
     model_inference_type_string: str
-    model_parameters_json: dict
+    model_parameters_json: str = Field()  # Store the dict serialized as a JSON string
     model_input_data_json_b64: str
-    total_psl_cost_for_pack: decimal.Decimal
-    initial_credit_balance: decimal.Decimal
+    total_psl_cost_for_pack: Decimal
+    initial_credit_balance: Decimal
     requesting_pastelid_signature: str
+    @validator('model_parameters_json', pre=True, always=True)
+    def serialize_dict_to_json(cls, v):
+        if isinstance(v, dict):
+            return json.dumps(v)
+        return v
+    @validator('model_parameters_json', pre=False, always=True)
+    def deserialize_json_to_dict(cls, v):
+        try:
+            return json.loads(v)
+        except ValueError:
+            return {}
+    class Config:
+        protected_namespaces = ()
+        json_schema_extra = {
+            "example": {
+                "inference_request_id": "0x1234...",
+                "requesting_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "credit_pack_identifier": "0x5678...",
+                "requested_model_canonical_string": "gpt-3.5-turbo",
+                "model_inference_type_string": "text-completion",
+                "model_parameters_json": '{"max_tokens": 100, "temperature": 0.7}',
+                "model_input_data_json_b64": "eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9",
+                "total_psl_cost_for_pack": 1000,
+                "initial_credit_balance": 1000,
+                "requesting_pastelid_signature": "0xabcd..."
+            }
+        }
 
 class InferenceAPIUsageResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     inference_response_id: str = Field(unique=True, index=True)
-    inference_request_id: str = Field(foreign_key="inference_api_usage_requests.inference_request_id", index=True)
-    proposed_cost_of_request_in_inference_credits: decimal.Decimal
-    remaining_credits_in_pack_after_request_processed: decimal.Decimal
+    inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
+    proposed_cost_of_request_in_inference_credits: Decimal
+    remaining_credits_in_pack_after_request_processed: Decimal
     credit_usage_tracking_psl_address: str = Field(index=True)
     request_confirmation_message_amount_in_patoshis: int
     max_block_height_to_include_confirmation_transaction: int
     supernode_pastelid_and_signature_on_inference_response_id: str
-
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "inference_response_id": "0x1234...",
+                "inference_request_id": "0x5678...",
+                "proposed_cost_of_request_in_inference_credits": 10,
+                "remaining_credits_in_pack_after_request_processed": 990,
+                "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
+                "request_confirmation_message_amount_in_patoshis": 1000,
+                "max_block_height_to_include_confirmation_transaction": 123456,
+                "supernode_pastelid_and_signature_on_inference_response_id": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk:0xabcd..."
+            }
+        }
+        
 class InferenceAPIOutputResult(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     inference_result_id: str = Field(unique=True, index=True)
-    inference_request_id: str = Field(foreign_key="inference_api_usage_requests.inference_request_id", index=True)
-    inference_response_id: str = Field(foreign_key="inference_api_usage_responses.inference_response_id", index=True)
+    inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
+    inference_response_id: str = Field(foreign_key="inferenceapiusageresponse.inference_response_id", index=True)
     responding_supernode_pastelid: str = Field(index=True)
     inference_result_json_base64: str
     inference_result_file_type_strings: str
     responding_supernode_signature_on_inference_result_id: str
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "inference_result_id": "0x1234...",
+                "inference_request_id": "0x5678...",
+                "inference_response_id": "0x9abc...",
+                "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "inference_result_json_base64": "eyJvdXRwdXQiOiAiSGVsbG8sIEknbSBkb2luZyBncmVhdCEgSG93IGFib3V0IHlvdT8ifQ==",
+                "inference_result_file_type_strings": "json",
+                "responding_supernode_signature_on_inference_result_id": "0xdef0..."
+            }
+        }
 
 class InferenceCreditPackRequest(SQLModel):
-    authorized_pastelids_to_use_credits: List[str]
+    authorized_pastelids_to_use_credits: str = Field()
     psl_cost_per_credit: float
     total_psl_cost_for_pack: float
     initial_credit_balance: float
     credit_usage_tracking_psl_address: str
+    @validator('authorized_pastelids_to_use_credits', pre=True, always=True)
+    def serialize_list_to_json(cls, v):
+        if isinstance(v, list):
+            return json.dumps(v)
+        return v
+    @validator('authorized_pastelids_to_use_credits', pre=False, always=True)
+    def deserialize_json_to_list(cls, v):
+        try:
+            return json.loads(v)
+        except ValueError:
+            return []
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "authorized_pastelids_to_use_credits": '["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk"]',
+                "psl_cost_per_credit": 0.1,
+                "total_psl_cost_for_pack": 1000,
+                "initial_credit_balance": 1000,
+                "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV"
+            }
+        }
 
 class InferenceConfirmation(SQLModel):
     inference_request_id: str
     confirmation_transaction: dict
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "inference_request_id": "0x1234...",
+                "confirmation_transaction": {
+                    "txid": "0x5678...",
+                    "amount": 1000,
+                    "block_height": 123456
+                }
+            }
+        }
 
-    
 class CreditPackRequestModel(BaseModel):
     number_of_credits: float
     psl_cost_per_credit: float
@@ -980,24 +1309,15 @@ class PastelMessagingClient:
                 "signature": signature
             }
                     
-    async def send_user_message(self, supernode_url: str, to_pastelid: str, message_body: str) -> Dict[str, Any]:
+    async def send_user_message(self, supernode_url: str, user_message: UserMessage) -> Dict[str, Any]:
         # Request and sign a challenge
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        # Sign the message body using the local RPC client
-        message_signature = await sign_message_with_pastelid_func(self.pastelid, message_body, self.passphrase)
-        # Prepare the user message
-        user_message = {
-            "from_pastelid": self.pastelid,
-            "to_pastelid": to_pastelid,
-            "message_body": message_body,
-            "message_signature": message_signature
-        }
-        # Send the user message
+        # Prepare the user message payload
         payload = {
-            "user_message": user_message,
+            "user_message": user_message.dict(),
             "challenge": challenge,
             "challenge_id": challenge_id,
             "challenge_signature": challenge_signature
@@ -1008,7 +1328,7 @@ class PastelMessagingClient:
             result = response.json()
             return result
 
-    async def get_user_messages(self, supernode_url: str) -> List[Dict[str, Any]]:
+    async def get_user_messages(self, supernode_url: str) -> List[UserMessage]:
         # Request and sign a challenge
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
@@ -1025,114 +1345,77 @@ class PastelMessagingClient:
             response = await client.get(f"{supernode_url}/get_user_messages", params=params)
             response.raise_for_status()
             result = response.json()
-            return result
+            return [UserMessage.parse_obj(message) for message in result]
 
-    async def create_credit_pack_ticket(self, supernode_url: str, credit_pack_request: InferenceCreditPackRequest) -> CreditPackPurchaseRequestResponse:
+    async def create_credit_pack_ticket(self, supernode_url: str, credit_pack_request: CreditPackPurchaseRequest) -> CreditPackPurchaseRequestResponse:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        payload = {
-            "requesting_end_user_pastelid": self.pastelid,
-            "requested_initial_credits_in_credit_pack": credit_pack_request.initial_credit_balance,
-            "list_of_authorized_pastelids_allowed_to_use_credit_pack": credit_pack_request.authorized_pastelids_to_use_credits,
-            "credit_usage_tracking_psl_address": credit_pack_request.credit_usage_tracking_psl_address,
-            "request_timestamp_utc_iso_string": datetime.utcnow().isoformat(),
-            "request_pastel_block_height": await get_current_pastel_block_height_func(),
-            "request_pastel_block_hash": (await get_best_block_hash_and_merkle_root_func())[0],
-            "credit_purchase_request_message_version_string": "1.0",
-            "credit_pack_purchase_request_version_string": "1.0",
-            "challenge": challenge,
-            "challenge_id": challenge_id,
-            "challenge_signature": challenge_signature
-        }
-        sha3_256_hash_of_credit_pack_purchase_request_fields = compute_sha3_256_hash_of_sqlmodel_response_fields(payload)
-        payload["sha3_256_hash_of_credit_pack_purchase_request_fields"] = sha3_256_hash_of_credit_pack_purchase_request_fields
-        requesting_end_user_pastelid_signature_on_request_hash = await sign_message_with_pastelid_func(self.pastelid, sha3_256_hash_of_credit_pack_purchase_request_fields, self.passphrase)
-        payload["requesting_end_user_pastelid_signature_on_request_hash"] = requesting_end_user_pastelid_signature_on_request_hash
+        payload = credit_pack_request.dict()
+        payload["challenge"] = challenge
+        payload["challenge_id"] = challenge_id
+        payload["challenge_signature"] = challenge_signature
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(f"{supernode_url}/credit_purchase_initial_request", json=payload)
             response.raise_for_status()
             result = response.json()
             return CreditPackPurchaseRequestResponse.parse_obj(result)
 
-    async def sign_credit_pack_ticket(self, supernode_url: str, credit_pack_ticket: CreditPackPurchaseRequestResponse) -> CreditPackPurchaseRequestPreliminaryPriceQuoteResponse:
+    async def sign_credit_pack_ticket(self, supernode_url: str, preliminary_price_quote_response: CreditPackPurchaseRequestPreliminaryPriceQuoteResponse) -> CreditPackPurchaseRequestResponse:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        # Sign the credit pack ticket with the end user's PastelID
-        ticket_json = credit_pack_ticket.json()
-        signature = await sign_message_with_pastelid_func(self.pastelid, ticket_json, self.passphrase)
-        payload = {
-            "credit_pack_purchase_request_response_fields_json": ticket_json,
-            "pastelid": self.pastelid,
-            "challenge": challenge,
-            "challenge_id": challenge_id,
-            "challenge_signature": challenge_signature,
-            "ticket_signature": signature
-        }
+        payload = preliminary_price_quote_response.dict()
+        payload["challenge"] = challenge
+        payload["challenge_id"] = challenge_id
+        payload["challenge_signature"] = challenge_signature
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.post(f"{supernode_url}/credit_purchase_request_preliminary_price_quote_response", json=payload)
+            response = await client.post(f"{supernode_url}/credit_purchase_preliminary_price_quote_response", json=payload)
             response.raise_for_status()
             result = response.json()
-            return CreditPackPurchaseRequestPreliminaryPriceQuoteResponse.parse_obj(result)
+            return CreditPackPurchaseRequestResponse.parse_obj(result)
 
-    async def store_credit_pack_ticket(self, supernode_url: str, signed_credit_pack_ticket: CreditPackPurchaseRequestConfirmation) -> str:
+    async def store_credit_pack_ticket(self, supernode_url: str, credit_pack_purchase_request_confirmation: CreditPackPurchaseRequestConfirmation) -> CreditPackPurchaseRequestConfirmationResponse:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        payload = {
-            "signed_credit_pack_ticket": signed_credit_pack_ticket.dict(),
-            "pastelid": self.pastelid,
-            "challenge": challenge,
-            "challenge_id": challenge_id,
-            "challenge_signature": challenge_signature
-        }
+        payload = credit_pack_purchase_request_confirmation.dict()
+        payload["challenge"] = challenge
+        payload["challenge_id"] = challenge_id
+        payload["challenge_signature"] = challenge_signature
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(f"{supernode_url}/confirm_credit_purchase_request", json=payload)
             response.raise_for_status()
             result = response.json()
-            return result["transaction_id"]
+            return CreditPackPurchaseRequestConfirmationResponse.parse_obj(result)
 
-    async def make_inference_api_usage_request(self, supernode_url: str, request_data: InferenceAPIUsageRequest) -> Dict[str, Any]:
+    async def make_inference_api_usage_request(self, supernode_url: str, request_data: InferenceAPIUsageRequest) -> InferenceAPIUsageResponse:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        payload = {
-            "inference_api_usage_request": request_data.dict(),
-            "challenge": challenge,
-            "challenge_id": challenge_id,
-            "challenge_signature": challenge_signature
-        }
+        payload = request_data.dict()
+        payload["challenge"] = challenge
+        payload["challenge_id"] = challenge_id
+        payload["challenge_signature"] = challenge_signature
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(f"{supernode_url}/make_inference_api_usage_request", json=payload)
             response.raise_for_status()
             result = response.json()
-            return {
-                "inference_response_id": result.get("inference_response_id"),
-                "inference_request_id": result.get("inference_request_id"),
-                "proposed_cost_of_request_in_inference_credits": result.get("proposed_cost_of_request_in_inference_credits"),
-                "remaining_credits_in_pack_after_request_processed": result.get("remaining_credits_in_pack_after_request_processed"),
-                "credit_usage_tracking_psl_address": result.get("credit_usage_tracking_psl_address"),
-                "request_confirmation_message_amount_in_patoshis": result.get("request_confirmation_message_amount_in_patoshis"),
-                "max_block_height_to_include_confirmation_transaction": result.get("max_block_height_to_include_confirmation_transaction"),
-                "supernode_pastelid_and_signature_on_inference_response_id": result.get("supernode_pastelid_and_signature_on_inference_response_id")
-            }
+            return InferenceAPIUsageResponse.parse_obj(result)
 
     async def send_inference_confirmation(self, supernode_url: str, confirmation_data: InferenceConfirmation) -> Dict[str, Any]:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
-        payload = {
-            "inference_confirmation": confirmation_data.dict(),
-            "challenge": challenge,
-            "challenge_id": challenge_id,
-            "challenge_signature": challenge_signature
-        }
+        payload = confirmation_data.dict()
+        payload["challenge"] = challenge
+        payload["challenge_id"] = challenge_id
+        payload["challenge_signature"] = challenge_signature
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
             response = await client.post(f"{supernode_url}/confirm_inference_request", json=payload)
             response.raise_for_status()
@@ -1153,7 +1436,7 @@ class PastelMessagingClient:
                 logger.error(f"Error in check_status_of_inference_request_results from Supernode URL: {supernode_url}: {e}")
                 return False
 
-    async def retrieve_inference_output_results(self, supernode_url: str, inference_request_id: str, inference_response_id: str) -> Dict[str, Any]:
+    async def retrieve_inference_output_results(self, supernode_url: str, inference_request_id: str, inference_response_id: str) -> InferenceAPIOutputResult:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
@@ -1169,9 +1452,9 @@ class PastelMessagingClient:
             response = await client.post(f"{supernode_url}/retrieve_inference_output_results", params=params)
             response.raise_for_status()
             result = response.json()
-            return result
+            return InferenceAPIOutputResult.parse_obj(result)
 
-    async def call_audit_inference_request_response(self, supernode_url: str, inference_response_id: str) -> Dict[str, Any]:
+    async def call_audit_inference_request_response(self, supernode_url: str, inference_response_id: str) -> InferenceAPIUsageResponse:
         try:
             signature = await sign_message_with_pastelid_func(self.pastelid, inference_response_id, self.passphrase)
             payload = {
@@ -1183,21 +1466,12 @@ class PastelMessagingClient:
                 response = await client.post(f"{supernode_url}/audit_inference_request_response", json=payload)
                 response.raise_for_status()
                 result = response.json()
-                return {
-                    "inference_response_id": result.get("inference_response_id"),
-                    "inference_request_id": result.get("inference_request_id"),
-                    "proposed_cost_of_request_in_inference_credits": result.get("proposed_cost_of_request_in_inference_credits"),
-                    "remaining_credits_in_pack_after_request_processed": result.get("remaining_credits_in_pack_after_request_processed"),
-                    "credit_usage_tracking_psl_address": result.get("credit_usage_tracking_psl_address"),
-                    "request_confirmation_message_amount_in_patoshis": result.get("request_confirmation_message_amount_in_patoshis"),
-                    "max_block_height_to_include_confirmation_transaction": result.get("max_block_height_to_include_confirmation_transaction"),
-                    "supernode_pastelid_and_signature_on_inference_response_id": result.get("supernode_pastelid_and_signature_on_inference_response_id")
-                }
+                return InferenceAPIUsageResponse.parse_obj(result)
         except Exception as e:
             logger.error(f"Error in audit_inference_request_response from Supernode URL: {supernode_url}: {e}")
-            return {}
-        
-    async def call_audit_inference_request_result(self, supernode_url: str, inference_response_id: str) -> Dict[str, Any]:
+            raise
+
+    async def call_audit_inference_request_result(self, supernode_url: str, inference_response_id: str) -> InferenceAPIOutputResult:
         try:
             signature = await sign_message_with_pastelid_func(self.pastelid, inference_response_id, self.passphrase)
             payload = {
@@ -1209,19 +1483,11 @@ class PastelMessagingClient:
                 response = await client.post(f"{supernode_url}/audit_inference_request_result", json=payload)
                 response.raise_for_status()
                 result = response.json()
-                return {
-                    "inference_result_id": result.get("inference_result_id"),
-                    "inference_request_id": result.get("inference_request_id"),
-                    "inference_response_id": result.get("inference_response_id"),
-                    "responding_supernode_pastelid": result.get("responding_supernode_pastelid"),
-                    "inference_result_json_base64": result.get("inference_result_json_base64"),
-                    "inference_result_file_type_strings": result.get("inference_result_file_type_strings"),
-                    "responding_supernode_signature_on_inference_result_id": result.get("responding_supernode_signature_on_inference_result_id")
-                }
+                return InferenceAPIOutputResult.parse_obj(result)
         except Exception as e:
             logger.error(f"Error in audit_inference_request_result from Supernode URL: {supernode_url}: {e}")
-            return {}
-            
+            raise
+
     async def audit_inference_request_response_id(self, inference_response_id: str, pastelid_of_supernode_to_audit: str):
         supernode_list_df, _ = await check_supernode_list_func()
         n = 4
@@ -1303,19 +1569,9 @@ class PastelMessagingClient:
         closest_supporting_supernode_pastelid = list_of_supernode_pastelids[model_support_results.index(True)] if True in model_support_results else None
         closest_supporting_supernode_url = list_of_supernode_urls[model_support_results.index(True)] if True in model_support_results else None
         logger.info(f"Closest supporting supernode PastelID: {closest_supporting_supernode_pastelid} | URL: {closest_supporting_supernode_url}")
-        return supernode_support_dict, closest_supporting_supernode_pastelid, closest_supporting_supernode_url
+        return supernode_support_dict, closest_supporting_supernode_pastelid, closest_supporting_supernode_url    
 
-def validate_inference_response_fields(
-    response_audit_results,
-    inference_response_id,
-    inference_request_id,
-    proposed_cost_in_credits,
-    remaining_credits_after_request,
-    credit_usage_tracking_psl_address,
-    request_confirmation_message_amount_in_patoshis,
-    max_block_height_to_include_confirmation_transaction,
-    supernode_pastelid_and_signature_on_inference_response_id
-):
+def validate_inference_response_fields(response_audit_results: List[InferenceAPIUsageResponse], usage_request_response: InferenceAPIUsageResponse) -> Dict[str, bool]:
     # Count the occurrences of each value for the relevant fields in response_audit_results
     inference_response_id_counts = {}
     inference_request_id_counts = {}
@@ -1326,24 +1582,14 @@ def validate_inference_response_fields(
     max_block_height_to_include_confirmation_transaction_counts = {}
     supernode_pastelid_and_signature_on_inference_response_id_counts = {}
     for result in response_audit_results:
-        if not result:
-            continue
-        if result.get("inference_response_id"):
-            inference_response_id_counts[result["inference_response_id"]] = inference_response_id_counts.get(result["inference_response_id"], 0) + 1
-        if result.get("inference_request_id"):
-            inference_request_id_counts[result["inference_request_id"]] = inference_request_id_counts.get(result["inference_request_id"], 0) + 1
-        if result.get("proposed_cost_of_request_in_inference_credits"):
-            proposed_cost_in_credits_counts[float(result["proposed_cost_of_request_in_inference_credits"])] = proposed_cost_in_credits_counts.get(float(result["proposed_cost_of_request_in_inference_credits"]), 0) + 1
-        if result.get("remaining_credits_in_pack_after_request_processed"):
-            remaining_credits_after_request_counts[float(result["remaining_credits_in_pack_after_request_processed"])] = remaining_credits_after_request_counts.get(float(result["remaining_credits_in_pack_after_request_processed"]), 0) + 1
-        if result.get("credit_usage_tracking_psl_address"):
-            credit_usage_tracking_psl_address_counts[result["credit_usage_tracking_psl_address"]] = credit_usage_tracking_psl_address_counts.get(result["credit_usage_tracking_psl_address"], 0) + 1
-        if result.get("request_confirmation_message_amount_in_patoshis"):
-            request_confirmation_message_amount_in_patoshis_counts[int(result["request_confirmation_message_amount_in_patoshis"])] = request_confirmation_message_amount_in_patoshis_counts.get(int(result["request_confirmation_message_amount_in_patoshis"]), 0) + 1
-        if result.get("max_block_height_to_include_confirmation_transaction"):
-            max_block_height_to_include_confirmation_transaction_counts[int(result["max_block_height_to_include_confirmation_transaction"])] = max_block_height_to_include_confirmation_transaction_counts.get(int(result["max_block_height_to_include_confirmation_transaction"]), 0) + 1
-        if result.get("supernode_pastelid_and_signature_on_inference_response_id"):
-            supernode_pastelid_and_signature_on_inference_response_id_counts[result["supernode_pastelid_and_signature_on_inference_response_id"]] = supernode_pastelid_and_signature_on_inference_response_id_counts.get(result["supernode_pastelid_and_signature_on_inference_response_id"], 0) + 1
+        inference_response_id_counts[result.inference_response_id] = inference_response_id_counts.get(result.inference_response_id, 0) + 1
+        inference_request_id_counts[result.inference_request_id] = inference_request_id_counts.get(result.inference_request_id, 0) + 1
+        proposed_cost_in_credits_counts[result.proposed_cost_of_request_in_inference_credits] = proposed_cost_in_credits_counts.get(result.proposed_cost_of_request_in_inference_credits, 0) + 1
+        remaining_credits_after_request_counts[result.remaining_credits_in_pack_after_request_processed] = remaining_credits_after_request_counts.get(result.remaining_credits_in_pack_after_request_processed, 0) + 1
+        credit_usage_tracking_psl_address_counts[result.credit_usage_tracking_psl_address] = credit_usage_tracking_psl_address_counts.get(result.credit_usage_tracking_psl_address, 0) + 1
+        request_confirmation_message_amount_in_patoshis_counts[result.request_confirmation_message_amount_in_patoshis] = request_confirmation_message_amount_in_patoshis_counts.get(result.request_confirmation_message_amount_in_patoshis, 0) + 1
+        max_block_height_to_include_confirmation_transaction_counts[result.max_block_height_to_include_confirmation_transaction] = max_block_height_to_include_confirmation_transaction_counts.get(result.max_block_height_to_include_confirmation_transaction, 0) + 1
+        supernode_pastelid_and_signature_on_inference_response_id_counts[result.supernode_pastelid_and_signature_on_inference_response_id] = supernode_pastelid_and_signature_on_inference_response_id_counts.get(result.supernode_pastelid_and_signature_on_inference_response_id, 0) + 1
     # Determine the majority value for each field
     majority_inference_response_id = max(inference_response_id_counts, key=inference_response_id_counts.get) if inference_response_id_counts else None
     majority_inference_request_id = max(inference_request_id_counts, key=inference_request_id_counts.get) if inference_request_id_counts else None
@@ -1353,29 +1599,20 @@ def validate_inference_response_fields(
     majority_request_confirmation_message_amount_in_patoshis = max(request_confirmation_message_amount_in_patoshis_counts, key=request_confirmation_message_amount_in_patoshis_counts.get) if request_confirmation_message_amount_in_patoshis_counts else None
     majority_max_block_height_to_include_confirmation_transaction = max(max_block_height_to_include_confirmation_transaction_counts, key=max_block_height_to_include_confirmation_transaction_counts.get) if max_block_height_to_include_confirmation_transaction_counts else None
     majority_supernode_pastelid_and_signature_on_inference_response_id = max(supernode_pastelid_and_signature_on_inference_response_id_counts, key=supernode_pastelid_and_signature_on_inference_response_id_counts.get) if supernode_pastelid_and_signature_on_inference_response_id_counts else None
-    # Compare the majority values with the values from the responding supernode
+    # Compare the majority values with the values from the usage_request_response
     validation_results = {
-        "inference_response_id": majority_inference_response_id == inference_response_id,
-        "inference_request_id": majority_inference_request_id == inference_request_id,
-        "proposed_cost_in_credits": majority_proposed_cost_in_credits == proposed_cost_in_credits,
-        "remaining_credits_after_request": majority_remaining_credits_after_request == remaining_credits_after_request,
-        "credit_usage_tracking_psl_address": majority_credit_usage_tracking_psl_address == credit_usage_tracking_psl_address,
-        "request_confirmation_message_amount_in_patoshis": majority_request_confirmation_message_amount_in_patoshis == request_confirmation_message_amount_in_patoshis,
-        "max_block_height_to_include_confirmation_transaction": majority_max_block_height_to_include_confirmation_transaction == max_block_height_to_include_confirmation_transaction,
-        "supernode_pastelid_and_signature_on_inference_response_id": majority_supernode_pastelid_and_signature_on_inference_response_id == supernode_pastelid_and_signature_on_inference_response_id
+        "inference_response_id": majority_inference_response_id == usage_request_response.inference_response_id,
+        "inference_request_id": majority_inference_request_id == usage_request_response.inference_request_id,
+        "proposed_cost_in_credits": majority_proposed_cost_in_credits == usage_request_response.proposed_cost_of_request_in_inference_credits,
+        "remaining_credits_after_request": majority_remaining_credits_after_request == usage_request_response.remaining_credits_in_pack_after_request_processed,
+        "credit_usage_tracking_psl_address": majority_credit_usage_tracking_psl_address == usage_request_response.credit_usage_tracking_psl_address,
+        "request_confirmation_message_amount_in_patoshis": majority_request_confirmation_message_amount_in_patoshis == usage_request_response.request_confirmation_message_amount_in_patoshis,
+        "max_block_height_to_include_confirmation_transaction": majority_max_block_height_to_include_confirmation_transaction == usage_request_response.max_block_height_to_include_confirmation_transaction,
+        "supernode_pastelid_and_signature_on_inference_response_id": majority_supernode_pastelid_and_signature_on_inference_response_id == usage_request_response.supernode_pastelid_and_signature_on_inference_response_id
     }
     return validation_results
 
-def validate_inference_result_fields(
-    result_audit_results,
-    inference_result_id,
-    inference_request_id,
-    inference_response_id,
-    responding_supernode_pastelid,
-    inference_result_json_base64,
-    inference_result_file_type_strings,
-    responding_supernode_signature_on_inference_result_id
-):
+def validate_inference_result_fields(result_audit_results: List[InferenceAPIOutputResult], usage_result: InferenceAPIOutputResult) -> Dict[str, bool]:
     # Count the occurrences of each value for the relevant fields in result_audit_results
     inference_result_id_counts = {}
     inference_request_id_counts = {}
@@ -1385,22 +1622,13 @@ def validate_inference_result_fields(
     inference_result_file_type_strings_counts = {}
     responding_supernode_signature_on_inference_result_id_counts = {}
     for result in result_audit_results:
-        if not result:
-            continue
-        if result.get("inference_result_id"):
-            inference_result_id_counts[result["inference_result_id"]] = inference_result_id_counts.get(result["inference_result_id"], 0) + 1
-        if result.get("inference_request_id"):
-            inference_request_id_counts[result["inference_request_id"]] = inference_request_id_counts.get(result["inference_request_id"], 0) + 1
-        if result.get("inference_response_id"):
-            inference_response_id_counts[result["inference_response_id"]] = inference_response_id_counts.get(result["inference_response_id"], 0) + 1
-        if result.get("responding_supernode_pastelid"):
-            responding_supernode_pastelid_counts[result["responding_supernode_pastelid"]] = responding_supernode_pastelid_counts.get(result["responding_supernode_pastelid"], 0) + 1
-        if result.get("inference_result_json_base64"):
-            inference_result_json_base64_counts[result["inference_result_json_base64"][:32]] = inference_result_json_base64_counts.get(result["inference_result_json_base64"][:32], 0) + 1
-        if result.get("inference_result_file_type_strings"):
-            inference_result_file_type_strings_counts[result["inference_result_file_type_strings"]] = inference_result_file_type_strings_counts.get(result["inference_result_file_type_strings"], 0) + 1
-        if result.get("responding_supernode_signature_on_inference_result_id"):
-            responding_supernode_signature_on_inference_result_id_counts[result["responding_supernode_signature_on_inference_result_id"]] = responding_supernode_signature_on_inference_result_id_counts.get(result["responding_supernode_signature_on_inference_result_id"], 0) + 1
+        inference_result_id_counts[result.inference_result_id] = inference_result_id_counts.get(result.inference_result_id, 0) + 1
+        inference_request_id_counts[result.inference_request_id] = inference_request_id_counts.get(result.inference_request_id, 0) + 1
+        inference_response_id_counts[result.inference_response_id] = inference_response_id_counts.get(result.inference_response_id, 0) + 1
+        responding_supernode_pastelid_counts[result.responding_supernode_pastelid] = responding_supernode_pastelid_counts.get(result.responding_supernode_pastelid, 0) + 1
+        inference_result_json_base64_counts[result.inference_result_json_base64[:32]] = inference_result_json_base64_counts.get(result.inference_result_json_base64[:32], 0) + 1
+        inference_result_file_type_strings_counts[result.inference_result_file_type_strings] = inference_result_file_type_strings_counts.get(result.inference_result_file_type_strings, 0) + 1
+        responding_supernode_signature_on_inference_result_id_counts[result.responding_supernode_signature_on_inference_result_id] = responding_supernode_signature_on_inference_result_id_counts.get(result.responding_supernode_signature_on_inference_result_id, 0) + 1
     # Determine the majority value for each field
     majority_inference_result_id = max(inference_result_id_counts, key=inference_result_id_counts.get) if inference_result_id_counts else None
     majority_inference_request_id = max(inference_request_id_counts, key=inference_request_id_counts.get) if inference_request_id_counts else None
@@ -1409,61 +1637,32 @@ def validate_inference_result_fields(
     majority_inference_result_json_base64 = max(inference_result_json_base64_counts, key=inference_result_json_base64_counts.get) if inference_result_json_base64_counts else None
     majority_inference_result_file_type_strings = max(inference_result_file_type_strings_counts, key=inference_result_file_type_strings_counts.get) if inference_result_file_type_strings_counts else None
     majority_responding_supernode_signature_on_inference_result_id = max(responding_supernode_signature_on_inference_result_id_counts, key=responding_supernode_signature_on_inference_result_id_counts.get) if responding_supernode_signature_on_inference_result_id_counts else None
-    # Compare the majority values with the values from the responding supernode
+    # Compare the majority values with the values from the usage_result
     validation_results = {
-        "inference_result_id": majority_inference_result_id == inference_result_id,
-        "inference_request_id": majority_inference_request_id == inference_request_id,
-        "inference_response_id": majority_inference_response_id == inference_response_id,
-        "responding_supernode_pastelid": majority_responding_supernode_pastelid == responding_supernode_pastelid,
-        "inference_result_json_base64": majority_inference_result_json_base64 == inference_result_json_base64[:32],
-        "inference_result_file_type_strings": majority_inference_result_file_type_strings == inference_result_file_type_strings,
-        "responding_supernode_signature_on_inference_result_id": majority_responding_supernode_signature_on_inference_result_id == responding_supernode_signature_on_inference_result_id
+        "inference_result_id": majority_inference_result_id == usage_result.inference_result_id,
+        "inference_request_id": majority_inference_request_id == usage_result.inference_request_id,
+        "inference_response_id": majority_inference_response_id == usage_result.inference_response_id,
+        "responding_supernode_pastelid": majority_responding_supernode_pastelid == usage_result.responding_supernode_pastelid,
+        "inference_result_json_base64": majority_inference_result_json_base64 == usage_result.inference_result_json_base64[:32],
+        "inference_result_file_type_strings": majority_inference_result_file_type_strings == usage_result.inference_result_file_type_strings,
+        "responding_supernode_signature_on_inference_result_id": majority_responding_supernode_signature_on_inference_result_id == usage_result.responding_supernode_signature_on_inference_result_id
     }
     return validation_results
             
-def validate_inference_data(inference_result_dict, audit_results):
-    # Split audit_results into response_audit_results and result_audit_results
-    response_audit_results = audit_results[:len(audit_results)//2]
-    result_audit_results = audit_results[len(audit_results)//2:]
+def validate_inference_data(inference_result_dict: Dict[str, Any]) -> Dict[str, Dict[str, bool]]:
     # Extract relevant fields from inference_result_dict
-    usage_request_response = inference_result_dict["usage_request_response"]
-    inference_response_id = usage_request_response["inference_response_id"]
-    inference_request_id = usage_request_response["inference_request_id"]
-    proposed_cost_in_credits = float(usage_request_response["proposed_cost_of_request_in_inference_credits"])
-    remaining_credits_after_request = float(usage_request_response["remaining_credits_in_pack_after_request_processed"])
-    credit_usage_tracking_psl_address = usage_request_response["credit_usage_tracking_psl_address"]
-    request_confirmation_message_amount_in_patoshis = int(usage_request_response["request_confirmation_message_amount_in_patoshis"])
-    max_block_height_to_include_confirmation_transaction = int(usage_request_response["max_block_height_to_include_confirmation_transaction"])
-    supernode_pastelid_and_signature_on_inference_response_id = usage_request_response["supernode_pastelid_and_signature_on_inference_response_id"]
+    usage_request_response = InferenceAPIUsageResponse.parse_obj(inference_result_dict["usage_request_response"])
+    usage_result = InferenceAPIOutputResult.parse_obj(inference_result_dict["output_results"])
+    audit_results = [InferenceAPIUsageResponse.parse_obj(result) for result in inference_result_dict["audit_results"][:len(inference_result_dict["audit_results"])//2]] + [InferenceAPIOutputResult.parse_obj(result) for result in inference_result_dict["audit_results"][len(inference_result_dict["audit_results"])//2:]]
     # Validate InferenceAPIUsageResponse fields
     response_validation_results = validate_inference_response_fields(
-        response_audit_results,
-        inference_response_id,
-        inference_request_id,
-        proposed_cost_in_credits,
-        remaining_credits_after_request,
-        credit_usage_tracking_psl_address,
-        request_confirmation_message_amount_in_patoshis,
-        max_block_height_to_include_confirmation_transaction,
-        supernode_pastelid_and_signature_on_inference_response_id
+        [result for result in audit_results if isinstance(result, InferenceAPIUsageResponse)],
+        usage_request_response
     )
-    # Extract relevant fields from inference_result_dict for InferenceAPIOutputResult
-    usage_result = inference_result_dict["output_results"]
-    inference_result_id = usage_result["inference_result_id"]
-    responding_supernode_pastelid = usage_result["responding_supernode_pastelid"]
-    inference_result_json_base64 = usage_result["inference_result_json_base64"]
-    inference_result_file_type_strings = usage_result["inference_result_file_type_strings"]
-    responding_supernode_signature_on_inference_result_id = usage_result["responding_supernode_signature_on_inference_result_id"]
     # Validate InferenceAPIOutputResult fields
     result_validation_results = validate_inference_result_fields(
-        result_audit_results,
-        inference_result_id,
-        inference_request_id,
-        inference_response_id,
-        responding_supernode_pastelid,
-        inference_result_json_base64,
-        inference_result_file_type_strings,
-        responding_supernode_signature_on_inference_result_id
+        [result for result in audit_results if isinstance(result, InferenceAPIOutputResult)],
+        usage_result
     )
     # Combine validation results
     validation_results = {
@@ -1487,10 +1686,17 @@ async def send_message_and_check_for_new_incoming_messages(
     # Lookup the 3 closest supernodes to the recipient pastelid
     closest_supernodes_to_recipient = await get_n_closest_supernodes_to_pastelid_urls(3, to_pastelid, supernode_list_df)
     logger.info(f"Closest Supernodes to recipient pastelid: {[sn[1] for sn in closest_supernodes_to_recipient]}")
+    # Create a UserMessage object
+    user_message = UserMessage(
+        from_pastelid=MY_LOCAL_PASTELID,
+        to_pastelid=to_pastelid,
+        message_body=message_body,
+        message_signature=await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, message_body, MY_PASTELID_PASSPHRASE)
+    )
     # Send the message to the 3 closest Supernodes concurrently
     send_tasks = []
     for supernode_url, _ in closest_supernodes_to_recipient:
-        send_task = asyncio.create_task(messaging_client.send_user_message(supernode_url, to_pastelid, message_body))
+        send_task = asyncio.create_task(messaging_client.send_user_message(supernode_url, user_message))
         send_tasks.append(send_task)
     send_results = await asyncio.gather(*send_tasks)
     logger.info(f"Sent user messages: {send_results}")
@@ -1511,9 +1717,9 @@ async def send_message_and_check_for_new_incoming_messages(
     message_ids = set()
     for message_list in message_lists:
         for message in message_list:
-            if message["id"] not in message_ids:
+            if message.id not in message_ids:
                 unique_messages.append(message)
-                message_ids.add(message["id"])
+                message_ids.add(message.id)
     logger.info(f"Retrieved unique user messages: {unique_messages}")
     message_dict = {
         "sent_messages": send_results,
@@ -1533,42 +1739,65 @@ async def handle_credit_pack_ticket_end_to_end(
     # Get the list of Supernodes
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
     # Prepare the credit pack request
-    credit_pack_request = InferenceCreditPackRequest(
-        authorized_pastelids_to_use_credits=[MY_LOCAL_PASTELID],
-        psl_cost_per_credit=psl_cost_per_credit,
-        total_psl_cost_for_pack=number_of_credits * psl_cost_per_credit,
-        initial_credit_balance=number_of_credits,
-        credit_usage_tracking_psl_address=credit_usage_tracking_psl_address
+    credit_pack_request = CreditPackPurchaseRequest(
+        requesting_end_user_pastelid=MY_LOCAL_PASTELID,
+        requested_initial_credits_in_credit_pack=number_of_credits,
+        list_of_authorized_pastelids_allowed_to_use_credit_pack=[MY_LOCAL_PASTELID],
+        credit_usage_tracking_psl_address=credit_usage_tracking_psl_address,
+        request_timestamp_utc_iso_string=datetime.utcnow().isoformat(),
+        request_pastel_block_height=await get_current_pastel_block_height_func(),
+        request_pastel_block_hash=(await get_best_block_hash_and_merkle_root_func())[0],
+        credit_purchase_request_message_version_string="1.0",
     )
+    sha3_256_hash_of_credit_pack_purchase_request_fields = compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_request.dict())
+    credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields = sha3_256_hash_of_credit_pack_purchase_request_fields
+    requesting_end_user_pastelid_signature_on_request_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_credit_pack_purchase_request_fields, MY_PASTELID_PASSPHRASE)
+    credit_pack_request.requesting_end_user_pastelid_signature_on_request_hash = requesting_end_user_pastelid_signature_on_request_hash
     # Send the credit pack request to the highest-ranked supernode
-    closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, MY_LOCAL_PASTELID, supernode_list_df)
+    closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(1, MY_LOCAL_PASTELID, supernode_list_df)
     highest_ranked_supernode_url = closest_supernodes[0][0]
-    credit_pack_ticket = await messaging_client.create_credit_pack_ticket(highest_ranked_supernode_url, credit_pack_request)
+    preliminary_price_quote = await messaging_client.create_credit_pack_ticket(highest_ranked_supernode_url, credit_pack_request)
+    # Check if the end user agrees with the preliminary price quote
+    preliminary_price_quote_response = CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(
+        sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
+        sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields=preliminary_price_quote.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields,
+        credit_pack_purchase_request_response_fields_json=preliminary_price_quote.credit_pack_purchase_request_response_fields_json,
+        agree_with_preliminary_price_quote=True,
+        preliminary_price_quote_response_timestamp_utc_iso_string=datetime.utcnow().isoformat(),
+        preliminary_price_quote_response_pastel_block_height=await get_current_pastel_block_height_func(),
+        preliminary_price_quote_response_pastel_block_hash=(await get_best_block_hash_and_merkle_root_func())[0],
+        preliminary_price_quote_response_message_version_string="1.0",
+        requesting_end_user_pastelid=MY_LOCAL_PASTELID,
+    )
+    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields = compute_sha3_256_hash_of_sqlmodel_response_fields(preliminary_price_quote_response.dict())
+    preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields = sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields
+    requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields, MY_PASTELID_PASSPHRASE)
+    preliminary_price_quote_response.requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash = requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash
+    # Send the preliminary price quote response to the responding supernode
+    signed_credit_pack_ticket = await messaging_client.sign_credit_pack_ticket(highest_ranked_supernode_url, preliminary_price_quote_response)
     # Calculate the total cost of the credit pack
     total_psl_cost = number_of_credits * psl_cost_per_credit
     # Send the required PSL from the credit usage tracking address to the burn address
     burn_transaction_txid = await send_to_address_func(burn_address, total_psl_cost, "Burn transaction for credit pack ticket")
-    # Sign the credit pack ticket with the end user's PastelID
-    signed_credit_pack_ticket = await messaging_client.sign_credit_pack_ticket(highest_ranked_supernode_url, credit_pack_ticket)
     # Prepare the credit pack purchase request confirmation
     credit_pack_purchase_request_confirmation = CreditPackPurchaseRequestConfirmation(
-        sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_ticket.sha3_256_hash_of_credit_pack_purchase_request_fields,
-        sha3_256_hash_of_credit_pack_purchase_request_response_fields=signed_credit_pack_ticket.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields,
-        credit_pack_purchase_request_response_json=signed_credit_pack_ticket.credit_pack_purchase_request_response_fields_json,
+        sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
+        sha3_256_hash_of_credit_pack_purchase_request_response_fields=signed_credit_pack_ticket.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
+        credit_pack_purchase_request_response_json=signed_credit_pack_ticket.credit_pack_purchase_request_json,
         requesting_end_user_pastelid=MY_LOCAL_PASTELID,
         txid_of_credit_purchase_burn_transaction=burn_transaction_txid,
         credit_purchase_request_confirmation_utc_iso_string=datetime.utcnow().isoformat(),
         credit_purchase_request_confirmation_pastel_block_height=await get_current_pastel_block_height_func(),
         credit_purchase_request_confirmation_pastel_block_hash=(await get_best_block_hash_and_merkle_root_func())[0],
-        credit_purchase_request_confirmation_message_version_string="1.0",
+        credit_purchase_request_confirmation_message_version_string="1.0"
     )
     sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_purchase_request_confirmation.dict())
     credit_pack_purchase_request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields
     requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields, MY_PASTELID_PASSPHRASE)
     credit_pack_purchase_request_confirmation.requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields
     # Store the signed credit pack ticket on the blockchain
-    transaction_id = await messaging_client.store_credit_pack_ticket(highest_ranked_supernode_url, credit_pack_purchase_request_confirmation)
-    return transaction_id
+    credit_pack_purchase_request_confirmation_response = await messaging_client.store_credit_pack_ticket(highest_ranked_supernode_url, credit_pack_purchase_request_confirmation)
+    return credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
 
 async def handle_inference_request_end_to_end(
     input_prompt_to_llm: str,
@@ -1578,7 +1807,7 @@ async def handle_inference_request_end_to_end(
     maximum_inference_cost_in_credits: float,
     burn_address: str
 ):
-    global MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE, LOCAL_CREDIT_TRACKING_PSL_ADDRESS, CREDIT_PACK_FILE
+    global MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE, LOCAL_CREDIT_TRACKING_PSL_ADDRESS
     burn_address_already_imported = await check_if_address_is_already_imported_in_local_wallet(burn_address)
     if not burn_address_already_imported:
         logger.info(f"Please wait, importing burn address {burn_address} into local wallet, which requires a reindexing...")
@@ -1588,19 +1817,6 @@ async def handle_inference_request_end_to_end(
         logger.error(f"Error: Local tracking address does not exist in local wallet: {LOCAL_CREDIT_TRACKING_PSL_ADDRESS}")
     # Create messaging client to use:
     messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)
-    # Load or create the global InferenceCreditPackMockup instance
-    credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
-    if credit_pack is None:
-        # Create a new credit pack if the file doesn't exist or is invalid
-        credit_pack = InferenceCreditPackMockup(
-            credit_pack_identifier="credit_pack_123",
-            authorized_pastelids=["jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"],
-            psl_cost_per_credit=10.0,
-            total_psl_cost_for_pack=10000.0,
-            initial_credit_balance=100000.0,
-            credit_usage_tracking_psl_address=LOCAL_CREDIT_TRACKING_PSL_ADDRESS
-        )
-        credit_pack.save_to_json(CREDIT_PACK_FILE)
     # Get the list of Supernodes
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
     # Get the closest Supernode URL
@@ -1614,13 +1830,17 @@ async def handle_inference_request_end_to_end(
         logger.error(f"Error! No supporting Supernode found for the desired model: {requested_model_canonical_string} with inference type: {model_inference_type_string}")
     input_prompt_to_llm__base64_encoded = base64.b64encode(input_prompt_to_llm.encode()).decode('utf-8')
     # Prepare the inference API usage request
-    request_data = InferenceAPIUsageRequestModel(
+    request_data = InferenceAPIUsageRequest(
+        inference_request_id=str(uuid.uuid4()),
         requesting_pastelid=MY_LOCAL_PASTELID,
-        credit_pack_identifier=credit_pack.credit_pack_identifier,
+        credit_pack_identifier="credit_pack_123",  # TODO: Use the actual credit pack identifier
         requested_model_canonical_string=requested_model_canonical_string,
         model_inference_type_string=model_inference_type_string,
         model_parameters_json=model_parameters_json,
-        model_input_data_json_b64=input_prompt_to_llm__base64_encoded
+        model_input_data_json_b64=input_prompt_to_llm__base64_encoded,
+        total_psl_cost_for_pack=10000.0,  # TODO: Use the actual total PSL cost for the credit pack
+        initial_credit_balance=100000.0,  # TODO: Use the actual initial credit balance
+        requesting_pastelid_signature="signature_placeholder"  # TODO: Sign the request with the actual PastelID signature
     )
     # Send the inference API usage request
     usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, request_data)
@@ -1642,63 +1862,57 @@ async def handle_inference_request_end_to_end(
         logger.error(f"Insufficient balance in tracking address: {credit_usage_tracking_psl_address}; amount needed: {credit_usage_tracking_amount_in_psl}; current balance: {tracking_address_balance}; shortfall: {credit_usage_tracking_amount_in_psl - tracking_address_balance}")
         return None, None, None
     if proposed_cost_in_credits <= maximum_inference_cost_in_credits: # Check if the quoted price is less than or equal to the maximum allowed cost
-        if credit_pack.has_sufficient_credits(proposed_cost_in_credits): # Check if the credit pack has sufficient credits
-            credit_pack.deduct_credits(proposed_cost_in_credits) # Deduct the credits from the credit pack
-            logger.info(f"Credits deducted from the credit pack. Remaining balance: {credit_pack.current_credit_balance}")
-            credit_pack.save_to_json(CREDIT_PACK_FILE) # Save the updated credit pack state to the JSON file (mockup only)
-            # Send the required PSL coins to authorize the request:
-            tracking_transaction_txid = await send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(inference_request_id, credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, burn_address)
-            txid_looks_valid = bool(re.match("^[0-9a-fA-F]{64}$", tracking_transaction_txid))
-            if txid_looks_valid: # Prepare the inference confirmation
-                confirmation_data = InferenceConfirmationModel(
-                    inference_request_id=inference_request_id,
-                    confirmation_transaction={"txid": tracking_transaction_txid}
-                )
-                confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data) # Send the inference confirmation
-                logger.info(f"Sent inference confirmation: {confirmation_result}")
-                max_tries_to_get_confirmation = 10
-                initial_wait_time_in_seconds = 10
-                wait_time_in_seconds = initial_wait_time_in_seconds
-                for cnt in range(max_tries_to_get_confirmation):
-                    wait_time_in_seconds = wait_time_in_seconds*(1.2**cnt)
-                    logger.info(f"Waiting for the inference results for {round(wait_time_in_seconds, 1)} seconds... (Attempt {cnt+1}/{max_tries_to_get_confirmation}); Checking with Supernode URL: {supernode_url}")
-                    await asyncio.sleep(wait_time_in_seconds)
-                    assert(len(inference_request_id)>0)
-                    assert(len(inference_response_id)>0)
-                    results_available = await messaging_client.check_status_of_inference_request_results(supernode_url, inference_response_id) # Get the inference output results
-                    if results_available:
-                        output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
-                        output_results_size = len(output_results['inference_result_json_base64'])
-                        max_response_size_to_log = 20000
-                        if output_results_size < max_response_size_to_log:
-                            logger.info(f"Retrieved inference output results: {output_results}")
-                        # Create the inference_result_dict with all relevant information
-                        inference_result_dict = {
-                            "supernode_url": supernode_url,
-                            "request_data": request_data.dict(),
-                            "usage_request_response": usage_request_response,
-                            "input_prompt_to_llm": input_prompt_to_llm,
-                            "output_results": output_results,
-                        }
-                        if model_inference_type_string == "text_to_image":
-                            inference_result_dict["generated_image_base64"] = output_results["inference_result_json_base64"]
-                            inference_result_dict["generated_image_decoded"] = base64.b64decode(output_results["inference_result_json_base64"])
-                        else:
-                            inference_result_dict["inference_result_decoded"] = base64.b64decode(output_results["inference_result_json_base64"]).decode()
-                        audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
-                        validation_results = validate_inference_data(inference_result_dict, audit_results)
-                        logger.info(f"Validation results: {validation_results}")                    
-                        return inference_result_dict, audit_results, validation_results
+        # TODO: Check if the credit pack has sufficient credits based on the actual credit pack data
+        # Send the required PSL coins to authorize the request:
+        tracking_transaction_txid = await send_tracking_amount_from_control_address_to_burn_address_to_confirm_inference_request(inference_request_id, credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, burn_address)
+        txid_looks_valid = bool(re.match("^[0-9a-fA-F]{64}$", tracking_transaction_txid))
+        if txid_looks_valid: # Prepare the inference confirmation
+            confirmation_data = InferenceConfirmation(
+                inference_request_id=inference_request_id,
+                confirmation_transaction={"txid": tracking_transaction_txid}
+            )
+            confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data) # Send the inference confirmation
+            logger.info(f"Sent inference confirmation: {confirmation_result}")
+            max_tries_to_get_confirmation = 10
+            initial_wait_time_in_seconds = 10
+            wait_time_in_seconds = initial_wait_time_in_seconds
+            for cnt in range(max_tries_to_get_confirmation):
+                wait_time_in_seconds = wait_time_in_seconds*(1.2**cnt)
+                logger.info(f"Waiting for the inference results for {round(wait_time_in_seconds, 1)} seconds... (Attempt {cnt+1}/{max_tries_to_get_confirmation}); Checking with Supernode URL: {supernode_url}")
+                await asyncio.sleep(wait_time_in_seconds)
+                assert(len(inference_request_id)>0)
+                assert(len(inference_response_id)>0)
+                results_available = await messaging_client.check_status_of_inference_request_results(supernode_url, inference_response_id) # Get the inference output results
+                if results_available:
+                    output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
+                    output_results_size = len(output_results['inference_result_json_base64'])
+                    max_response_size_to_log = 20000
+                    if output_results_size < max_response_size_to_log:
+                        logger.info(f"Retrieved inference output results: {output_results}")
+                    # Create the inference_result_dict with all relevant information
+                    inference_result_dict = {
+                        "supernode_url": supernode_url,
+                        "request_data": request_data.dict(),
+                        "usage_request_response": usage_request_response,
+                        "input_prompt_to_llm": input_prompt_to_llm,
+                        "output_results": output_results,
+                    }
+                    if model_inference_type_string == "text_to_image":
+                        inference_result_dict["generated_image_base64"] = output_results["inference_result_json_base64"]
+                        inference_result_dict["generated_image_decoded"] = base64.b64decode(output_results["inference_result_json_base64"])
                     else:
-                        logger.info("Inference results not available yet; retrying...")
-            else:
-                logger.error(f"Invalid tracking transaction TXID: {tracking_transaction_txid}")
+                        inference_result_dict["inference_result_decoded"] = base64.b64decode(output_results["inference_result_json_base64"]).decode()
+                    audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
+                    validation_results = validate_inference_data(inference_result_dict, audit_results)
+                    logger.info(f"Validation results: {validation_results}")                    
+                    return inference_result_dict, audit_results, validation_results
+                else:
+                    logger.info("Inference results not available yet; retrying...")
         else:
-            logger.error("Insufficient credits in the credit pack; request cannot be authorized.")
-            return None, None, None
+            logger.error(f"Invalid tracking transaction TXID: {tracking_transaction_txid}")
     else:
         logger.info(f"Quoted price of {proposed_cost_in_credits} credits exceeds the maximum allowed cost of {maximum_inference_cost_in_credits} credits. Inference request not confirmed.")
-        return None, None, None
+    return None, None, None
     
 async def main():
     global rpc_connection

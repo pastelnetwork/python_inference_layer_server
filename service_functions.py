@@ -1389,8 +1389,9 @@ async def check_original_supernode_storage_confirmation(sha3_256_hash_of_credit_
 async def process_credit_purchase_initial_request(request: db_code.CreditPackPurchaseRequest) -> db_code.CreditPackPurchaseRequestPreliminaryPriceQuote:
     try:
         # Validate the request fields
-        if not request.requesting_end_user_pastelid or not request.requested_initial_credits_in_credit_pack or not request.credit_usage_tracking_psl_address:
-            raise ValueError("Invalid credit purchase request")
+        validation_errors = await validate_credit_pack_ticket_message_data_func(request)
+        if validation_errors:
+            raise ValueError(f"Invalid credit purchase request: {', '.join(validation_errors)}")
         # Determine the preliminary price quote
         preliminary_quoted_price_per_credit_in_psl = await calculate_preliminary_psl_price_per_credit()
         preliminary_total_cost_of_credit_pack_in_psl = preliminary_quoted_price_per_credit_in_psl * request.requested_initial_credits_in_credit_pack
@@ -1424,6 +1425,10 @@ async def process_credit_purchase_initial_request(request: db_code.CreditPackPur
                 MY_PASTELID_PASSPHRASE
             )
         )
+        # Validate the response
+        validation_errors = await validate_credit_pack_ticket_message_data_func(response)
+        if validation_errors:
+            raise ValueError(f"Invalid credit purchase request preliminary price quote: {', '.join(validation_errors)}")
         return response
     except Exception as e:
         logger.error(f"Error processing credit purchase initial request: {str(e)}")
@@ -1494,8 +1499,9 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
 async def process_credit_pack_price_agreement_request(request: db_code.CreditPackPurchasePriceAgreementRequest) -> db_code.CreditPackPurchasePriceAgreementRequestResponse:
     try:
         # Validate the request fields
-        if not request.supernode_requesting_price_agreement_pastelid or not request.credit_pack_purchase_request_response_fields_json:
-            raise ValueError("Invalid price agreement request")
+        validation_errors = await validate_credit_pack_ticket_message_data_func(request)
+        if validation_errors:
+            raise ValueError(f"Invalid price agreement request: {', '.join(validation_errors)}")
         # Determine if the supernode agrees with the proposed price
         agree_with_proposed_price = await determine_agreement_with_proposed_price(request.credit_pack_purchase_request_response_fields_json)
         # Create the response
@@ -1528,6 +1534,10 @@ async def process_credit_pack_price_agreement_request(request: db_code.CreditPac
                 MY_PASTELID_PASSPHRASE
             )
         )
+        # Validate the response
+        validation_errors = await validate_credit_pack_ticket_message_data_func(response)
+        if validation_errors:
+            raise ValueError(f"Invalid price agreement request response: {', '.join(validation_errors)}")
         return response
     except Exception as e:
         logger.error(f"Error processing credit pack price agreement request: {str(e)}")
@@ -1566,8 +1576,9 @@ async def process_credit_pack_purchase_request_final_response_announcement(respo
 async def process_credit_purchase_request_confirmation(confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> db_code.CreditPackPurchaseRequestConfirmationResponse:
     try:
         # Validate the confirmation fields
-        if not confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields or not confirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields or not confirmation.txid_of_credit_purchase_burn_transaction:
-            raise ValueError("Invalid credit purchase request confirmation")
+        validation_errors = await validate_credit_pack_ticket_message_data_func(confirmation)
+        if validation_errors:
+            raise ValueError(f"Invalid credit purchase request confirmation: {', '.join(validation_errors)}")
         # Retrieve the credit pack purchase request response
         credit_pack_purchase_request_response = await get_credit_pack_purchase_request_response(confirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
         # Check the burn transaction
@@ -1639,6 +1650,10 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                     MY_PASTELID_PASSPHRASE
                 )
             )
+        # Validate the response
+        validation_errors = await validate_credit_pack_ticket_message_data_func(response)
+        if validation_errors:
+            raise ValueError(f"Invalid credit purchase request confirmation response: {', '.join(validation_errors)}")
         return response
     except Exception as e:
         logger.error(f"Error processing credit purchase request confirmation: {str(e)}")
@@ -1669,8 +1684,9 @@ async def process_credit_pack_storage_completion_announcement(response: db_code.
 async def process_credit_pack_storage_retry_request(request: db_code.CreditPackStorageRetryRequest) -> db_code.CreditPackStorageRetryRequestResponse:
     try:
         # Validate the request fields
-        if not request.sha3_256_hash_of_credit_pack_purchase_request_response_fields or not request.credit_pack_purchase_request_response_json:
-            raise ValueError("Invalid credit pack storage retry request")
+        validation_errors = await validate_credit_pack_ticket_message_data_func(request)
+        if validation_errors:
+            raise ValueError(f"Invalid credit pack storage retry request: {', '.join(validation_errors)}")
         # Check if the original responding supernode has confirmed the storage
         original_supernode_confirmed_storage = await check_original_supernode_storage_confirmation(request.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
         if not original_supernode_confirmed_storage:
@@ -1735,6 +1751,10 @@ async def process_credit_pack_storage_retry_request(request: db_code.CreditPackS
                     MY_PASTELID_PASSPHRASE
                 )
             )
+        # Validate the response
+        validation_errors = await validate_credit_pack_ticket_message_data_func(response)
+        if validation_errors:
+            raise ValueError(f"Invalid credit pack storage retry request response: {', '.join(validation_errors)}")
         return response
     except Exception as e:
         logger.error(f"Error processing credit pack storage retry request: {str(e)}")
@@ -1743,7 +1763,6 @@ async def process_credit_pack_storage_retry_request(request: db_code.CreditPackS
 #________________________________________________________________________________________________________________            
                 
 # Inference request related service functions:
-                
                 
 async def get_inference_model_menu(use_verbose=0):
     try:
