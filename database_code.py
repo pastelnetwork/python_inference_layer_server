@@ -69,7 +69,7 @@ class UserMessage(SQLModel, table=True):
         }
         
 class SupernodeUserMessage(Message, table=True):
-    user_message_id: Optional[int] = Field(default=None, foreign_key="user_messages.id", index=True)
+    user_message_id: Optional[int] = Field(default=None, foreign_key="usermessage.id", index=True)
     user_message: Optional[UserMessage] = Relationship(back_populates="supernode_user_messages")
     class Config:
         json_schema_extra = {
@@ -359,8 +359,8 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
 
 class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="credit_pack_purchase_requests.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="credit_pack_purchase_request_responses.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
     credit_pack_purchase_request_response_json: str
     requesting_end_user_pastelid: str = Field(index=True)
     txid_of_credit_purchase_burn_transaction: str = Field(index=True)
@@ -389,8 +389,8 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
         
 class CreditPackPurchaseRequestConfirmationResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="credit_pack_purchase_requests.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str = Field(foreign_key="credit_pack_purchase_request_confirmations.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str = Field(foreign_key="creditpackpurchaserequestconfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields", index=True)
     credit_pack_confirmation_outcome_string: str
     pastel_api_credit_pack_ticket_registration_txid: str = Field(index=True)
     credit_pack_confirmation_failure_reason_if_applicable: str
@@ -572,7 +572,8 @@ class CreditPackRequestStatusCheck(SQLModel):
         }
 
 class CreditPackPurchaseRequestStatus(SQLModel):
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="credit_pack_purchase_requests.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
     status: str
     status_details: str
     status_update_timestamp_utc_iso_string: str
@@ -729,7 +730,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
 class InferenceAPIUsageResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     inference_response_id: str = Field(unique=True, index=True)
-    inference_request_id: str = Field(foreign_key="inference_api_usage_requests.inference_request_id", index=True)
+    inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
     proposed_cost_of_request_in_inference_credits: Decimal
     remaining_credits_in_pack_after_request_processed: Decimal
     credit_usage_tracking_psl_address: str = Field(index=True)
@@ -753,8 +754,8 @@ class InferenceAPIUsageResponse(SQLModel, table=True):
 class InferenceAPIOutputResult(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     inference_result_id: str = Field(unique=True, index=True)
-    inference_request_id: str = Field(foreign_key="inference_api_usage_requests.inference_request_id", index=True)
-    inference_response_id: str = Field(foreign_key="inference_api_usage_responses.inference_response_id", index=True)
+    inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
+    inference_response_id: str = Field(foreign_key="inferenceapiusageresponse.inference_response_id", index=True)
     responding_supernode_pastelid: str = Field(index=True)
     inference_result_json_base64: str
     inference_result_file_type_strings: str
