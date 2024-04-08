@@ -1055,7 +1055,7 @@ async def create_user_message(from_pastelid: str, to_pastelid: str, message_body
         db.add(user_message)
         db.commit()
         db.refresh(user_message)
-        return user_message.dict()  # Assuming you have a dict method or similar to serialize your model
+        return user_message.model_dump()
 
 async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_pastelid: str, user_message_data: dict) -> dict:
     async with db_code.Session() as db:
@@ -1071,7 +1071,7 @@ async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_p
         db.add(supernode_user_message)
         db.commit()
         db.refresh(supernode_user_message)
-        return supernode_user_message.dict()
+        return supernode_user_message.model_dump()
 
 async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str, message_body: str, message_signature: str) -> dict:
     user_message_data = await create_user_message(from_pastelid, to_pastelid, message_body, message_signature)
@@ -1226,7 +1226,7 @@ async def save_credit_pack_storage_completion_announcement(response: db_code.Cre
             raise ValueError(f"Invalid credit pack storage completion announcement: {', '.join(validation_errors)}")
         # Store the credit pack storage completion announcement in the database
         async with db_code.Session() as db_session:
-            db_response = db_code.CreditPackPurchaseRequestConfirmationResponse(**response.dict())
+            db_response = db_code.CreditPackPurchaseRequestConfirmationResponse(**response.model_dump())
             db_session.add(db_response)
             db_session.commit()
         logger.info(f"Stored credit pack storage completion announcement: {response.json()}")
@@ -1287,7 +1287,7 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             tasks = []
             for supernode in supernodes:
                 url = f"http://{supernode}:7123/credit_pack_price_agreement_request"
-                task = asyncio.create_task(client.post(url, json=request.dict()))
+                task = asyncio.create_task(client.post(url, json=request.model_dump()))
                 tasks.append(task)
             
             responses = await asyncio.gather(*tasks)
@@ -1976,8 +1976,6 @@ async def test_claude_api_key():
         return False
 
 async def save_inference_api_usage_request(inference_request_model: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageRequest:
-    inference_request_model.inference_request_id = str(uuid.uuid4())  # Generate a unique inference request ID
-    inference_request_model.requesting_pastelid_signature = "placeholder_signature"  # Set a placeholder signature for now
     async with db_code.Session() as db_session:
         db_session.add(inference_request_model)
         db_session.commit()
@@ -2184,14 +2182,18 @@ def normalize_string(s):
     """Remove non-alphanumeric characters and convert to lowercase."""
     return re.sub(r'\W+', '', s).lower()
 
-async def validate_inference_api_usage_request(request_data: dict) -> Tuple[bool, float, float]:
+async def validate_inference_api_usage_request(inference_api_usage_request: db_code.InferenceAPIUsageRequest) -> Tuple[bool, float, float]:
     try:
-        requesting_pastelid = request_data["requesting_pastelid"]
-        credit_pack_identifier = request_data["credit_pack_identifier"]
-        requested_model = request_data["requested_model_canonical_string"]
-        model_inference_type_string = request_data["model_inference_type_string"]
-        model_parameters = request_data["model_parameters_json"]
-        input_data = request_data["model_input_data_json_b64"]
+        validation_errors = await validate_inference_request_message_data_func()
+        if validation_errors:
+            raise ValueError(f"Invalid inference request message: {', '.join(validation_errors)}")        
+        requesting_pastelid = inference_api_usage_request.requesting_pastelid
+        credit_pack_identifier = inference_api_usage_request.credit_pack_identifier
+        requested_model = inference_api_usage_request.requested_model_canonical_string
+        model_inference_type_string = inference_api_usage_request.model_inference_type_string
+        model_parameters = inference_api_usage_request.model_parameters_json
+        input_data = inference_api_usage_request.model_input_data_json_b64
+        # TODO: Remove this placeholder code and replace with actual credit pack ticket
         # Check if the credit pack identifier matches the global credit pack
         if credit_pack_identifier != credit_pack.credit_pack_identifier:
             logger.warning(f"Invalid credit pack identifier: {credit_pack_identifier}")
@@ -2242,6 +2244,7 @@ async def validate_inference_api_usage_request(request_data: dict) -> Tuple[bool
         if detected_data_type == "txt":
             input_data = input_data_binary.decode("utf-8")
         proposed_cost_in_credits = await calculate_proposed_cost(requested_model_data, model_parameters_dict, input_data)
+        # TODO: Remove this placeholder code and replace with actual credit pack ticket
         # Check if the credit pack has sufficient credits for the request
         if not credit_pack.has_sufficient_credits(proposed_cost_in_credits):
             logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {credit_pack.current_credit_balance}")
@@ -2258,19 +2261,21 @@ async def validate_inference_api_usage_request(request_data: dict) -> Tuple[bool
     
 async def process_inference_api_usage_request(inference_api_usage_request: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageResponse: 
     # Validate the inference API usage request
-    request_data = inference_api_usage_request.dict()
-    is_valid_request, proposed_cost_in_credits, remaining_credits_after_request = await validate_inference_api_usage_request(request_data)        
+    is_valid_request, proposed_cost_in_credits, remaining_credits_after_request = await validate_inference_api_usage_request(inference_api_usage_request) 
+    inference_api_usage_request_dict = inference_api_usage_request.model_dump()
     if not is_valid_request:
         logger.error("Invalid inference API usage request received!")
-        raise ValueError(f"Error! Received invalid inference API usage request: {request_data}")
+        raise ValueError(f"Error! Received invalid inference API usage request: {inference_api_usage_request_dict}")
     else:
-        logger.info(f"Received inference API usage request: {request_data}")
+        logger.info(f"Received inference API usage request: {inference_api_usage_request_dict}")
     # Save the inference API usage request
     saved_request = await save_inference_api_usage_request(inference_api_usage_request)
+    
     credit_pack_identifier = inference_api_usage_request.credit_pack_identifier
     current_dir = os.path.dirname(os.path.abspath(__file__))
     credit_pack_json_file_path = os.path.join(current_dir, CREDIT_PACK_FILE) 
     credit_pack = InferenceCreditPackMockup.load_from_json(credit_pack_json_file_path)
+    # TODO: Remove this placeholder code and replace with actual credit pack ticket
     if credit_pack.credit_pack_identifier == credit_pack_identifier:
         credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
     # Create and save the InferenceAPIUsageResponse
@@ -2955,6 +2960,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
         int: The number of confirmation transactions from the tracking address to the burn address.
     """
     global rpc_connection
+    # TODO: Remove this placeholder code and replace with actual credit pack ticket
     initial_credit_balance = credit_pack.initial_credit_balance
     credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
     # Get all transactions sent to the burn address
@@ -3302,6 +3308,10 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
                 validation_errors.append(f"Pastelid signature in field {field_name} failed verification")
     return validation_errors
 
+async def validate_inference_request_message_data_func(model_instance: SQLModel):
+    validation_errors = await validate_credit_pack_ticket_message_data_func(model_instance)
+    return validation_errors
+
 def get_external_ip_func():
     response = httpx.get("https://ipinfo.io/ip")
     response.raise_for_status()
@@ -3362,6 +3372,7 @@ elif rpc_port == '19932':
 elif rpc_port == '29932':
     burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
 
+# TODO: Remove this placeholder code and replace with actual credit pack ticket
 # Load or create the global InferenceCreditPackMockup instance
 CREDIT_PACK_FILE = "credit_pack.json"
 credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
