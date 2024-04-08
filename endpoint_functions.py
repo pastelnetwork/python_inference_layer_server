@@ -230,7 +230,7 @@ async def get_sn_data_from_sn_pubkey(
         raise HTTPException(status_code=500, detail="Internal Server Error")
         
 
-@router.get("/get_messages", response_model=List[db.MessageModel], dependencies=[Depends(localhost_only)])
+@router.get("/get_messages", response_model=List[db.Message], dependencies=[Depends(localhost_only)])
 async def get_messages(
     last_k_minutes: Optional[int] = Query(100, description="Number of minutes to retrieve messages from"),
     message_type: Optional[str] = Query("all", description="Type of messages to retrieve ('all' or specific type)"),
@@ -244,12 +244,12 @@ async def get_messages(
     - `last_k_minutes`: Number of minutes to retrieve messages from (default: 100).
     - `message_type`: Type of messages to retrieve ('all' or specific type) (default: 'all').
 
-    Returns a list of MessageModel objects containing the message, message_type, sending_sn_pastelid, and timestamp.
+    Returns a list of Message objects containing the message, message_type, sending_sn_pastelid, and timestamp.
     """
     try:
         messages = await service_functions.parse_sn_messages_from_last_k_minutes_func(last_k_minutes, message_type)
         return [
-            db.MessageModel(
+            db.Message(
                 message=msg["message"],
                 message_type=msg["message_type"],
                 sending_sn_pastelid=msg["sending_sn_pastelid"],
@@ -261,38 +261,6 @@ async def get_messages(
         logger.error(f"Error retrieving messages: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving messages: {str(e)}")
     
-
-@router.post("/broadcast_message_to_all_sns", response_model=db.SendMessageResponse, dependencies=[Depends(localhost_only)])
-async def send_message_to_list_of_sns(
-    message: str = Query(..., description="Message to broadcast"),
-    message_type: str = Query(..., description="Type of the message"),
-    list_of_receiving_sn_pastelids: List[str] = Query(..., description="List of PastelIDs of the receiving Supernodes"),
-    pastelid_passphrase: SecretStr = Query(..., description="Passphrase for the sending PastelID"),
-    verbose: Optional[int] = Query(0, description="Verbose mode (0 or 1)"),
-    rpc_connection=Depends(get_rpc_connection),
-):
-    """
-    Note: Endpoint only available on localhost.
-        
-    Broadcasts a message to a list of Supernodes.
-
-    - `message`: Message to broadcast.
-    - `message_type`: Type of the message.
-    - `list_of_receiving_sn_pastelids`: List of PastelIDs of the receiving Supernodes.
-    - `pastelid_passphrase`: Passphrase for the sending PastelID.
-    - `verbose`: Verbose mode (0 or 1) (default: 0).
-
-    Returns a SendMessageResponse object containing the status and message.
-    """
-    try:
-        signed_message = await service_functions.broadcast_message_to_list_of_sns_using_pastelid_func(
-            message, message_type, list_of_receiving_sn_pastelids, pastelid_passphrase.get_secret_value(), verbose
-        )
-        return db.SendMessageResponse(status="success", message=f"Message broadcasted: {signed_message}")
-    except Exception as e:
-        logger.error(f"Error broadcasting message: {str(e)}")
-        return db.SendMessageResponse(status="error", message=f"Error broadcasting message: {str(e)}")
-
 
 @router.post("/broadcast_message_to_all_sns", response_model=db.SendMessageResponse, dependencies=[Depends(localhost_only)])
 async def broadcast_message_to_all_sns(
@@ -344,9 +312,9 @@ async def request_challenge(
         raise HTTPException(status_code=500, detail=f"Error generating challenge: {str(e)}")
 
 
-@router.post("/send_user_message", response_model=db.SupernodeUserMessageModel)
+@router.post("/send_user_message", response_model=db.SupernodeUserMessage)
 async def send_user_message(
-    user_message: db.UserMessageCreate = Body(...),
+    user_message: db.UserMessage = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
@@ -359,7 +327,7 @@ async def send_user_message(
     The sender must provide a valid challenge signature to authenticate their identity.
 
     Parameters:
-    - `user_message` (UserMessageCreate): The user message to be sent, including:
+    - `user_message` (UserMessage): The user message to be sent, including:
         - `from_pastelid` (str): The PastelID of the sender.
         - `to_pastelid` (str): The PastelID of the recipient.
         - `message_body` (str): The content of the message.
@@ -369,13 +337,13 @@ async def send_user_message(
     - `challenge_signature` (str): The signature of the PastelID on the challenge string.
 
     Returns:
-    - `SupernodeUserMessageModel`: The sent message details, including:
+    - `SupernodeUserMessage`: The sent message details, including:
         - `message` (str): The content of the sent message.
         - `message_type` (str): The type of the message (always "user_message").
         - `sending_sn_pastelid` (str): The PastelID of the Supernode that sent the message.
         - `timestamp` (datetime): The timestamp of when the message was sent.
         - `id` (int): The unique identifier of the Supernode user message.
-        - `user_message` (UserMessageModel): The details of the user message, including:
+        - `user_message` (UserMessage): The details of the user message, including:
             - `from_pastelid` (str): The PastelID of the sender.
             - `to_pastelid` (str): The PastelID of the recipient.
             - `message_body` (str): The content of the message.
@@ -402,7 +370,7 @@ async def send_user_message(
         raise HTTPException(status_code=500, detail=f"Error sending user message: {str(e)}")
 
 
-@router.get("/get_user_messages", response_model=List[db.UserMessageModel])
+@router.get("/get_user_messages", response_model=List[db.UserMessage])
 async def get_user_messages(
     pastelid: str = Query(..., description="The PastelID to retrieve messages for"),
     challenge: str = Query(..., description="The challenge string"),
@@ -423,7 +391,7 @@ async def get_user_messages(
     - `challenge_signature` (str): The signature of the PastelID on the challenge string.
 
     Returns:
-    - List[UserMessageModel]: A list of user messages associated with the provided PastelID, each including:
+    - List[UserMessage]: A list of user messages associated with the provided PastelID, each including:
         - `from_pastelid` (str): The PastelID of the sender.
         - `to_pastelid` (str): The PastelID of the recipient.
         - `message_body` (str): The content of the message.
@@ -443,7 +411,7 @@ async def get_user_messages(
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         user_messages = await service_functions.get_user_messages_for_pastelid(pastelid)
         return [
-            db.UserMessageModel(
+            db.UserMessage(
                 from_pastelid=message.from_pastelid,
                 to_pastelid=message.to_pastelid,
                 message_body=message.message_body,
@@ -457,30 +425,8 @@ async def get_user_messages(
         logger.error(f"Error retrieving user messages: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving user messages: {str(e)}")
 
+
 #__________________________________________________________________________________________________________
-
-
-@router.post("/credit_purchase_initial_request", response_model=db.CreditPackPurchaseRequestResponseModel)
-async def credit_purchase_initial_request_endpoint(
-    request: db.CreditPackPurchaseRequestModel = Body(...),
-    challenge: str = Body(..., description="The challenge string"),
-    challenge_id: str = Body(..., description="The ID of the challenge string"),
-    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
-    rpc_connection=Depends(get_rpc_connection),
-):
-    try:
-        is_valid_signature = await service_functions.verify_challenge_signature(
-            request.requesting_end_user_pastelid, challenge_signature, challenge_id
-        )
-        if not is_valid_signature:
-            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        response = await service_functions.process_credit_purchase_initial_request(request)
-        response_dict = response.dict()
-        logger.info(f"Processed credit purchase initial request: {response_dict}")
-        return response
-    except Exception as e:
-        logger.error(f"Error processing credit purchase initial request: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing credit purchase initial request: {str(e)}")
 
 
 @router.post("/credit_purchase_preliminary_price_quote_response", response_model=db.CreditPackPurchaseRequestPreliminaryPriceQuoteResponse)
@@ -506,9 +452,9 @@ async def credit_purchase_preliminary_price_quote_response_endpoint(
         raise HTTPException(status_code=500, detail=f"Error processing credit purchase preliminary price quote response: {str(e)}")
 
 
-@router.post("/credit_pack_price_agreement_request", response_model=db.CreditPackPurchasePriceAgreementRequestResponseModel)
+@router.post("/credit_pack_price_agreement_request", response_model=db.CreditPackPurchasePriceAgreementRequestResponse)
 async def credit_pack_price_agreement_request_endpoint(
-    request: db.CreditPackPurchasePriceAgreementRequestModel = Body(...),
+    request: db.CreditPackPurchasePriceAgreementRequest = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
@@ -529,9 +475,9 @@ async def credit_pack_price_agreement_request_endpoint(
         raise HTTPException(status_code=500, detail=f"Error processing credit pack price agreement request: {str(e)}")
 
 
-@router.post("/check_status_of_credit_purchase_request", response_model=db.CreditPackPurchaseRequestStatusModel)
+@router.post("/check_status_of_credit_purchase_request", response_model=db.CreditPackPurchaseRequestStatus)
 async def check_status_of_credit_purchase_request_endpoint(
-    request: db.CreditPackRequestStatusCheckModel = Body(...),
+    request: db.CreditPackRequestStatusCheck = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
@@ -554,7 +500,7 @@ async def check_status_of_credit_purchase_request_endpoint(
 
 @router.post("/credit_pack_purchase_request_final_response_announcement")
 async def credit_pack_purchase_request_final_response_announcement_endpoint(
-    response: db.CreditPackPurchaseRequestResponseModel = Body(...),
+    response: db.CreditPackPurchaseRequestResponse = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
@@ -573,10 +519,9 @@ async def credit_pack_purchase_request_final_response_announcement_endpoint(
         logger.error(f"Error processing credit pack purchase request final response announcement: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing credit pack purchase request final response announcement: {str(e)}")
 
-
-@router.post("/confirm_credit_purchase_request", response_model=db.CreditPackPurchaseRequestConfirmationResponseModel)
+@router.post("/confirm_credit_purchase_request", response_model=db.CreditPackPurchaseRequestConfirmationResponse)
 async def confirm_credit_purchase_request_endpoint(
-    confirmation: db.CreditPackPurchaseRequestConfirmationModel = Body(...),
+    confirmation: db.CreditPackPurchaseRequestConfirmation = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
@@ -599,7 +544,7 @@ async def confirm_credit_purchase_request_endpoint(
 
 @router.post("/credit_pack_purchase_completion_announcement")
 async def credit_pack_purchase_completion_announcement_endpoint(
-    confirmation: db.CreditPackPurchaseRequestConfirmationModel = Body(...),
+    confirmation: db.CreditPackPurchaseRequestConfirmation = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
@@ -621,7 +566,7 @@ async def credit_pack_purchase_completion_announcement_endpoint(
 
 @router.post("/credit_pack_storage_completion_announcement")
 async def credit_pack_storage_completion_announcement_endpoint(
-    response: db.CreditPackPurchaseRequestConfirmationResponseModel = Body(...),
+    response: db.CreditPackPurchaseRequestConfirmationResponse = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
@@ -641,9 +586,9 @@ async def credit_pack_storage_completion_announcement_endpoint(
         raise HTTPException(status_code=500, detail=f"Error processing credit pack storage completion announcement: {str(e)}")
 
 
-@router.post("/credit_pack_storage_retry_request", response_model=db.CreditPackStorageRetryRequestResponseModel)
+@router.post("/credit_pack_storage_retry_request", response_model=db.CreditPackStorageRetryRequestResponse)
 async def credit_pack_storage_retry_request_endpoint(
-    request: db.CreditPackStorageRetryRequestModel = Body(...),
+    request: db.CreditPackStorageRetryRequest = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
@@ -666,9 +611,9 @@ async def credit_pack_storage_retry_request_endpoint(
 #__________________________________________________________________________________________________________
 
 
-@router.post("/make_inference_api_usage_request", response_model=db.InferenceAPIUsageResponseModel)
+@router.post("/make_inference_api_usage_request", response_model=db.InferenceAPIUsageResponse)
 async def make_inference_api_usage_request_endpoint(
-    inference_api_usage_request: db.InferenceAPIUsageRequestModel = Body(...),
+    inference_api_usage_request: db.InferenceAPIUsageRequest = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
@@ -685,31 +630,22 @@ async def make_inference_api_usage_request_endpoint(
         inference_request_dict = inference_api_usage_request.dict()
         # Abbreviate the 'model_input_data_json_b64' field to the first 32 characters
         inference_request_dict['model_input_data_json_b64'] = inference_request_dict['model_input_data_json_b64'][:32]        
-        inference_response_dict = inference_response.to_dict()
+        inference_response_dict = inference_response.dict()
         combined_message_dict = {**inference_request_dict, **inference_response_dict}
         # Broadcast message to nearest SNs to requester's pastelid containing inference request/response message 
         response_message_body = json.dumps(combined_message_dict)
         response_message_type = "inference_request_response_announcement_message"
         _ = await service_functions.broadcast_message_to_n_closest_supernodes_to_given_pastelid(inference_api_usage_request.requesting_pastelid, response_message_body, response_message_type) 
         # Return the InferenceAPIUsageResponse as the API response
-        return db.InferenceAPIUsageResponseModel(
-            inference_response_id=inference_response.inference_response_id,
-            inference_request_id=inference_response.inference_request_id,
-            proposed_cost_of_request_in_inference_credits=inference_response.proposed_cost_of_request_in_inference_credits,
-            remaining_credits_in_pack_after_request_processed=inference_response.remaining_credits_in_pack_after_request_processed,
-            credit_usage_tracking_psl_address=inference_response.credit_usage_tracking_psl_address,
-            request_confirmation_message_amount_in_patoshis=inference_response.request_confirmation_message_amount_in_patoshis,
-            max_block_height_to_include_confirmation_transaction=inference_response.max_block_height_to_include_confirmation_transaction,
-            supernode_pastelid_and_signature_on_inference_response_id=inference_response.supernode_pastelid_and_signature_on_inference_response_id
-        )
+        return inference_response
     except Exception as e:
         logger.error(f"Error encountered with inference API usage request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error encountered with inference API usage request: {str(e)}")
     
 
-@router.post("/confirm_inference_request", response_model=db.InferenceConfirmationModel)
+@router.post("/confirm_inference_request", response_model=db.InferenceConfirmation)
 async def confirm_inference_request_endpoint(
-    inference_confirmation: db.InferenceConfirmationModel = Body(...),
+    inference_confirmation: db.InferenceConfirmation = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
@@ -750,7 +686,7 @@ async def check_status_of_inference_request_results_endpoint(inference_response_
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.post("/retrieve_inference_output_results", response_model=db.InferenceOutputResultsModel)
+@router.post("/retrieve_inference_output_results", response_model=db.InferenceAPIOutputResult)
 async def retrieve_inference_output_results_endpoint(
     inference_response_id: str = Query(..., description="The ResponseID Associated with the Inference Request"),
     pastelid: str = Query(..., description="The PastelID of the requesting party"),
@@ -768,7 +704,7 @@ async def retrieve_inference_output_results_endpoint(
         inference_output_results_dict = inference_output_results.dict()
         # Retrieve the inference API usage request from the database
         inference_usage_request_object = await service_functions.get_inference_api_usage_request_for_audit(inference_output_results_dict['inference_request_id'])
-        inference_usage_request_dict = inference_usage_request_object.to_dict()
+        inference_usage_request_dict = inference_usage_request_object.dict()
         # Add model_parameters_json and other fields to the inference output results dict:
         inference_output_results_dict['model_parameters_json'] = inference_usage_request_dict['model_parameters_json']
         inference_output_results_dict['requested_model_canonical_string'] = inference_usage_request_dict['requested_model_canonical_string']
@@ -784,43 +720,7 @@ async def retrieve_inference_output_results_endpoint(
         raise HTTPException(status_code=500, detail=f"Error retrieving inference output results: {str(e)}")
     
 
-@router.post("/audit_inference_request_response", response_model=db.InferenceAPIUsageResponseModel)
-async def audit_inference_request_response_endpoint(
-    inference_response_id: str = Body(..., description="The inference response ID"),
-    pastel_id: str = Body(..., description="The PastelID of the requester"),
-    signature: str = Body(..., description="The signature of the PastelID on the inference_response_id"),
-    rpc_connection=Depends(get_rpc_connection),
-):
-    try:
-        # Retrieve the InferenceAPIUsageResponse from the local database
-        response = await service_functions.get_inference_api_usage_response_for_audit(inference_response_id)
-        if response is None:
-            raise HTTPException(status_code=404, detail="Inference response not found")
-        # Verify the signature
-        is_valid_signature = await service_functions.verify_message_with_pastelid_func(pastel_id, inference_response_id, signature)
-        if not is_valid_signature:
-            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        request = await service_functions.get_inference_api_usage_request_for_audit(response.inference_request_id)
-        # Verify that the PastelID matches the one in the response
-        if request.requesting_pastelid != pastel_id:
-            raise HTTPException(status_code=403, detail="PastelID does not match the one in the inference request")
-        # Return the InferenceAPIUsageResponse as the API response
-        return db.InferenceAPIUsageResponseModel(
-            inference_response_id=response.inference_response_id,
-            inference_request_id=response.inference_request_id,
-            proposed_cost_of_request_in_inference_credits=response.proposed_cost_of_request_in_inference_credits,
-            remaining_credits_in_pack_after_request_processed=response.remaining_credits_in_pack_after_request_processed,
-            credit_usage_tracking_psl_address=response.credit_usage_tracking_psl_address,
-            request_confirmation_message_amount_in_patoshis=response.request_confirmation_message_amount_in_patoshis,
-            max_block_height_to_include_confirmation_transaction=response.max_block_height_to_include_confirmation_transaction,
-            supernode_pastelid_and_signature_on_inference_response_id=response.supernode_pastelid_and_signature_on_inference_response_id
-        )
-    except Exception as e:
-        logger.error(f"Error auditing inference request response: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error auditing inference request response: {str(e)}")
-
-
-@router.post("/audit_inference_request_result", response_model=db.InferenceOutputResultsModel)
+@router.post("/audit_inference_request_response", response_model=db.InferenceAPIUsageResponse)
 async def audit_inference_request_result_endpoint(
     inference_response_id: str = Body(..., description="The inference response ID"),
     pastel_id: str = Body(..., description="The PastelID of the requester"),
@@ -841,15 +741,7 @@ async def audit_inference_request_result_endpoint(
         if request.requesting_pastelid != pastel_id:
             raise HTTPException(status_code=403, detail="PastelID does not match the one in the inference request")
         # Return the InferenceAPIOutputResult as the API response
-        return db.InferenceOutputResultsModel(
-            inference_result_id=result.inference_result_id,
-            inference_request_id=result.inference_request_id,
-            inference_response_id=result.inference_response_id,
-            responding_supernode_pastelid=result.responding_supernode_pastelid,
-            inference_result_json_base64=result.inference_result_json_base64,
-            inference_result_file_type_strings=result.inference_result_file_type_strings,
-            responding_supernode_signature_on_inference_result_id=result.responding_supernode_signature_on_inference_result_id
-        )
+        return result
     except Exception as e:
         logger.error(f"Error auditing inference request result: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error auditing inference request result: {str(e)}")
@@ -865,12 +757,11 @@ async def get_inference_model_menu_endpoint(
 
 @router.post("/update_inference_sn_reputation_score")
 async def update_inference_sn_reputation_score_endpoint(
-    reputation_score_data: db.ReputationScoreUpdateModel,
+    reputation_score_data: db.ReputationScoreUpdate,
     rpc_connection=Depends(get_rpc_connection),
 ):
     is_updated = await service_functions.update_inference_sn_reputation_score(reputation_score_data.supernode_pastelid, reputation_score_data.reputation_score)
     return {"is_updated": is_updated}
-
 
 @router.get("/show_logs/{minutes}", response_class=HTMLResponse)
 async def show_logs(minutes: int = 5):

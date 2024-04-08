@@ -7,12 +7,14 @@ import io
 import random
 from decimal import Decimal
 from binascii import hexlify
-import zstd
+import zstandard as zstd
 import asyncio
 import base64
 import json
 import urllib.parse as urlparse
 import httpx
+from logger_config import setup_logger
+logger = setup_logger()
 
 def unhexstr(str):
     return binascii.unhexlify(str.encode('utf8'))
@@ -23,7 +25,7 @@ class JSONRPCException(Exception):
         try:
             parent_args.append(rpc_error['message'])
         except Exception as e:
-            print(f"Error occurred in JSONRPCException: {e}")
+            logger.info(f"Error occurred in JSONRPCException: {e}")
             pass
         Exception.__init__(self, *parent_args)
         self.error = rpc_error
@@ -82,22 +84,22 @@ class AsyncAuthServiceProxy:
             for i in range(self.reconnect_amount):
                 try:
                     if i > 0:
-                        print(f"Reconnect try #{i+1}")
+                        logger.info(f"Reconnect try #{i+1}")
                         sleep_time = self.reconnect_timeout * (2 ** i)
-                        print(f"Waiting for {sleep_time} seconds before retrying.")
+                        logger.info(f"Waiting for {sleep_time} seconds before retrying.")
                         await asyncio.sleep(sleep_time)
                     async with httpx.AsyncClient() as client:
                         response = await client.post(self.service_url, headers=headers, data=postdata)
                     break
                 except Exception as e:
-                    print(f"Error occurred in __call__: {e}")
+                    logger.info(f"Error occurred in __call__: {e}")
                     err_msg = f"Failed to connect to {self.url.hostname}:{self.url.port}"
                     rtm = self.reconnect_timeout
                     if rtm:
                         err_msg += f". Waiting {rtm} seconds."
-                    print(err_msg)
+                    logger.error(err_msg)
             else:
-                print("Reconnect tries exceeded.")
+                logger.error("Reconnect tries exceeded.")
                 return
             response_json = response.json()
             if response_json['error'] is not None:
@@ -231,13 +233,11 @@ class BlockchainUTXOStorage:
         compressed_data = self.compress_data(input_data)
         uncompressed_data_hash = self.get_raw_sha256_hash(input_data)
         compressed_data_hash = self.get_raw_sha256_hash(compressed_data)
-
         (txins, change) = await self.select_txins(0)
         txouts = []
         encoded_compressed_data = hexlify(compressed_data)
         length_of_compressed_data_string = '{0:015}'.format(len(encoded_compressed_data)).encode('utf-8')
         combined_data_hex = hexlify(length_of_compressed_data_string) + hexlify(uncompressed_data_hash) + hexlify(compressed_data_hash) + encoded_compressed_data + hexlify(('0' * 100).encode('utf-8'))
-
         fd = io.BytesIO(combined_data_hex)
         while True:
             scriptPubKey = self.checkmultisig_scriptPubKey_dump(fd)
@@ -246,32 +246,26 @@ class BlockchainUTXOStorage:
             value = Decimal(1 / self.coin)
             txouts.append((value, scriptPubKey))
             change -= value
-
         out_value = Decimal(self.base_transaction_amount)
         change -= out_value
         receiving_address = await self.rpc_connection.getnewaddress()
         txouts.append((out_value, self.op_dup + self.op_hash160 + self.pushdata(self.addr2bytes(receiving_address)) + self.op_equalverify + self.op_checksig))
-
         change_address = await self.rpc_connection.getnewaddress()
         txouts.append([change, self.op_dup + self.op_hash160 + self.pushdata(self.addr2bytes(change_address)) + self.op_equalverify + self.op_checksig])
-
         tx = self.packtx(txins, txouts)
         signed_tx = await self.rpc_connection.signrawtransaction(hexlify(tx).decode('utf-8'))
-
         fee = Decimal(len(signed_tx['hex']) / 1000) * self.fee_per_kb
         change -= fee
         txouts[-1][0] = change
-
         final_tx = self.packtx(txins, txouts)
         signed_tx = await self.rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
         assert signed_tx['complete']
         hex_signed_transaction = signed_tx['hex']
-
-        print('Sending data transaction to address:', receiving_address)
-        print('Size: %d  Fee: %2.8f' % (len(hex_signed_transaction) / 2, fee), file=sys.stderr)
+        logger.info('Sending data transaction to address:', receiving_address)
+        logger.info('Size: %d  Fee: %2.8f' % (len(hex_signed_transaction) / 2, fee), file=sys.stderr)
         send_raw_transaction_result = await self.rpc_connection.sendrawtransaction(hex_signed_transaction)
         blockchain_transaction_id = send_raw_transaction_result
-        print('Transaction ID:', blockchain_transaction_id)
+        logger.info('Transaction ID:', blockchain_transaction_id)
         return blockchain_transaction_id
 
     async def retrieve_data(self, blockchain_transaction_id):
@@ -286,31 +280,25 @@ class BlockchainUTXOStorage:
             cur += 132
             encoded_hex_data += output[cur:cur+130]
         encoded_hex_data += outputs[-2][6:-4]
-
         reconstructed_combined_data = binascii.a2b_hex(encoded_hex_data).decode('utf-8')
         reconstructed_length_of_compressed_data_hex_string = reconstructed_combined_data[0:30]
         reconstructed_length_of_compressed_data_hex_string = int(unhexstr(reconstructed_length_of_compressed_data_hex_string).decode('utf-8').lstrip('0'))
         reconstructed_combined_data__remainder_1 = reconstructed_combined_data[30:]
-
         length_of_standard_hash_string = len(self.get_sha256_hash('test'))
         reconstructed_uncompressed_data_hash = reconstructed_combined_data__remainder_1[0:length_of_standard_hash_string]
         reconstructed_combined_data__remainder_2 = reconstructed_combined_data__remainder_1[length_of_standard_hash_string:]
         reconstructed_compressed_data_hash = reconstructed_combined_data__remainder_2[0:length_of_standard_hash_string]
         reconstructed_combined_data__remainder_3 = reconstructed_combined_data__remainder_2[length_of_standard_hash_string:]
-
         reconstructed_encoded_compressed_data_padded = reconstructed_combined_data__remainder_3.replace('A', '')
         calculated_padding_length = len(reconstructed_encoded_compressed_data_padded) - reconstructed_length_of_compressed_data_hex_string
         reconstructed_encoded_compressed_data = reconstructed_encoded_compressed_data_padded[0:-calculated_padding_length]
         reconstructed_compressed_data = unhexstr(reconstructed_encoded_compressed_data)
-
         hash_of_reconstructed_compressed_data = self.get_sha256_hash(reconstructed_compressed_data)
         assert hash_of_reconstructed_compressed_data == reconstructed_compressed_data_hash
-
         reconstructed_uncompressed_data = self.decompress_data(reconstructed_compressed_data)
         hash_of_reconstructed_uncompressed_data = self.get_sha256_hash(reconstructed_uncompressed_data)
         assert hash_of_reconstructed_uncompressed_data == reconstructed_uncompressed_data_hash
-
-        print('Successfully reconstructed and decompressed data!')
+        logger.info('Successfully reconstructed and decompressed data!')
         return reconstructed_uncompressed_data
     
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
@@ -338,20 +326,19 @@ def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~
             current_value = line.strip().split('=')[1].strip()
             other_flags[current_flag] = current_value
     return rpchost, rpcport, rpcuser, rpcpassword, other_flags
-                
-# Usage example:
-async def main():
-    rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
-    base_transaction_amount = 0.000001
-    fee_per_kb = Decimal(0.0001)
 
-    storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, base_transaction_amount, fee_per_kb)
+use_demonstrate_blockchain_data_storage = 0
+if use_demonstrate_blockchain_data_storage:                
+    # Usage example:
+    async def main():
+        rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
+        base_transaction_amount = 0.000001
+        fee_per_kb = Decimal(0.0001)
+        storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, base_transaction_amount, fee_per_kb)
+        input_data = 'Your data to store in the blockchain'
+        transaction_id = await storage.store_data(input_data)
+        retrieved_data = await storage.retrieve_data(transaction_id)
+        logger.info('Retrieved data:', retrieved_data.decode('utf-8'))
 
-    input_data = 'Your data to store in the blockchain'
-    transaction_id = await storage.store_data(input_data)
-
-    retrieved_data = await storage.retrieve_data(transaction_id)
-    print('Retrieved data:', retrieved_data.decode('utf-8'))
-
-if __name__ == '__main__':
-    asyncio.run(main())
+    if __name__ == '__main__':
+        asyncio.run(main())

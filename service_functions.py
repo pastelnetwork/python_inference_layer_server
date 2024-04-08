@@ -14,7 +14,7 @@ import re
 import html
 import warnings
 from urllib.parse import quote_plus, unquote_plus
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import pandas as pd
 import httpx
 from httpx import AsyncClient, Limits, Timeout
@@ -22,7 +22,6 @@ import urllib.parse as urlparse
 from logger_config import setup_logger
 from blockchain_ticket_storage import BlockchainUTXOStorage
 import zstandard as zstd
-from sqlalchemy import select, func
 from sqlalchemy.exc import OperationalError, InvalidRequestError
 from typing import List, Tuple, Dict
 from decouple import Config as DecoupleConfig, RepositoryEnv
@@ -35,12 +34,8 @@ from mistralai.models.chat_completion import ChatMessage
 from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
-from database_code import (AsyncSessionLocal, Message, MessageMetadata, MessageSenderMetadata, MessageReceiverMetadata, MessageSenderReceiverMetadata,
-                        InferenceAPIUsageRequest, InferenceAPIUsageResponse, InferenceAPIOutputResult, UserMessage, SupernodeUserMessage, InferenceAPIUsageRequestModel, InferenceConfirmationModel, InferenceOutputResultsModel,
-                        CreditPackPurchaseRequestModel, CreditPackPurchaseRequestRejectionModel, CreditPackPurchaseRequestPreliminaryPriceQuote, CreditPackPurchaseRequestPreliminaryPriceQuoteResponse, CreditPackPurchasePriceAgreementRequestModel,
-                        CreditPackPurchasePriceAgreementRequestResponseModel, CreditPackRequestStatusCheckModel, CreditPackPurchaseRequestResponseTerminationModel, CreditPackPurchaseRequestResponseModel, CreditPackPurchaseRequestConfirmationModel,
-                        CreditPackPurchaseRequestConfirmationResponseModel, CreditPackStorageRetryRequestModel, CreditPackStorageRetryRequestResponseModel, CreditPackPurchaseRequestResponse, CreditPackPurchaseRequest, CreditPackPurchaseRequestConfirmation,
-                        CreditPackPurchaseRequestConfirmationResponse, CreditPackPurchaseRequestStatusModel)
+import database_code as db_code
+from sqlmodel import select, func, SQLModel
 
 encryption_key = None
 magika = Magika()
@@ -149,6 +144,8 @@ GITHUB_MODEL_MENU_URL = config.get("GITHUB_MODEL_MENU_URL")
 CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_SECONDS", default=300, cast=int)
 SWISS_ARMY_LLAMA_PORT = config.get("SWISS_ARMY_LLAMA_PORT", default=8089, cast=int)
 CREDIT_COST_MULTIPLIER_FACTOR = config.get("CREDIT_COST_MULTIPLIER_FACTOR", default=0.1, cast=float)
+BASE_TRANSACTION_AMOUNT = config.get("BASE_TRANSACTION_AMOUNT", default=0.000001, cast=float)
+FEE_PER_KB = config.get("FEE_PER_KB", default=0.0001, cast=float)
 MESSAGING_TIMEOUT_IN_SECONDS = config.get("MESSAGING_TIMEOUT_IN_SECONDS", default=60, cast=int)
 API_KEY_TESTS_FILE = "api_key_tests.json"
 API_KEY_TEST_VALIDITY_HOURS = config.get("API_KEY_TEST_VALIDITY_HOURS", default=72, cast=int)
@@ -156,6 +153,8 @@ TARGET_VALUE_PER_CREDIT_IN_USD = config.get("TARGET_VALUE_PER_CREDIT_IN_USD", de
 TARGET_PROFIT_MARGIN = config.get("TARGET_PROFIT_MARGIN", default=0.1, cast=float)
 MINIMUM_COST_IN_CREDITS = config.get("MINIMUM_COST_IN_CREDITS", default=0.1, cast=float)
 CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER = config.get("CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER", default=10, cast=int) # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis     
+MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET = config.get("MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET", default=50, cast=int)
+MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
 challenge_store = {}
 
 def parse_timestamp(timestamp_str):
@@ -505,11 +504,10 @@ async def verify_challenge_signature(pastelid: str, signature: str, challenge_id
     
 async def verify_challenge_signature_from_inference_request_id(inference_request_id: str, challenge_signature: str, challenge_id: str) -> bool:
     # Retrieve the inference API usage request from the database
-    async with AsyncSessionLocal() as db:
-        inference_request = await db.execute(
-            select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
-        )
-        inference_request = inference_request.scalar_one_or_none()    
+    with db_code.Session() as db:
+        inference_request = db.exec(
+            select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_request_id)
+        ).one_or_none()
     requesting_pastelid = inference_request.requesting_pastelid
     is_valid_signature = await verify_challenge_signature(requesting_pastelid, challenge_signature, challenge_id)
     return is_valid_signature
@@ -560,7 +558,6 @@ async def get_local_machine_supernode_data_func():
         logger.error('Local machine is not a supernode!')
         return 0, 0, 0, 0
     else:
-        # logger.info('Local machine is a supernode!')
         local_sn_rank = local_machine_supernode_data['rank'].values[0]
         local_sn_pastelid = local_machine_supernode_data['extKey'].values[0]
     return local_machine_supernode_data, local_sn_rank, local_sn_pastelid, local_machine_ip_with_proper_port
@@ -605,10 +602,13 @@ async def list_sn_messages_func():
     datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
     supernode_list_df, _ = await check_supernode_list_func()
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
-    async with AsyncSessionLocal() as db:
+    with db_code.Session() as db:
         # Retrieve messages from the database that meet the timestamp criteria
-        result = await db.execute(select(Message).where(Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages).order_by(Message.timestamp.desc()))
-        db_messages = result.scalars().all()
+        db_messages = db.exec(
+            select(db_code.Message)
+            .where(db_code.Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages)
+            .order_by(db_code.Message.timestamp.desc())
+        ).all()
         existing_messages = {(message.sending_sn_pastelid, message.receiving_sn_pastelid, message.timestamp) for message in db_messages}
     # Retrieve new messages from the RPC interface
     new_messages = await rpc_connection.masternode('message', 'list')
@@ -859,11 +859,12 @@ async def retry_on_database_locked(func, *args, max_retries=5, initial_delay=1, 
             else:
                 raise
             
+
 async def process_broadcast_messages(message, db_session):
     message_body = json.loads(message.message_body)
     if message.message_type == 'inference_request_response_announcement_message':
         response_data = json.loads(message_body['message'])
-        usage_request = InferenceAPIUsageRequest(
+        usage_request = db_code.InferenceAPIUsageRequest(
             inference_request_id=response_data['inference_request_id'],
             requesting_pastelid=response_data['requesting_pastelid'],
             credit_pack_identifier=response_data['credit_pack_identifier'],
@@ -872,7 +873,7 @@ async def process_broadcast_messages(message, db_session):
             model_parameters_json=response_data['model_parameters_json'],
             model_input_data_json_b64=response_data['model_input_data_json_b64'],
         )
-        usage_response = InferenceAPIUsageResponse(
+        usage_response = db_code.InferenceAPIUsageResponse(
             inference_response_id=response_data['inference_response_id'],
             inference_request_id=response_data['inference_request_id'],
             proposed_cost_of_request_in_inference_credits=response_data['proposed_cost_of_request_in_inference_credits'],
@@ -890,7 +891,7 @@ async def process_broadcast_messages(message, db_session):
         await retry_on_database_locked(db_session.refresh, usage_response)
     elif message.message_type == 'inference_request_result_announcement_message':
         result_data = json.loads(message_body['message'])
-        output_result = InferenceAPIOutputResult(
+        output_result = db_code.InferenceAPIOutputResult(
             inference_result_id=result_data['inference_result_id'],
             inference_request_id=result_data['inference_request_id'],
             inference_response_id=result_data['inference_response_id'],
@@ -908,10 +909,9 @@ async def monitor_new_messages():
     last_processed_timestamp = None
     while True:
         try:
-            async with AsyncSessionLocal() as db:
+            with db_code.Session() as db:
                 if last_processed_timestamp is None:
-                    result = await db.execute(select(Message.timestamp).order_by(Message.timestamp.desc()).limit(1))
-                    last_processed_timestamp_raw = result.scalar_one_or_none()
+                    last_processed_timestamp_raw = db.exec(select(db_code.Message.timestamp).order_by(db_code.Message.timestamp.desc()).limit(1)).one_or_none()
                     if last_processed_timestamp_raw is None:
                         last_processed_timestamp = pd.Timestamp.min
                     else:
@@ -921,14 +921,13 @@ async def monitor_new_messages():
                     new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
                     if not new_messages_df.empty:
                         for _, message in new_messages_df.iterrows():
-                            result = await db.execute(
-                                select(Message).where(
-                                    Message.sending_sn_pastelid == message['sending_sn_pastelid'],
-                                    Message.receiving_sn_pastelid == message['receiving_sn_pastelid'],
-                                    Message.timestamp == message['timestamp']
+                            existing_message = db.exec(
+                                select(db_code.Message).where(
+                                    db_code.Message.sending_sn_pastelid == message['sending_sn_pastelid'],
+                                    db_code.Message.receiving_sn_pastelid == message['receiving_sn_pastelid'],
+                                    db_code.Message.timestamp == message['timestamp']
                                 )
-                            )
-                            existing_message = result.scalar_one_or_none()
+                            ).one_or_none()
                             if existing_message:
                                 continue
                             logger.info(f"New message received: {message['message_body']}")
@@ -938,17 +937,16 @@ async def monitor_new_messages():
                             message_size_bytes = len(message['message_body'].encode('utf-8'))
                             await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before updating metadata                            
                             # Update MessageSenderMetadata
-                            result = await db.execute(
-                                select(MessageSenderMetadata).where(MessageSenderMetadata.sending_sn_pastelid == sending_sn_pastelid)
-                            )
-                            sender_metadata = result.scalar_one_or_none()
+                            sender_metadata = db.exec(
+                                select(db_code.MessageSenderMetadata).where(db_code.MessageSenderMetadata.sending_sn_pastelid == sending_sn_pastelid)
+                            ).one_or_none()
                             if sender_metadata:
                                 sender_metadata.total_messages_sent += 1
                                 sender_metadata.total_data_sent_bytes += message_size_bytes
                                 sender_metadata.sending_sn_txid_vout = message['sending_sn_txid_vout']
                                 sender_metadata.sending_sn_pubkey = message['signature']
                             else:
-                                sender_metadata = MessageSenderMetadata(
+                                sender_metadata = db_code.MessageSenderMetadata(
                                     sending_sn_pastelid=sending_sn_pastelid,
                                     total_messages_sent=1,
                                     total_data_sent_bytes=message_size_bytes,
@@ -957,16 +955,15 @@ async def monitor_new_messages():
                                 )
                                 db.add(sender_metadata)
                             # Update MessageReceiverMetadata
-                            result = await db.execute(
-                                select(MessageReceiverMetadata).where(MessageReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid)
-                            )
-                            receiver_metadata = result.scalar_one_or_none()
+                            receiver_metadata = db.exec(
+                                select(db_code.MessageReceiverMetadata).where(db_code.MessageReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid)
+                            ).one_or_none()
                             if receiver_metadata:
                                 receiver_metadata.total_messages_received += 1
                                 receiver_metadata.total_data_received_bytes += message_size_bytes
                                 receiver_metadata.receiving_sn_txid_vout = message['receiving_sn_txid_vout']
                             else:
-                                receiver_metadata = MessageReceiverMetadata(
+                                receiver_metadata = db_code.MessageReceiverMetadata(
                                     receiving_sn_pastelid=receiving_sn_pastelid,
                                     total_messages_received=1,
                                     total_data_received_bytes=message_size_bytes,
@@ -974,18 +971,17 @@ async def monitor_new_messages():
                                 )
                                 db.add(receiver_metadata)
                             # Update MessageSenderReceiverMetadata
-                            result = await db.execute(
-                                select(MessageSenderReceiverMetadata).where(
-                                    MessageSenderReceiverMetadata.sending_sn_pastelid == sending_sn_pastelid,
-                                    MessageSenderReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid
+                            sender_receiver_metadata = db.exec(
+                                select(db_code.MessageSenderReceiverMetadata).where(
+                                    db_code.MessageSenderReceiverMetadata.sending_sn_pastelid == sending_sn_pastelid,
+                                    db_code.MessageSenderReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid
                                 )
-                            )
-                            sender_receiver_metadata = result.scalar_one_or_none()
+                            ).one_or_none()
                             if sender_receiver_metadata:
                                 sender_receiver_metadata.total_messages += 1
                                 sender_receiver_metadata.total_data_bytes += message_size_bytes
                             else:
-                                sender_receiver_metadata = MessageSenderReceiverMetadata(
+                                sender_receiver_metadata = db_code.MessageSenderReceiverMetadata(
                                     sending_sn_pastelid=sending_sn_pastelid,
                                     receiving_sn_pastelid=receiving_sn_pastelid,
                                     total_messages=1,
@@ -993,7 +989,7 @@ async def monitor_new_messages():
                                 )
                                 db.add(sender_receiver_metadata)
                             new_messages = [
-                                Message(
+                                db_code.Message(
                                     sending_sn_pastelid=row['sending_sn_pastelid'],
                                     receiving_sn_pastelid=row['receiving_sn_pastelid'],
                                     message_type=row['message_type'],
@@ -1009,22 +1005,20 @@ async def monitor_new_messages():
                             await retry_on_database_locked(db.add_all, new_messages)
                             await retry_on_database_locked(db.commit)  # Commit the transaction for adding new messages
                             # Update overall MessageMetadata
-                            result = await db.execute(
+                            total_messages, total_senders, total_receivers = db.exec(
                                 select(
-                                    func.count(Message.id),
-                                    func.count(func.distinct(Message.sending_sn_pastelid)),
-                                    func.count(func.distinct(Message.receiving_sn_pastelid))
+                                    func.count(db_code.Message.id),
+                                    func.count(func.distinct(db_code.Message.sending_sn_pastelid)),
+                                    func.count(func.distinct(db_code.Message.receiving_sn_pastelid))
                                 )
-                            )
-                            total_messages, total_senders, total_receivers = (result.first())
-                            result = await db.execute(select(MessageMetadata).order_by(MessageMetadata.timestamp.desc()).limit(1))
-                            message_metadata = result.scalar_one_or_none()
+                            ).one()
+                            message_metadata = db.exec(select(db_code.MessageMetadata).order_by(db_code.MessageMetadata.timestamp.desc()).limit(1)).one_or_none()
                             if message_metadata:
                                 message_metadata.total_messages = total_messages
                                 message_metadata.total_senders = total_senders
                                 message_metadata.total_receivers = total_receivers
                             else:
-                                message_metadata = MessageMetadata(
+                                message_metadata = db_code.MessageMetadata(
                                     total_messages=total_messages,
                                     total_senders=total_senders,
                                     total_receivers=total_receivers
@@ -1043,20 +1037,19 @@ async def monitor_new_messages():
             logger.error(f"Error while monitoring new messages: {str(e)}")
             await asyncio.sleep(5)
         finally:
-            await db.close()  # Close the session explicitly
             await asyncio.sleep(5)            
             
 async def create_user_message(from_pastelid: str, to_pastelid: str, message_body: str, message_signature: str) -> dict:
-    async with AsyncSessionLocal() as db:
-        user_message = UserMessage(from_pastelid=from_pastelid, to_pastelid=to_pastelid, message_body=message_body, message_signature=message_signature)
+    with db_code.Session() as db:
+        user_message = db_code.UserMessage(from_pastelid=from_pastelid, to_pastelid=to_pastelid, message_body=message_body, message_signature=message_signature)
         db.add(user_message)
-        await db.commit()
-        await db.refresh(user_message)
-        return user_message.to_dict()  # Assuming you have a to_dict method or similar to serialize your model
+        db.commit()
+        db.refresh(user_message)
+        return user_message.dict()  # Assuming you have a dict method or similar to serialize your model
 
 async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_pastelid: str, user_message_data: dict) -> dict:
-    async with AsyncSessionLocal() as db:
-        supernode_user_message = SupernodeUserMessage(
+    with db_code.Session() as db:
+        supernode_user_message = db_code.SupernodeUserMessage(
             message_body=user_message_data['message_body'],
             message_type="user_message",
             sending_sn_pastelid=sending_sn_pastelid,
@@ -1066,9 +1059,9 @@ async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_p
             user_message_id=user_message_data['id']
         )
         db.add(supernode_user_message)
-        await db.commit()
-        await db.refresh(supernode_user_message)
-        return supernode_user_message.to_dict() 
+        db.commit()
+        db.refresh(supernode_user_message)
+        return supernode_user_message.dict()
 
 async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str, message_body: str, message_signature: str) -> dict:
     user_message_data = await create_user_message(from_pastelid, to_pastelid, message_body, message_signature)
@@ -1122,11 +1115,11 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
         message_dicts.append(message_dict)
     return message_dicts
 
-async def process_received_user_message(supernode_user_message: SupernodeUserMessage):
-    async with AsyncSessionLocal() as db:
-        user_message = await db.get(UserMessage, supernode_user_message.user_message_id)
+async def process_received_user_message(supernode_user_message: db_code.SupernodeUserMessage):
+    with db_code.Session() as db:
+        user_message = db.exec(select(db_code.UserMessage).where(db_code.UserMessage.id == supernode_user_message.user_message_id)).one_or_none()
         if user_message:
-            verification_status = await verify_message_with_pastelid_func(user_message.from_pastelid, user_message.message_body, user_message.signature)
+            verification_status = await verify_message_with_pastelid_func(user_message.from_pastelid, user_message.message_body, user_message.message_signature)
             if verification_status == 'OK':
                 # Process the user message (e.g., store it, forward it to the recipient, etc.)
                 logger.info(f"Received and verified user message from {user_message.from_pastelid} to {user_message.to_pastelid}")
@@ -1135,52 +1128,131 @@ async def process_received_user_message(supernode_user_message: SupernodeUserMes
         else:
             logger.warning(f"Received SupernodeUserMessage (id: {supernode_user_message.id}), but the associated UserMessage was not found")
 
-async def get_user_messages_for_pastelid(pastelid: str) -> List[UserMessage]:
-    async with AsyncSessionLocal() as db:
-        user_messages = await db.execute(select(UserMessage).where((UserMessage.from_pastelid == pastelid) | (UserMessage.to_pastelid == pastelid)))
-        return user_messages.scalars().all()
-            
+async def get_user_messages_for_pastelid(pastelid: str) -> List[db_code.UserMessage]:
+    with db_code.Session() as db:
+        user_messages = db.exec(select(db_code.UserMessage).where((db_code.UserMessage.from_pastelid == pastelid) | (db_code.UserMessage.to_pastelid == pastelid))).all()
+        return user_messages
             
 #________________________________________________________________________________________________________________            
 # Credit pack related service functions:
 
-
-async def get_credit_pack_purchase_request(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> CreditPackPurchaseRequest:
-    async with AsyncSessionLocal() as db_session:
-        result = await db_session.execute(
-            select(CreditPackPurchaseRequest).where(CreditPackPurchaseRequest.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
+async def get_credit_pack_purchase_request(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> db_code.CreditPackPurchaseRequest:
+    with db_code.Session() as db_session:
+        result = db_session.exec(
+            select(db_code.CreditPackPurchaseRequest).where(db_code.CreditPackPurchaseRequest.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
         )
-        return result.scalar_one_or_none()
+        return result.one_or_none()
 
-async def get_credit_pack_purchase_request_response(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> CreditPackPurchaseRequestResponse:
-    async with AsyncSessionLocal() as db_session:
-        result = await db_session.execute(
-            select(CreditPackPurchaseRequestResponse).where(CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == sha3_256_hash_of_credit_pack_purchase_request_response_fields)
-        )
-        return result.scalar_one_or_none()
+async def save_credit_pack_purchase_request(credit_pack_purchase_request: db_code.CreditPackPurchaseRequest) -> None:
+    with db_code.Session() as db_session:
+        db_session.add(credit_pack_purchase_request)
+        db_session.commit()
 
-async def check_credit_pack_purchase_request_status(credit_pack_purchase_request: CreditPackPurchaseRequest) -> str:
-    async with AsyncSessionLocal() as db_session:
-        response = await db_session.execute(
-            select(CreditPackPurchaseRequestResponse).where(CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_fields == credit_pack_purchase_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
+async def get_credit_pack_purchase_request_response(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> db_code.CreditPackPurchaseRequestResponse:
+    with db_code.Session() as db_session:
+        result = db_session.exec(
+            select(db_code.CreditPackPurchaseRequestResponse).where(db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == sha3_256_hash_of_credit_pack_purchase_request_response_fields)
         )
-        response = response.scalar_one_or_none()
+        return result.one_or_none()
+
+async def save_credit_pack_purchase_request_response(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse) -> None:
+    with db_code.Session() as db_session:
+        db_session.add(credit_pack_purchase_request_response)
+        db_session.commit()
+
+async def get_credit_pack_purchase_request_rejection(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> db_code.CreditPackPurchaseRequestRejection:
+    with db_code.Session() as db_session:
+        result = db_session.exec(
+            select(db_code.CreditPackPurchaseRequestRejection).where(db_code.CreditPackPurchaseRequestRejection.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
+        )
+        return result.one_or_none()
+
+async def save_credit_pack_purchase_request_rejection(credit_pack_purchase_request_rejection: db_code.CreditPackPurchaseRequestRejection) -> None:
+    with db_code.Session() as db_session:
+        db_session.add(credit_pack_purchase_request_rejection)
+        db_session.commit()
+
+async def get_credit_pack_purchase_request_response_termination(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> db_code.CreditPackPurchaseRequestResponseTermination:
+    with db_code.Session() as db_session:
+        result = db_session.exec(
+            select(db_code.CreditPackPurchaseRequestResponseTermination).where(db_code.CreditPackPurchaseRequestResponseTermination.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
+        )
+        return result.one_or_none()
+
+async def save_credit_pack_purchase_request_response_termination(credit_pack_purchase_request_response_termination: db_code.CreditPackPurchaseRequestResponseTermination) -> None:
+    with db_code.Session() as db_session:
+        db_session.add(credit_pack_purchase_request_response_termination)
+        db_session.commit()
+
+async def get_credit_pack_purchase_request_confirmation(sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str) -> db_code.CreditPackPurchaseRequestConfirmation:
+    with db_code.Session() as db_session:
+        result = db_session.exec(
+            select(db_code.CreditPackPurchaseRequestConfirmation).where(db_code.CreditPackPurchaseRequestConfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields == sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
+        )
+        return result.one_or_none()
+
+async def save_credit_pack_purchase_request_confirmation(credit_pack_purchase_request_confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> None:
+    with db_code.Session() as db_session:
+        db_session.add(credit_pack_purchase_request_confirmation)
+        db_session.commit()
+
+async def get_credit_pack_purchase_request_confirmation_response(sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields: str) -> db_code.CreditPackPurchaseRequestConfirmationResponse:
+    with db_code.Session() as db_session:
+        result = db_session.exec(
+            select(db_code.CreditPackPurchaseRequestConfirmationResponse).where(db_code.CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields == sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields)
+        )
+        return result.one_or_none()
+
+async def save_credit_pack_purchase_request_confirmation_response(credit_pack_purchase_request_confirmation_response: db_code.CreditPackPurchaseRequestConfirmationResponse) -> None:
+    with db_code.Session() as db_session:
+        db_session.add(credit_pack_purchase_request_confirmation_response)
+        db_session.commit()
+
+# async def save_credit_pack_storage_completion_announcement(response: CreditPackPurchaseRequestConfirmationResponseModel) -> None:
+#     try:
+#         # Store the credit pack storage completion announcement
+#         # Implement your own storage logic here
+#         # For example, you can use a database or a key-value store
+        
+#         # Placeholder logic: print the response
+#         logger.info(f"Storing credit pack storage completion announcement: {response.json()}")
+#     except Exception as e:
+#         logger.error(f"Error storing credit pack storage completion announcement: {str(e)}")
+#         raise
+
+# async def get_original_supernode_storage_confirmation(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> bool:
+#     try:
+#         # Check if the original responding supernode has confirmed the storage
+#         # Implement your own logic here to verify the storage confirmation
+#         # For example, you can check a database or a key-value store
+        
+#         # Placeholder logic: return False
+#         original_supernode_confirmed_storage = False
+        
+#         return original_supernode_confirmed_storage
+#     except Exception as e:
+#         logger.error(f"Error checking original supernode storage confirmation: {str(e)}")
+#         raise
+
+async def check_credit_pack_purchase_request_status(credit_pack_purchase_request: db_code.CreditPackPurchaseRequest) -> str:
+    with db_code.Session() as db:
+        response = db.exec(
+            select(db_code.CreditPackPurchaseRequestResponse).where(db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_fields == credit_pack_purchase_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
+        ).one_or_none()
 
         if response is None:
             return "pending"
         else:
-            confirmation = await db_session.execute(
-                select(CreditPackPurchaseRequestConfirmation).where(CreditPackPurchaseRequestConfirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields == response.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
-            )
-            confirmation = confirmation.scalar_one_or_none()
+            confirmation = db.exec(
+                select(db_code.CreditPackPurchaseRequestConfirmation).where(db_code.CreditPackPurchaseRequestConfirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields == response.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
+            ).one_or_none()
 
             if confirmation is None:
                 return "approved"
             else:
-                confirmation_response = await db_session.execute(
-                    select(CreditPackPurchaseRequestConfirmationResponse).where(CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields == confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
-                )
-                confirmation_response = confirmation_response.scalar_one_or_none()
+                confirmation_response = db.exec(
+                    select(db_code.CreditPackPurchaseRequestConfirmationResponse).where(db_code.CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields == confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
+                ).one_or_none()
 
                 if confirmation_response is None:
                     return "confirmed"
@@ -1190,28 +1262,12 @@ async def check_credit_pack_purchase_request_status(credit_pack_purchase_request
                     else:
                         return "failed"
 
-async def store_credit_pack_purchase_request_final_response(response: CreditPackPurchaseRequestResponse) -> None:
-    async with AsyncSessionLocal() as db_session:
-        db_session.add(response)
-        await db_session.commit()
-        
-async def select_potentially_agreeing_supernodes() -> List[str]:
-    try:
-        # Get the current block hash and merkle root
-        _, merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
-        
-        # Get the list of supernodes
-        supernode_list_df, _ = await check_supernode_list_func()
-        
-        # Select the 12 supernodes with the closest XOR distance to the merkle root
-        potentially_agreeing_supernodes = await get_n_closest_supernodes_to_pastelid_urls(12, merkle_root, supernode_list_df)
-        
-        return [supernode[1] for supernode in potentially_agreeing_supernodes]
-    except Exception as e:
-        logger.error(f"Error selecting potentially agreeing supernodes: {str(e)}")
-        raise
+async def store_credit_pack_purchase_request_final_response(response: db_code.CreditPackPurchaseRequestResponse) -> None:
+    with db_code.Session() as db:
+        db.add(response)
+        db.commit()
 
-async def send_price_agreement_request_to_supernodes(request: CreditPackPurchasePriceAgreementRequestModel, supernodes: List[str]) -> None:
+async def send_price_agreement_request_to_supernodes(request: db_code.CreditPackPurchasePriceAgreementRequest, supernodes: List[str]) -> None:
     try:
         async with httpx.AsyncClient() as client:
             tasks = []
@@ -1229,91 +1285,7 @@ async def send_price_agreement_request_to_supernodes(request: CreditPackPurchase
         logger.error(f"Error sending price agreement request to supernodes: {str(e)}")
         raise
 
-async def determine_agreement_with_proposed_price(credit_pack_purchase_request_response_fields_json: str) -> bool:
-    try:
-        # Load the credit pack purchase request response fields
-        credit_pack_purchase_request_response_fields = json.loads(credit_pack_purchase_request_response_fields_json)
-        
-        # Determine if the supernode agrees with the proposed price
-        # Implement your own logic here based on the credit pack purchase request response fields
-        # For example, you can compare the proposed price with a threshold or use a custom algorithm
-        
-        # Placeholder logic: agree if the proposed price is less than or equal to 10 PSL per credit
-        agree_with_proposed_price = credit_pack_purchase_request_response_fields["psl_cost_per_credit"] <= 10
-        
-        return agree_with_proposed_price
-    except Exception as e:
-        logger.error(f"Error determining agreement with proposed price: {str(e)}")
-        raise
-
-async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: str, total_cost_in_psl: float, request_response_pastel_block_height: int) -> bool:
-    try:
-        # Check the burn transaction
-        # Implement your own logic here to verify the transaction details
-        # For example, you can use the `get_and_decode_raw_transaction` function to retrieve the transaction details
-        
-        # Placeholder logic: return True if the transaction ID is not empty
-        transaction_confirmed = bool(txid)
-        
-        return transaction_confirmed
-    except Exception as e:
-        logger.error(f"Error checking burn transaction: {str(e)}")
-        raise
-
-async def store_credit_pack_ticket(credit_pack_purchase_request_response: CreditPackPurchaseRequestResponseModel) -> str:
-    try:
-        # Store the credit pack ticket on the blockchain
-        # Implement your own logic here to write the ticket data to the blockchain using the PayToFakeMultiSig approach
-        # You can use the `store_data` function from the `BlockchainUTXOStorage` class as a reference
-        
-        # Placeholder logic: return a dummy transaction ID
-        pastel_api_credit_pack_ticket_registration_txid = "dummyTxID"
-        
-        return pastel_api_credit_pack_ticket_registration_txid
-    except Exception as e:
-        logger.error(f"Error storing credit pack ticket: {str(e)}")
-        raise
-
-async def store_credit_pack_purchase_completion_announcement(confirmation: CreditPackPurchaseRequestConfirmationModel) -> None:
-    try:
-        # Store the credit pack purchase completion announcement
-        # Implement your own storage logic here
-        # For example, you can use a database or a key-value store
-        
-        # Placeholder logic: print the confirmation
-        logger.info(f"Storing credit pack purchase completion announcement: {confirmation.json()}")
-    except Exception as e:
-        logger.error(f"Error storing credit pack purchase completion announcement: {str(e)}")
-        raise
-
-async def store_credit_pack_storage_completion_announcement(response: CreditPackPurchaseRequestConfirmationResponseModel) -> None:
-    try:
-        # Store the credit pack storage completion announcement
-        # Implement your own storage logic here
-        # For example, you can use a database or a key-value store
-        
-        # Placeholder logic: print the response
-        logger.info(f"Storing credit pack storage completion announcement: {response.json()}")
-    except Exception as e:
-        logger.error(f"Error storing credit pack storage completion announcement: {str(e)}")
-        raise
-
-async def check_original_supernode_storage_confirmation(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> bool:
-    try:
-        # Check if the original responding supernode has confirmed the storage
-        # Implement your own logic here to verify the storage confirmation
-        # For example, you can check a database or a key-value store
-        
-        # Placeholder logic: return False
-        original_supernode_confirmed_storage = False
-        
-        return original_supernode_confirmed_storage
-    except Exception as e:
-        logger.error(f"Error checking original supernode storage confirmation: {str(e)}")
-        raise
-
-
-async def calculate_preliminary_price_per_credit():
+async def calculate_preliminary_psl_price_per_credit():
     try:
         # Get the current PSL market price in USD
         psl_price_usd = await get_current_psl_market_price()
@@ -1329,16 +1301,87 @@ async def calculate_preliminary_price_per_credit():
         logger.error(f"Error calculating preliminary price per credit: {str(e)}")
         raise
 
-async def process_credit_purchase_initial_request(request: CreditPackPurchaseRequestModel) -> CreditPackPurchaseRequestResponseModel:
+async def determine_agreement_with_proposed_price(credit_pack_purchase_request_response_fields_json: str) -> bool:
+    try:
+        # Load the credit pack purchase request response fields
+        credit_pack_purchase_request_response_fields = json.loads(credit_pack_purchase_request_response_fields_json)
+        # Get the proposed price per credit from the response fields
+        proposed_price_per_credit = credit_pack_purchase_request_response_fields["psl_cost_per_credit"]
+        # Calculate the local preliminary price per credit
+        local_price_per_credit = await calculate_preliminary_psl_price_per_credit()
+        # Calculate the acceptable price range (within 10% of the local price)
+        min_acceptable_price = local_price_per_credit * (1.0 - MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING)
+        max_acceptable_price = local_price_per_credit * (1.0 + MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING)
+        # Determine if the proposed price is within the acceptable range
+        agree_with_proposed_price = min_acceptable_price <= proposed_price_per_credit <= max_acceptable_price
+        logger.info(f"Proposed price per credit: {proposed_price_per_credit:.1f} PSL")
+        logger.info(f"Local price per credit: {local_price_per_credit:.1f} PSL")
+        logger.info(f"Acceptable price range: [{min_acceptable_price:.1f}, {max_acceptable_price:.1f}] PSL")
+        logger.info(f"Agreement with proposed price: {agree_with_proposed_price}")
+        return agree_with_proposed_price
+    except Exception as e:
+        logger.error(f"Error determining agreement with proposed price: {str(e)}")
+        raise
+    
+async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: str, total_cost_in_psl: float, request_response_pastel_block_height: int) -> bool:
+    try: # Basically, it's the exact same logic that we use for confirming the tracking transactions for inference requests, so we can just wrap that function:
+        max_block_height = request_response_pastel_block_height + MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET
+        max_retries = 20
+        initial_retry_delay_in_seconds = 180
+        transaction_confirmed = await check_burn_address_for_tracking_transaction(burn_address, credit_usage_tracking_psl_address, total_cost_in_psl, txid, max_block_height, max_retries, initial_retry_delay_in_seconds)
+        return transaction_confirmed
+    except Exception as e:
+        logger.error(f"Error checking burn transaction: {str(e)}")
+        raise
+
+async def store_credit_pack_ticket(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse) -> str:
+    try:
+        storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, BASE_TRANSACTION_AMOUNT, FEE_PER_KB)
+        ticket_json = credit_pack_purchase_request_response.credit_pack_purchase_request_json
+        signatures_json = json.dumps({
+            "responding_supernode_signature_on_credit_pack_purchase_request_response_hash": credit_pack_purchase_request_response.responding_supernode_signature_on_credit_pack_purchase_request_response_hash,
+            "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash": credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash,
+            "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json": credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json
+        })
+        combined_json = json.dumps({"ticket": ticket_json, "signatures": signatures_json})
+        transaction_id = await storage.store_data(combined_json)
+        return transaction_id
+    except Exception as e:
+        logger.error(f"Error storing credit pack ticket: {str(e)}")
+        raise
+
+async def store_credit_pack_purchase_completion_announcement(confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> None:
+    try:
+        with db_code.Session() as db:
+            db.add(confirmation)
+            db.commit()
+        logger.info(f"Storing credit pack purchase completion announcement: {confirmation.json()}")
+    except Exception as e:
+        logger.error(f"Error storing credit pack purchase completion announcement: {str(e)}")
+        raise
+    
+async def store_credit_pack_storage_completion_announcement(response: db_code.CreditPackPurchaseRequestConfirmationResponse) -> None:
+    with db_code.Session() as db:
+        db.add(response)
+        db.commit()
+
+async def check_original_supernode_storage_confirmation(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> bool:
+    with db_code.Session() as db:
+        result = db.exec(
+            select(db_code.CreditPackPurchaseRequestConfirmationResponse).where(db_code.CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == sha3_256_hash_of_credit_pack_purchase_request_response_fields)
+        ).one_or_none()
+        return result is not None
+
+async def process_credit_purchase_initial_request(request: db_code.CreditPackPurchaseRequest) -> db_code.CreditPackPurchaseRequestPreliminaryPriceQuote:
     try:
         # Validate the request fields
         if not request.requesting_end_user_pastelid or not request.requested_initial_credits_in_credit_pack or not request.credit_usage_tracking_psl_address:
             raise ValueError("Invalid credit purchase request")
         # Determine the preliminary price quote
-        preliminary_quoted_price_per_credit_in_psl = await calculate_preliminary_price_per_credit()
+        preliminary_quoted_price_per_credit_in_psl = await calculate_preliminary_psl_price_per_credit()
         preliminary_total_cost_of_credit_pack_in_psl = preliminary_quoted_price_per_credit_in_psl * request.requested_initial_credits_in_credit_pack
         # Create the response
-        response = CreditPackPurchaseRequestPreliminaryPriceQuote(
+        response = db_code.CreditPackPurchaseRequestPreliminaryPriceQuote(
             sha3_256_hash_of_credit_pack_purchase_request_fields=request.sha3_256_hash_of_credit_pack_purchase_request_fields,
             credit_pack_purchase_request_response_fields_json=request.json(),
             preliminary_quoted_price_per_credit_in_psl=preliminary_quoted_price_per_credit_in_psl,
@@ -1371,8 +1414,32 @@ async def process_credit_purchase_initial_request(request: CreditPackPurchaseReq
     except Exception as e:
         logger.error(f"Error processing credit purchase initial request: {str(e)}")
         raise
-
-async def process_credit_purchase_preliminary_price_quote_response(response: CreditPackPurchaseRequestPreliminaryPriceQuoteResponse) -> CreditPackPurchasePriceAgreementRequestModel:
+    
+async def select_potentially_agreeing_supernodes() -> List[str]:
+    try:
+        # Get the best block hash and merkle root
+        best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
+        # Get the list of all supernodes
+        supernode_list_df, _ = await check_supernode_list_func()
+        # Compute the XOR distance between each supernode's hash(pastelid) and the best block's merkle root
+        xor_distances = []
+        for _, row in supernode_list_df.iterrows():
+            supernode_pastelid = row['extKey']
+            supernode_pastelid_hash = get_sha256_hash_of_input_data_func(supernode_pastelid)
+            supernode_pastelid_int = int(supernode_pastelid_hash, 16)
+            merkle_root_int = int(best_block_merkle_root, 16)
+            xor_distance = supernode_pastelid_int ^ merkle_root_int
+            xor_distances.append((supernode_pastelid, xor_distance))
+        # Sort the supernodes based on their XOR distances in ascending order
+        sorted_supernodes = sorted(xor_distances, key=lambda x: x[1])
+        # Select the 12 supernodes with the closest XOR distances
+        potentially_agreeing_supernodes = [supernode[0] for supernode in sorted_supernodes[:12]]
+        return potentially_agreeing_supernodes
+    except Exception as e:
+        logger.error(f"Error selecting potentially agreeing supernodes: {str(e)}")
+        raise
+        
+async def process_credit_purchase_preliminary_price_quote_response(response: db_code.CreditPackPurchaseRequestPreliminaryPriceQuoteResponse) -> db_code.CreditPackPurchasePriceAgreementRequest:
     try:
         # Validate the response fields
         if not response.agree_with_preliminary_price_quote:
@@ -1380,7 +1447,7 @@ async def process_credit_purchase_preliminary_price_quote_response(response: Cre
         # Select the potentially agreeing supernodes
         potentially_agreeing_supernodes = await select_potentially_agreeing_supernodes()
         # Create the price agreement request
-        request = CreditPackPurchasePriceAgreementRequestModel(
+        request = db_code.CreditPackPurchasePriceAgreementRequest(
             sha3_256_hash_of_credit_pack_purchase_request_response_fields=response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields,
             supernode_requesting_price_agreement_pastelid=MY_PASTELID,
             credit_pack_purchase_request_response_fields_json=response.json(),
@@ -1410,7 +1477,7 @@ async def process_credit_purchase_preliminary_price_quote_response(response: Cre
         logger.error(f"Error processing credit purchase preliminary price quote response: {str(e)}")
         raise
 
-async def process_credit_pack_price_agreement_request(request: CreditPackPurchasePriceAgreementRequestModel) -> CreditPackPurchasePriceAgreementRequestResponseModel:
+async def process_credit_pack_price_agreement_request(request: db_code.CreditPackPurchasePriceAgreementRequest) -> db_code.CreditPackPurchasePriceAgreementRequestResponse:
     try:
         # Validate the request fields
         if not request.supernode_requesting_price_agreement_pastelid or not request.credit_pack_purchase_request_response_fields_json:
@@ -1418,7 +1485,7 @@ async def process_credit_pack_price_agreement_request(request: CreditPackPurchas
         # Determine if the supernode agrees with the proposed price
         agree_with_proposed_price = await determine_agreement_with_proposed_price(request.credit_pack_purchase_request_response_fields_json)
         # Create the response
-        response = CreditPackPurchasePriceAgreementRequestResponseModel(
+        response = db_code.CreditPackPurchasePriceAgreementRequestResponse(
             sha3_256_hash_of_price_agreement_request_fields=request.sha3_256_hash_of_price_agreement_request_fields,
             credit_pack_purchase_request_response_fields_json=request.credit_pack_purchase_request_response_fields_json,
             agree_with_proposed_price=agree_with_proposed_price,
@@ -1452,7 +1519,7 @@ async def process_credit_pack_price_agreement_request(request: CreditPackPurchas
         logger.error(f"Error processing credit pack price agreement request: {str(e)}")
         raise
 
-async def get_credit_purchase_request_status(request: CreditPackRequestStatusCheckModel) -> CreditPackPurchaseRequestStatusModel:
+async def get_credit_purchase_request_status(request: db_code.CreditPackRequestStatusCheck) -> db_code.CreditPackPurchaseRequestStatus:
     try:
         # Validate the request fields
         if not request.sha3_256_hash_of_credit_pack_purchase_request_fields or not request.requesting_end_user_pastelid:
@@ -1462,7 +1529,7 @@ async def get_credit_purchase_request_status(request: CreditPackRequestStatusChe
         # Check the status of the credit pack purchase request
         status = await check_credit_pack_purchase_request_status(credit_pack_purchase_request)
         # Create the response
-        response = CreditPackPurchaseRequestStatusModel(
+        response = db_code.CreditPackPurchaseRequestStatus(
             sha3_256_hash_of_credit_pack_purchase_request_fields=request.sha3_256_hash_of_credit_pack_purchase_request_fields,
             status=status
         )
@@ -1471,7 +1538,7 @@ async def get_credit_purchase_request_status(request: CreditPackRequestStatusChe
         logger.error(f"Error getting credit purchase request status: {str(e)}")
         raise
 
-async def process_credit_pack_purchase_request_final_response_announcement(response: CreditPackPurchaseRequestResponseModel) -> None:
+async def process_credit_pack_purchase_request_final_response_announcement(response: db_code.CreditPackPurchaseRequestResponse) -> None:
     try:
         # Validate the response fields
         if not response.sha3_256_hash_of_credit_pack_purchase_request_fields or not response.credit_pack_purchase_request_json:
@@ -1482,7 +1549,7 @@ async def process_credit_pack_purchase_request_final_response_announcement(respo
         logger.error(f"Error processing credit pack purchase request final response announcement: {str(e)}")
         raise
 
-async def process_credit_purchase_request_confirmation(confirmation: CreditPackPurchaseRequestConfirmationModel) -> CreditPackPurchaseRequestConfirmationResponseModel:
+async def process_credit_purchase_request_confirmation(confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> db_code.CreditPackPurchaseRequestConfirmationResponse:
     try:
         # Validate the confirmation fields
         if not confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields or not confirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields or not confirmation.txid_of_credit_purchase_burn_transaction:
@@ -1500,7 +1567,7 @@ async def process_credit_purchase_request_confirmation(confirmation: CreditPackP
             # Store the credit pack ticket on the blockchain
             pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket(credit_pack_purchase_request_response)
             # Create the confirmation response
-            response = CreditPackPurchaseRequestConfirmationResponseModel(
+            response = db_code.CreditPackPurchaseRequestConfirmationResponse(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields,
                 sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields,
                 credit_pack_confirmation_outcome_string="success",
@@ -1530,7 +1597,7 @@ async def process_credit_purchase_request_confirmation(confirmation: CreditPackP
             )
         else:
             # Create the confirmation response with failure
-            response = CreditPackPurchaseRequestConfirmationResponseModel(
+            response = db_code.CreditPackPurchaseRequestConfirmationResponse(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields,
                 sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields,
                 credit_pack_confirmation_outcome_string="failure",
@@ -1548,22 +1615,22 @@ async def process_credit_purchase_request_confirmation(confirmation: CreditPackP
                     "Burn transaction not confirmed"
                 ),
                 responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash=await sign_message_with_pastelid_func(
-                                    MY_PASTELID,
-                                    compute_sha3_256_hexdigest(
-                                        confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields +
-                                        confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields +
-                                        "failure" +
-                                        "Burn transaction not confirmed"
-                                    ),
-                                    MY_PASTELID_PASSPHRASE
-                                )
-                            )
+                    MY_PASTELID,
+                    compute_sha3_256_hexdigest(
+                        confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields +
+                        confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields +
+                        "failure" +
+                        "Burn transaction not confirmed"
+                    ),
+                    MY_PASTELID_PASSPHRASE
+                )
+            )
         return response
     except Exception as e:
         logger.error(f"Error processing credit purchase request confirmation: {str(e)}")
         raise
     
-async def process_credit_pack_purchase_completion_announcement(confirmation: CreditPackPurchaseRequestConfirmationModel) -> None:
+async def process_credit_pack_purchase_completion_announcement(confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> None:
     try:
         # Validate the confirmation fields
         if not confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields or not confirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields:
@@ -1574,7 +1641,7 @@ async def process_credit_pack_purchase_completion_announcement(confirmation: Cre
         logger.error(f"Error processing credit pack purchase completion announcement: {str(e)}")
         raise
 
-async def process_credit_pack_storage_completion_announcement(response: CreditPackPurchaseRequestConfirmationResponseModel) -> None:
+async def process_credit_pack_storage_completion_announcement(response: db_code.CreditPackPurchaseRequestConfirmationResponse) -> None:
     try:
         # Validate the response fields
         if not response.sha3_256_hash_of_credit_pack_purchase_request_fields or not response.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields:
@@ -1585,7 +1652,7 @@ async def process_credit_pack_storage_completion_announcement(response: CreditPa
         logger.error(f"Error processing credit pack storage completion announcement: {str(e)}")
         raise
 
-async def process_credit_pack_storage_retry_request(request: CreditPackStorageRetryRequestModel) -> CreditPackStorageRetryRequestResponseModel:
+async def process_credit_pack_storage_retry_request(request: db_code.CreditPackStorageRetryRequest) -> db_code.CreditPackStorageRetryRequestResponse:
     try:
         # Validate the request fields
         if not request.sha3_256_hash_of_credit_pack_purchase_request_response_fields or not request.credit_pack_purchase_request_response_json:
@@ -1596,7 +1663,7 @@ async def process_credit_pack_storage_retry_request(request: CreditPackStorageRe
             # Store the credit pack ticket on the blockchain
             pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket(json.loads(request.credit_pack_purchase_request_response_json))
             # Create the retry request response
-            response = CreditPackStorageRetryRequestResponseModel(
+            response = db_code.CreditPackStorageRetryRequestResponse(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=request.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
                 sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=request.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
                 credit_pack_storage_retry_confirmation_outcome_string="success",
@@ -1626,7 +1693,7 @@ async def process_credit_pack_storage_retry_request(request: CreditPackStorageRe
             )
         else:
             # Create the retry request response with failure
-            response = CreditPackStorageRetryRequestResponseModel(
+            response = db_code.CreditPackStorageRetryRequestResponse(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=request.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
                 sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=request.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
                 credit_pack_storage_retry_confirmation_outcome_string="failure",
@@ -1875,24 +1942,14 @@ async def test_claude_api_key():
         logger.warning(f"Claude API key test failed: {str(e)}")
         return False
 
-async def save_inference_api_usage_request(inference_request_model: InferenceAPIUsageRequestModel) -> InferenceAPIUsageRequest:
-    db_inference_api_usage_request = InferenceAPIUsageRequest(
-        requesting_pastelid=inference_request_model.requesting_pastelid,
-        credit_pack_identifier=inference_request_model.credit_pack_identifier,
-        requested_model_canonical_string=inference_request_model.requested_model_canonical_string,
-        model_inference_type_string=inference_request_model.model_inference_type_string,
-        model_parameters_json=inference_request_model.model_parameters_json,
-        model_input_data_json_b64=inference_request_model.model_input_data_json_b64,
-        inference_request_id=str(uuid.uuid4()),  # Generate a unique inference request ID
-        total_psl_cost_for_pack=credit_pack.total_psl_cost_for_pack,
-        initial_credit_balance=credit_pack.initial_credit_balance,
-        requesting_pastelid_signature="placeholder_signature"  # Set a placeholder signature for now
-    )
-    async with AsyncSessionLocal() as db_session:
-        db_session.add(db_inference_api_usage_request)
-        await db_session.commit()
-        await db_session.refresh(db_inference_api_usage_request)
-    return db_inference_api_usage_request
+async def save_inference_api_usage_request(inference_request_model: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageRequest:
+    inference_request_model.inference_request_id = str(uuid.uuid4())  # Generate a unique inference request ID
+    inference_request_model.requesting_pastelid_signature = "placeholder_signature"  # Set a placeholder signature for now
+    with db_code.Session() as db_session:
+        db_session.add(inference_request_model)
+        db_session.commit()
+        db_session.refresh(inference_request_model)
+    return inference_request_model
 
 def get_tokenizer(model_name: str):
     model_to_tokenizer_mapping = {
@@ -2087,7 +2144,7 @@ def is_swiss_army_llama_responding():
         response = httpx.get(url, params=params)
         return response.status_code == 200
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"Error: {e}")
         return False
 
 def normalize_string(s):
@@ -2166,7 +2223,7 @@ async def validate_inference_api_usage_request(request_data: dict) -> Tuple[bool
         logger.error(f"Error validating inference API usage request: {str(e)}")
         raise
     
-async def process_inference_api_usage_request(inference_api_usage_request: InferenceAPIUsageRequestModel) -> InferenceAPIUsageResponse: 
+async def process_inference_api_usage_request(inference_api_usage_request: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageResponse: 
     # Validate the inference API usage request
     request_data = inference_api_usage_request.dict()
     is_valid_request, proposed_cost_in_credits, remaining_credits_after_request = await validate_inference_api_usage_request(request_data)        
@@ -2187,14 +2244,14 @@ async def process_inference_api_usage_request(inference_api_usage_request: Infer
     inference_response = await create_and_save_inference_api_usage_response(saved_request, proposed_cost_in_credits, remaining_credits_after_request, credit_usage_tracking_psl_address)
     return inference_response
 
-async def create_and_save_inference_api_usage_response(saved_request: InferenceAPIUsageRequest, proposed_cost_in_credits: float, remaining_credits_after_request: float, credit_usage_tracking_psl_address: str) -> InferenceAPIUsageResponse:
+async def create_and_save_inference_api_usage_response(saved_request: db_code.InferenceAPIUsageRequest, proposed_cost_in_credits: float, remaining_credits_after_request: float, credit_usage_tracking_psl_address: str) -> db_code.InferenceAPIUsageResponse:
     # Generate a unique identifier for the inference response
     inference_response_id = str(uuid.uuid4())
     # Create an InferenceAPIUsageResponse instance
     _, _, local_supernode_pastelid, _ = await get_local_machine_supernode_data_func()
     confirmation_signature = await sign_message_with_pastelid_func(local_supernode_pastelid, inference_response_id, LOCAL_PASTEL_ID_PASSPHRASE)
     supernode_pastelid_and_signature_on_inference_response_id = json.dumps({'signing_sn_pastelid': local_supernode_pastelid, 'sn_signature_on_response_id': confirmation_signature})
-    inference_response = InferenceAPIUsageResponse(
+    inference_response = db_code.InferenceAPIUsageResponse(
         inference_response_id=inference_response_id,
         inference_request_id=saved_request.inference_request_id,
         proposed_cost_of_request_in_inference_credits=proposed_cost_in_credits,
@@ -2205,10 +2262,10 @@ async def create_and_save_inference_api_usage_response(saved_request: InferenceA
         supernode_pastelid_and_signature_on_inference_response_id=supernode_pastelid_and_signature_on_inference_response_id
     )
     # Save the InferenceAPIUsageResponse to the database
-    async with AsyncSessionLocal() as db_session:
+    with db_code.Session() as db_session:
         db_session.add(inference_response)
-        await db_session.commit()
-        await db_session.refresh(inference_response)
+        db_session.commit()
+        db_session.refresh(inference_response)
     return inference_response
 
 async def check_burn_address_for_tracking_transaction(
@@ -2271,29 +2328,27 @@ async def check_burn_address_for_tracking_transaction(
     logger.info(f"Transaction not found or did not match the criteria after {max_retries} attempts.")
     return False
 
-async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: InferenceConfirmationModel) -> bool:
+async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: db_code.InferenceConfirmation) -> bool:
     try:
         # Retrieve the inference API usage request from the database
-        async with AsyncSessionLocal() as db:
-            inference_request = await db.execute(
-                select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
-            )
-            inference_request = inference_request.scalar_one_or_none()
+        with db_code.Session() as db:
+            inference_request = db.exec(
+                select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_request_id)
+            ).one_or_none()
         if inference_request is None:
             logger.warning(f"Invalid inference request ID: {inference_request_id}")
             return False
         # Retrieve the inference API usage request response from the database
-        async with AsyncSessionLocal() as db:
-            inference_response = await db.execute(
-                select(InferenceAPIUsageResponse).where(InferenceAPIUsageResponse.inference_request_id == inference_request_id)
-            )
-            inference_response = inference_response.scalar_one_or_none()
+        with db_code.Session() as db:
+            inference_response = db.exec(
+                select(db_code.InferenceAPIUsageResponse).where(db_code.InferenceAPIUsageResponse.inference_request_id == inference_request_id)
+            ).one_or_none()
         # Ensure burn address is tracked by local wallet:
         burn_address_already_imported = await check_if_address_is_already_imported_in_local_wallet(burn_address)
         if not burn_address_already_imported:
             await import_address_func(burn_address, "burn_address", True)        
         # Check burn address for tracking transaction:
-        confirmation_transaction_txid = confirmation_transaction['txid']
+        confirmation_transaction_txid = confirmation_transaction.confirmation_transaction['txid']
         credit_usage_tracking_amount_in_psl = float(inference_response.request_confirmation_message_amount_in_patoshis)/(10**5) # Divide by number of Patoshis per PSL
         transaction_found = await check_burn_address_for_tracking_transaction(burn_address, inference_response.credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, confirmation_transaction_txid, inference_response.max_block_height_to_include_confirmation_transaction)
         if transaction_found:
@@ -2302,10 +2357,10 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
             logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address} tracking transactions from tracking address to burn address.")       
             # Update the inference request status to "confirmed"
             inference_request.status = "confirmed"
-            async with AsyncSessionLocal() as db:
+            with db_code.Session() as db:
                 db.add(inference_request)
-                await db.commit()
-                await db.refresh(inference_request)
+                db.commit()
+                db.refresh(inference_request)
             # Trigger the inference request processing
             asyncio.create_task(execute_inference_request(inference_request_id))
             return True
@@ -2327,7 +2382,7 @@ async def save_inference_output_results(inference_request_id: str, inference_res
             'sn_signature_on_result_id': result_id_signature
         })
         # Create an inference output result record
-        inference_output_result = InferenceAPIOutputResult(
+        inference_output_result = db_code.InferenceAPIOutputResult(
             inference_result_id=inference_result_id,
             inference_request_id=inference_request_id,
             inference_response_id=inference_response_id,
@@ -2336,10 +2391,10 @@ async def save_inference_output_results(inference_request_id: str, inference_res
             inference_result_file_type_strings=json.dumps(output_results_file_type_strings),
             responding_supernode_signature_on_inference_result_id=supernode_pastelid_and_signature_on_inference_result_id
         )
-        async with AsyncSessionLocal() as db:
+        with db_code.Session() as db:
             db.add(inference_output_result)
-            await db.commit()
-            await db.refresh(inference_output_result)
+            db.commit()
+            db.refresh(inference_output_result)
     except Exception as e:
         logger.error(f"Error saving inference output results: {str(e)}")
         raise
@@ -2352,492 +2407,507 @@ def get_claude3_model_name(model_name: str) -> str:
     }
     return model_mapping.get(model_name, "")
 
-async def execute_inference_request(inference_request_id: str) -> None:
-    try:
-        # Retrieve the inference API usage request from the database
-        async with AsyncSessionLocal() as db:
-            inference_request = await db.execute(
-                select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
-            )
-            inference_request = inference_request.scalar_one_or_none()
-        if inference_request is None:
-            logger.warning(f"Invalid inference request ID: {inference_request_id}")
-            return
-        # Retrieve the inference API usage request response from the database
-        async with AsyncSessionLocal() as db:
-            inference_response = await db.execute(
-                select(InferenceAPIUsageResponse).where(InferenceAPIUsageResponse.inference_request_id == inference_request_id)
-            )
-            inference_response = inference_response.scalar_one_or_none()
-        if inference_request.requested_model_canonical_string.startswith("stability-"):
-            # Integrate with the Stability API to perform the image generation task
-            if inference_request.model_inference_type_string == "text_to_image":
-                model_parameters = json.loads(inference_request.model_parameters_json)
-                prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-                if "stability-core" in inference_request.requested_model_canonical_string:
-                    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
-                        response = await client.post(
-                            "https://api.stability.ai/v2beta/stable-image/generate/core",
-                            headers={
-                                "authorization": f"Bearer {STABILITY_API_KEY}",
-                                "accept": "image/*"
-                            },
-                            files={
-                                "none": ''
-                            },
-                            data={
-                                "prompt": prompt,
-                                "aspect_ratio": model_parameters.get("aspect_ratio", "1:1"),
-                                "negative_prompt": model_parameters.get("negative_prompt", ""),
-                                "seed": model_parameters.get("seed", 0),
-                                "style_preset": model_parameters.get("style_preset", ""),
-                                "output_format": model_parameters.get("output_format", "png"),
-                            },
-                        )
-                        if response.status_code == 200:
-                            output_results = base64.b64encode(response.content).decode("utf-8")
-                            output_results_file_type_strings = {
-                                "output_text": "base64_image",
-                                "output_files": ["NA"]
-                            }
-                        else:
-                            logger.error(f"Error generating image from Stability API: {response.text}")
-                            return
+async def submit_inference_request_to_stability_api(inference_request):
+    # Integrate with the Stability API to perform the image generation task
+    if inference_request.model_inference_type_string == "text_to_image":
+        model_parameters = json.loads(inference_request.model_parameters_json)
+        prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        if "stability-core" in inference_request.requested_model_canonical_string:
+            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
+                response = await client.post(
+                    "https://api.stability.ai/v2beta/stable-image/generate/core",
+                    headers={
+                        "authorization": f"Bearer {STABILITY_API_KEY}",
+                        "accept": "image/*"
+                    },
+                    files={"none": ''},
+                    data={
+                        "prompt": prompt,
+                        "aspect_ratio": model_parameters.get("aspect_ratio", "1:1"),
+                        "negative_prompt": model_parameters.get("negative_prompt", ""),
+                        "seed": model_parameters.get("seed", 0),
+                        "style_preset": model_parameters.get("style_preset", ""),
+                        "output_format": model_parameters.get("output_format", "png"),
+                    },
+                )
+                if response.status_code == 200:
+                    output_results = base64.b64encode(response.content).decode("utf-8")
+                    output_results_file_type_strings = {
+                        "output_text": "base64_image",
+                        "output_files": ["NA"]
+                    }
+                    return output_results, output_results_file_type_strings
                 else:
-                    model_parameters = json.loads(inference_request.model_parameters_json)
-                    prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-                    engine_id = inference_request.requested_model_canonical_string
-                    api_host = "https://api.stability.ai"
-                    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
-                        response = await client.post(
-                            f"{api_host}/v1/generation/{engine_id}/text-to-image",
-                            headers={
-                                "Content-Type": "application/json",
-                                "Accept": "application/json",
-                                "Authorization": f"Bearer {STABILITY_API_KEY}"
-                            },
-                            json={
-                                "text_prompts": [{"text": prompt}],
-                                "cfg_scale": model_parameters.get("cfg_scale", 7),
-                                "height": model_parameters.get("height", 512),
-                                "width": model_parameters.get("width", 512),
-                                "samples": model_parameters.get("num_samples", 1),
-                                "steps": model_parameters.get("steps", 50),
-                                "style_preset": model_parameters.get("style_preset", None),
-                            },
-                        )
-                        if response.status_code == 200:
-                            data = response.json()
-                            if "artifacts" in data and len(data["artifacts"]) > 0:
-                                for artifact in data["artifacts"]:
-                                    if artifact.get("finishReason") == "SUCCESS":
-                                        output_results = artifact["base64"]
-                                        output_results_file_type_strings = {
-                                            "output_text": "base64_image",
-                                            "output_files": ["NA"]
-                                        }
-                                        break
-                                else:
-                                    logger.warning("No successful artifact found in the Stability API response.")
-                                    return
-                            else:
-                                logger.error("No artifacts found in the Stability API response.")
-                                return
-                        else:
-                            logger.error(f"Error generating image from Stability API: {response.text}")
-                            return
-            elif inference_request.model_inference_type_string == "creative_upscale" and "stability-core" in inference_request.requested_model_canonical_string:
-                model_parameters = json.loads(inference_request.model_parameters_json)
-                input_image = base64.b64decode(inference_request.model_input_data_json_b64)
-                prompt = model_parameters.get("prompt", "")
-                async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
-                    response = await client.post(
-                        "https://api.stability.ai/v2beta/stable-image/upscale/creative",
-                        headers={
-                            "authorization": f"Bearer {STABILITY_API_KEY}",
-                            "accept": "application/json"
-                        },
-                        files={
-                            "image": input_image
-                        },
-                        data={
-                            "prompt": prompt,
-                            "output_format": model_parameters.get("output_format", "png"),
-                            "seed": model_parameters.get("seed", 0),
-                            "negative_prompt": model_parameters.get("negative_prompt", ""),
-                            "creativity": model_parameters.get("creativity", 0.3),
-                        },
-                    )
-                    if response.status_code == 200:
-                        generation_id = response.json().get("id")
-                        while True:
-                            await asyncio.sleep(10)  # Wait for 10 seconds before polling for result
-                            result_response = await client.get(
-                                f"https://api.stability.ai/v2beta/stable-image/upscale/creative/result/{generation_id}",
-                                headers={
-                                    "authorization": f"Bearer {STABILITY_API_KEY}",
-                                    "accept": "image/*"
-                                },
-                            )
-                            if result_response.status_code == 200:
-                                output_results = base64.b64encode(result_response.content).decode("utf-8")
+                    logger.error(f"Error generating image from Stability API: {response.text}")
+                    return None, None
+        else:
+            model_parameters = json.loads(inference_request.model_parameters_json)
+            prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+            engine_id = inference_request.requested_model_canonical_string
+            api_host = "https://api.stability.ai"
+            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
+                response = await client.post(
+                    f"{api_host}/v1/generation/{engine_id}/text-to-image",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json",
+                        "Authorization": f"Bearer {STABILITY_API_KEY}"
+                    },
+                    json={
+                        "text_prompts": [{"text": prompt}],
+                        "cfg_scale": model_parameters.get("cfg_scale", 7),
+                        "height": model_parameters.get("height", 512),
+                        "width": model_parameters.get("width", 512),
+                        "samples": model_parameters.get("num_samples", 1),
+                        "steps": model_parameters.get("steps", 50),
+                        "style_preset": model_parameters.get("style_preset", None),
+                    },
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    if "artifacts" in data and len(data["artifacts"]) > 0:
+                        for artifact in data["artifacts"]:
+                            if artifact.get("finishReason") == "SUCCESS":
+                                output_results = artifact["base64"]
                                 output_results_file_type_strings = {
                                     "output_text": "base64_image",
                                     "output_files": ["NA"]
                                 }
-                                break
-                            elif result_response.status_code != 202:
-                                logger.error(f"Error retrieving upscaled image: {result_response.text}")
-                                return
+                                return output_results, output_results_file_type_strings
+                        else:
+                            logger.warning("No successful artifact found in the Stability API response.")
+                            return None, None
                     else:
-                        logger.error(f"Error initiating upscale request: {response.text}")
-                        return
-            else:
-                logger.warning(f"Unsupported inference type for Stability model: {inference_request.model_inference_type_string}")
-                return
-        elif inference_request.requested_model_canonical_string.startswith("openai-"):
-            # Integrate with the OpenAI API to perform the inference task
-            logger.info("Now accessing OpenAI API...")
-            if inference_request.model_inference_type_string == "text_completion":
-                model_parameters = json.loads(inference_request.model_parameters_json)
-                input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-                num_completions = model_parameters.get("number_of_completions_to_generate", 1)
-                output_results = []
-                total_input_tokens = 0
-                total_output_tokens = 0
-                for i in range(num_completions):
-                    response = await client.post(
-                        "https://api.openai.com/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {OPENAI_API_KEY}",
-                            "Content-Type": "application/json"
-                        },
-                        json={
-                            "model": inference_request.requested_model_canonical_string.replace("openai-", ""),
-                            "messages": [{"role": "user", "content": input_prompt}],
-                            "max_tokens": model_parameters.get("number_of_tokens_to_generate", 1000),
-                            "temperature": model_parameters.get("temperature", 0.7),
-                            "n": 1
-                        }
-                    )
-                    if response.status_code == 200:
-                        response_json = response.json()
-                        output_results.append(response_json["choices"][0]["message"]["content"])
-                        total_input_tokens += response_json["usage"]["prompt_tokens"]
-                        total_output_tokens += response_json["usage"]["completion_tokens"]
-                    else:
-                        logger.error(f"Error generating text from OpenAI API: {response.text}")
-                        return
-                logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
-                logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
-                if num_completions == 1:
-                    output_text = output_results[0]
+                        logger.error("No artifacts found in the Stability API response.")
+                        return None, None
                 else:
-                    output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
-                logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
-                result = magika.identify_bytes(output_text.encode("utf-8"))
-                detected_data_type = result.output.ct_label
-                output_results_file_type_strings = {
-                    "output_text": detected_data_type,
-                    "output_files": ["NA"]
-                }
-            elif inference_request.model_inference_type_string == "embedding":
-                input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+                    logger.error(f"Error generating image from Stability API: {response.text}")
+                    return None, None
+    elif inference_request.model_inference_type_string == "creative_upscale" and "stability-core" in inference_request.requested_model_canonical_string:
+        model_parameters = json.loads(inference_request.model_parameters_json)
+        input_image = base64.b64decode(inference_request.model_input_data_json_b64)
+        prompt = model_parameters.get("prompt", "")
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
+            response = await client.post(
+                "https://api.stability.ai/v2beta/stable-image/upscale/creative",
+                headers={
+                    "authorization": f"Bearer {STABILITY_API_KEY}",
+                    "accept": "application/json"
+                },
+                files={"image": input_image},
+                data={
+                    "prompt": prompt,
+                    "output_format": model_parameters.get("output_format", "png"),
+                    "seed": model_parameters.get("seed", 0),
+                    "negative_prompt": model_parameters.get("negative_prompt", ""),
+                    "creativity": model_parameters.get("creativity", 0.3),
+                },
+            )
+            if response.status_code == 200:
+                generation_id = response.json().get("id")
+                while True:
+                    await asyncio.sleep(10)  # Wait for 10 seconds before polling for result
+                    result_response = await client.get(
+                        f"https://api.stability.ai/v2beta/stable-image/upscale/creative/result/{generation_id}",
+                        headers={
+                            "authorization": f"Bearer {STABILITY_API_KEY}",
+                            "accept": "image/*"
+                        },
+                    )
+                    if result_response.status_code == 200:
+                        output_results = base64.b64encode(result_response.content).decode("utf-8")
+                        output_results_file_type_strings = {
+                            "output_text": "base64_image",
+                            "output_files": ["NA"]
+                        }
+                        return output_results, output_results_file_type_strings
+                    elif result_response.status_code != 202:
+                        logger.error(f"Error retrieving upscaled image: {result_response.text}")
+                        return None, None
+            else:
+                logger.error(f"Error initiating upscale request: {response.text}")
+                return None, None
+    else:
+        logger.warning(f"Unsupported inference type for Stability model: {inference_request.model_inference_type_string}")
+        return None, None
+
+async def submit_inference_request_to_openai_api(inference_request):
+    # Integrate with the OpenAI API to perform the inference task
+    logger.info("Now accessing OpenAI API...")
+    if inference_request.model_inference_type_string == "text_completion":
+        model_parameters = json.loads(inference_request.model_parameters_json)
+        input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+        output_results = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+        for i in range(num_completions):
+            async with httpx.AsyncClient() as client:
                 response = await client.post(
-                    "https://api.openai.com/v1/embeddings",
+                    "https://api.openai.com/v1/chat/completions",
                     headers={
                         "Authorization": f"Bearer {OPENAI_API_KEY}",
                         "Content-Type": "application/json"
                     },
                     json={
                         "model": inference_request.requested_model_canonical_string.replace("openai-", ""),
-                        "input": input_text
+                        "messages": [{"role": "user", "content": input_prompt}],
+                        "max_tokens": model_parameters.get("number_of_tokens_to_generate", 1000),
+                        "temperature": model_parameters.get("temperature", 0.7),
+                        "n": 1
                     }
                 )
                 if response.status_code == 200:
-                    output_results = response.json()["data"][0]["embedding"]
-                    output_results_file_type_strings = {
-                        "output_text": "embedding",
-                        "output_files": ["NA"]
-                    }
+                    response_json = response.json()
+                    output_results.append(response_json["choices"][0]["message"]["content"])
+                    total_input_tokens += response_json["usage"]["prompt_tokens"]
+                    total_output_tokens += response_json["usage"]["completion_tokens"]
                 else:
-                    logger.error(f"Error generating embedding from OpenAI API: {response.text}")
-                    return
-            else:
-                logger.warning(f"Unsupported inference type for OpenAI model: {inference_request.model_inference_type_string}")
-                return            
-        elif inference_request.requested_model_canonical_string.startswith("mistralapi-"):
-            # Integrate with the Mistral API to perform the inference task
-            logger.info("Now accessing Mistral API...")
-            client = MistralAsyncClient(api_key=MISTRAL_API_KEY)
-            if inference_request.model_inference_type_string == "text_completion":
-                model_parameters = json.loads(inference_request.model_parameters_json)
-                input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-                num_completions = model_parameters.get("number_of_completions_to_generate", 1)
-                output_results = []
-                total_input_tokens = 0
-                total_output_tokens = 0
-                for i in range(num_completions):
-                    messages = [ChatMessage(role="user", content=input_prompt)]
-                    async_response = client.chat_stream(
-                        model=inference_request.requested_model_canonical_string.replace("mistralapi-",""),
-                        messages=messages,
-                        max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
-                        temperature=model_parameters.get("temperature", 0.7),
-                    )
-                    completion_text = ""
-                    prompt_tokens = 0
-                    completion_tokens = 0
-                    async for chunk in async_response:
-                        if chunk.choices[0].delta.content:
-                            completion_text += chunk.choices[0].delta.content
-                            completion_tokens += 1
-                        else:
-                            prompt_tokens += 1
-                    output_results.append(completion_text)
-                    total_input_tokens += prompt_tokens
-                    total_output_tokens += completion_tokens
-                logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
-                logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
-                if num_completions == 1:
-                    output_text = output_results[0]
-                else:
-                    output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
-                logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
-                result = magika.identify_bytes(output_text.encode("utf-8"))
-                detected_data_type = result.output.ct_label
-                output_results_file_type_strings = {
-                    "output_text": detected_data_type,
-                    "output_files": ["NA"]
-                }
-            elif inference_request.model_inference_type_string == "embedding":
-                input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-                embeddings_batch_response = client.embeddings(
-                    model=inference_request.requested_model_canonical_string,
-                    input=[input_text],
-                )
-                output_results = embeddings_batch_response.data[0].embedding
-                output_results_file_type_strings = {
-                    "output_text": "embedding",
-                    "output_files": ["NA"]
-                }
-            else:
-                logger.warning(f"Unsupported inference type for Mistral model: {inference_request.model_inference_type_string}")
-                return
-        elif inference_request.requested_model_canonical_string.startswith("groq-"):
-            # Integrate with the Groq API to perform the inference task
-            logger.info("Now accessing Groq API...")
-            client = AsyncGroq(api_key=GROQ_API_KEY)
-            if inference_request.model_inference_type_string == "text_completion":
-                model_parameters = json.loads(inference_request.model_parameters_json)
-                input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-                num_completions = model_parameters.get("number_of_completions_to_generate", 1)
-                output_results = []
-                total_input_tokens = 0
-                total_output_tokens = 0
-                for i in range(num_completions):
-                    chat_completion = await client.chat.completions.create(
-                        messages=[{"role": "user", "content": input_prompt}],
-                        model=inference_request.requested_model_canonical_string.replace("groq-",""),
-                        max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
-                        temperature=model_parameters.get("temperature", 0.7),
-                    )
-                    output_results.append(chat_completion.choices[0].message.content)
-                    total_input_tokens += chat_completion.usage.prompt_tokens
-                    total_output_tokens += chat_completion.usage.completion_tokens
-                logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
-                logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
-                if num_completions == 1:
-                    output_text = output_results[0]
-                else:
-                    output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
-                logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
-                result = magika.identify_bytes(output_text.encode("utf-8"))
-                detected_data_type = result.output.ct_label
-                output_results_file_type_strings = {
-                    "output_text": detected_data_type,
-                    "output_files": ["NA"]
-                }
-            elif inference_request.model_inference_type_string == "embedding":
-                input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-                response = await client.embed(
-                    input=input_text,
-                    model=inference_request.requested_model_canonical_string[5:],
-                )
-                output_results = response.embedding
-                output_results_file_type_strings = {
-                    "output_text": "embedding",
-                    "output_files": ["NA"]
-                }
-            else:
-                logger.warning(f"Unsupported inference type for Groq model: {inference_request.model_inference_type_string}")
-                return
-        elif "claude" in inference_request.requested_model_canonical_string.lower():
-            # Integrate with the Claude API to perform the inference task
-            logger.info("Now accessing Claude (Anthropic) API...")
-            client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
-            claude3_model_id_string = get_claude3_model_name(inference_request.requested_model_canonical_string)
-            if inference_request.model_inference_type_string == "text_completion":
-                model_parameters = json.loads(inference_request.model_parameters_json)
-                input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-                num_completions = model_parameters.get("number_of_completions_to_generate", 1)
-                output_results = []
-                total_input_tokens = 0
-                total_output_tokens = 0
-                for i in range(num_completions):
-                    async with client.messages.stream(
-                        model=claude3_model_id_string,
-                        max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
-                        temperature=model_parameters.get("temperature", 0.7),
-                        messages=[{"role": "user", "content": input_prompt}],
-                    ) as stream:
-                        message = await stream.get_final_message()
-                        output_results.append(message.content[0].text)
-                        total_input_tokens += message.usage.input_tokens
-                        total_output_tokens += message.usage.output_tokens
-                logger.info(f"Total input tokens used with {claude3_model_id_string} model: {total_input_tokens}")
-                logger.info(f"Total output tokens used with {claude3_model_id_string} model: {total_output_tokens}")
-                if num_completions == 1:
-                    output_text = output_results[0]
-                else:
-                    output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
-                logger.info(f"Generated the following output text using {claude3_model_id_string}: {output_text[:100]} <abbreviated>...")
-                result = magika.identify_bytes(output_text.encode("utf-8"))
-                detected_data_type = result.output.ct_label
-                output_results_file_type_strings = {
-                    "output_text": detected_data_type,
-                    "output_files": ["NA"]
-                }
-            elif inference_request.model_inference_type_string == "embedding":
-                input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-                response = await client.embed(
-                    text=input_text,
-                    model=claude3_model_id_string
-                )
-                output_results = response.embedding
-                output_results_file_type_strings = {
-                    "output_text": "embedding",
-                    "output_files": ["NA"]
-                }
-            else:
-                logger.warning(f"Unsupported inference type for Claude3 Haiku: {inference_request.model_inference_type_string}")
-                return
+                    logger.error(f"Error generating text from OpenAI API: {response.text}")
+                    return None, None
+        logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
+        logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
+        if num_completions == 1:
+            output_text = output_results[0]
         else:
-            logger.info(f"Now calling Swiss Army Llama with model {inference_request.requested_model_canonical_string}")
-            model_parameters = json.loads(inference_request.model_parameters_json)
-            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*12)) as client:
-                if inference_request.model_inference_type_string == "text_completion":
-                    payload = {
-                        "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                        "llm_model_name": inference_request.requested_model_canonical_string,
-                        "temperature": model_parameters.get("temperature", 0.7),
-                        "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 1000),
-                        "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1),
-                        "grammar_file_string": model_parameters.get("grammar_file_string", ""),
-                    }
-                    response = await client.post(
-                        f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_text_completions_from_input_prompt/",
-                        json=payload,
-                        params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                    )
-                    if response.status_code == 200:
-                        output_results = response.json()
-                        output_text = output_results[0]["generated_text"]
-                        result = magika.identify_bytes(output_text.encode("utf-8"))
-                        detected_data_type = result.output.ct_label
-                        output_results_file_type_strings = {
-                            "output_text": detected_data_type,
-                            "output_files": ["NA"]
-                        }
-                    else:
-                        logger.error(f"Failed to execute text completion inference request: {response.text}")
-                        return
-                elif inference_request.model_inference_type_string == "embedding":
-                    payload = {
-                        "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                        "llm_model_name": inference_request.requested_model_canonical_string
-                    }
-                    response = await client.post(
-                        f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_embedding_vector_for_string/",
-                        json=payload,
-                        params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                    )
-                    if response.status_code == 200:
-                        output_results = response.json()
-                        output_results_file_type_strings = {
-                            "output_text": "embedding",
-                            "output_files": ["NA"]
-                        }
-                    else:
-                        logger.error(f"Failed to execute embedding inference request: {response.text}")
-                        return
-                elif inference_request.model_inference_type_string == "token_level_embedding":
-                    payload = {
-                        "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                        "llm_model_name": inference_request.requested_model_canonical_string
-                    }
-                    response = await client.post(
-                        f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/",
-                        json=payload,
-                        params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "send_back_json_or_zip_file": "json"}
-                    )
-                    if response.status_code == 200:
-                        output_results = response.json()
-                        output_results_file_type_strings = {
-                            "output_text": "token_level_embedding",
-                            "output_files": ["NA"]
-                        }
-                    else:
-                        logger.error(f"Failed to execute token level embedding inference request: {response.text}")
-                        return
+            output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
+        logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
+        result = magika.identify_bytes(output_text.encode("utf-8"))
+        detected_data_type = result.output.ct_label
+        output_results_file_type_strings = {
+            "output_text": detected_data_type,
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings
+    elif inference_request.model_inference_type_string == "embedding":
+        input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        response = await client.post(
+            "https://api.openai.com/v1/embeddings",
+            headers={
+                "Authorization": f"Bearer {OPENAI_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "model": inference_request.requested_model_canonical_string.replace("openai-", ""),
+                "input": input_text
+            }
+        )
+        if response.status_code == 200:
+            output_results = response.json()["data"][0]["embedding"]
+            output_results_file_type_strings = {
+                "output_text": "embedding",
+                "output_files": ["NA"]
+            }
+            return output_results, output_results_file_type_strings
+        else:
+            logger.error(f"Error generating embedding from OpenAI API: {response.text}")
+            return None, None
+    else:
+        logger.warning(f"Unsupported inference type for OpenAI model: {inference_request.model_inference_type_string}")
+        return None, None
+
+async def submit_inference_request_to_mistral_api(inference_request):
+    # Integrate with the Mistral API to perform the inference task
+    logger.info("Now accessing Mistral API...")
+    client = MistralAsyncClient(api_key=MISTRAL_API_KEY)
+    if inference_request.model_inference_type_string == "text_completion":
+        model_parameters = json.loads(inference_request.model_parameters_json)
+        input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+        output_results = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+        for i in range(num_completions):
+            messages = [ChatMessage(role="user", content=input_prompt)]
+            async_response = client.chat_stream(
+                model=inference_request.requested_model_canonical_string.replace("mistralapi-",""),
+                messages=messages,
+                max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
+                temperature=model_parameters.get("temperature", 0.7),
+            )
+            completion_text = ""
+            prompt_tokens = 0
+            completion_tokens = 0
+            async for chunk in async_response:
+                if chunk.choices[0].delta.content:
+                    completion_text += chunk.choices[0].delta.content
+                    completion_tokens += 1
                 else:
-                    logger.warning(f"Unsupported inference type: {inference_request.model_inference_type_string}")
-                    return
-        # Save the inference output results to the database
-        await save_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results, output_results_file_type_strings)
+                    prompt_tokens += 1
+            output_results.append(completion_text)
+            total_input_tokens += prompt_tokens
+            total_output_tokens += completion_tokens
+        logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
+        logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
+        if num_completions == 1:
+            output_text = output_results[0]
+        else:
+            output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
+        logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
+        result = magika.identify_bytes(output_text.encode("utf-8"))
+        detected_data_type = result.output.ct_label
+        output_results_file_type_strings = {
+            "output_text": detected_data_type,
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings
+    elif inference_request.model_inference_type_string == "embedding":
+        input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        embeddings_batch_response = client.embeddings(
+            model=inference_request.requested_model_canonical_string,
+            input=[input_text],
+        )
+        output_results = embeddings_batch_response.data[0].embedding
+        output_results_file_type_strings = {
+            "output_text": "embedding",
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings
+    else:
+        logger.warning(f"Unsupported inference type for Mistral model: {inference_request.model_inference_type_string}")
+        return None, None
+    
+async def submit_inference_request_to_groq_api(inference_request):
+    # Integrate with the Groq API to perform the inference task
+    logger.info("Now accessing Groq API...")
+    client = AsyncGroq(api_key=GROQ_API_KEY)
+    if inference_request.model_inference_type_string == "text_completion":
+        model_parameters = json.loads(inference_request.model_parameters_json)
+        input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+        output_results = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+        for i in range(num_completions):
+            chat_completion = await client.chat.completions.create(
+                messages=[{"role": "user", "content": input_prompt}],
+                model=inference_request.requested_model_canonical_string.replace("groq-",""),
+                max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
+                temperature=model_parameters.get("temperature", 0.7),
+            )
+            output_results.append(chat_completion.choices[0].message.content)
+            total_input_tokens += chat_completion.usage.prompt_tokens
+            total_output_tokens += chat_completion.usage.completion_tokens
+        logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
+        logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
+        if num_completions == 1:
+            output_text = output_results[0]
+        else:
+            output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
+        logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
+        result = magika.identify_bytes(output_text.encode("utf-8"))
+        detected_data_type = result.output.ct_label
+        output_results_file_type_strings = {
+            "output_text": detected_data_type,
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings
+    elif inference_request.model_inference_type_string == "embedding":
+        input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        response = await client.embed(
+            input=input_text,
+            model=inference_request.requested_model_canonical_string[5:],
+        )
+        output_results = response.embedding
+        output_results_file_type_strings = {
+            "output_text": "embedding",
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings
+    else:
+        logger.warning(f"Unsupported inference type for Groq model: {inference_request.model_inference_type_string}")
+        return None, None
+
+async def submit_inference_request_to_claude_api(inference_request):
+    # Integrate with the Claude API to perform the inference task
+    logger.info("Now accessing Claude (Anthropic) API...")
+    client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
+    claude3_model_id_string = get_claude3_model_name(inference_request.requested_model_canonical_string)
+    if inference_request.model_inference_type_string == "text_completion":
+        model_parameters = json.loads(inference_request.model_parameters_json)
+        input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+        output_results = []
+        total_input_tokens = 0
+        total_output_tokens = 0
+        for i in range(num_completions):
+            async with client.messages.stream(
+                model=claude3_model_id_string,
+                max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
+                temperature=model_parameters.get("temperature", 0.7),
+                messages=[{"role": "user", "content": input_prompt}],
+            ) as stream:
+                message = await stream.get_final_message()
+                output_results.append(message.content[0].text)
+                total_input_tokens += message.usage.input_tokens
+                total_output_tokens += message.usage.output_tokens
+        logger.info(f"Total input tokens used with {claude3_model_id_string} model: {total_input_tokens}")
+        logger.info(f"Total output tokens used with {claude3_model_id_string} model: {total_output_tokens}")
+        if num_completions == 1:
+            output_text = output_results[0]
+        else:
+            output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
+        logger.info(f"Generated the following output text using {claude3_model_id_string}: {output_text[:100]} <abbreviated>...")
+        result = magika.identify_bytes(output_text.encode("utf-8"))
+        detected_data_type = result.output.ct_label
+        output_results_file_type_strings = {
+            "output_text": detected_data_type,
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings
+    elif inference_request.model_inference_type_string == "embedding":
+        input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        response = await client.embed(
+            text=input_text,
+            model=claude3_model_id_string
+        )
+        output_results = response.embedding
+        output_results_file_type_strings = {
+            "output_text": "embedding",
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings
+    else:
+        logger.warning(f"Unsupported inference type for Claude3 Haiku: {inference_request.model_inference_type_string}")
+        return None, None
+
+async def submit_inference_request_to_swiss_army_llama(inference_request):
+    logger.info(f"Now calling Swiss Army Llama with model {inference_request.requested_model_canonical_string}")
+    model_parameters = json.loads(inference_request.model_parameters_json)
+    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*12)) as client:
+        if inference_request.model_inference_type_string == "text_completion":
+            payload = {
+                "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
+                "llm_model_name": inference_request.requested_model_canonical_string,
+                "temperature": model_parameters.get("temperature", 0.7),
+                "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 1000),
+                "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1),
+                "grammar_file_string": model_parameters.get("grammar_file_string", ""),
+            }
+            response = await client.post(
+                f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_text_completions_from_input_prompt/",
+                json=payload,
+                params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+            )
+            if response.status_code == 200:
+                output_results = response.json()
+                output_text = output_results[0]["generated_text"]
+                result = magika.identify_bytes(output_text.encode("utf-8"))
+                detected_data_type = result.output.ct_label
+                output_results_file_type_strings = {
+                    "output_text": detected_data_type,
+                    "output_files": ["NA"]
+                }
+                return output_results, output_results_file_type_strings
+            else:
+                logger.error(f"Failed to execute text completion inference request: {response.text}")
+                return None, None
+        elif inference_request.model_inference_type_string == "embedding":
+            payload = {
+                "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
+                "llm_model_name": inference_request.requested_model_canonical_string
+            }
+            response = await client.post(
+                f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_embedding_vector_for_string/",
+                json=payload,
+                params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+            )
+            if response.status_code == 200:
+                output_results = response.json()
+                output_results_file_type_strings = {
+                    "output_text": "embedding",
+                    "output_files": ["NA"]
+                }
+                return output_results, output_results_file_type_strings
+            else:
+                logger.error(f"Failed to execute embedding inference request: {response.text}")
+                return None, None
+        elif inference_request.model_inference_type_string == "token_level_embedding":
+            payload = {
+                "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
+                "llm_model_name": inference_request.requested_model_canonical_string
+            }
+            response = await client.post(
+                f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/",
+                json=payload,
+                params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "send_back_json_or_zip_file": "json"}
+            )
+            if response.status_code == 200:
+                output_results = response.json()
+                output_results_file_type_strings = {
+                    "output_text": "token_level_embedding",
+                    "output_files": ["NA"]
+                }
+                return output_results, output_results_file_type_strings
+            else:
+                logger.error(f"Failed to execute token level embedding inference request: {response.text}")
+                return None, None
+        else:
+            logger.warning(f"Unsupported inference type: {inference_request.model_inference_type_string}")
+            return None, None    
+
+async def execute_inference_request(inference_request_id: str) -> None:
+    try:
+        # Retrieve the inference API usage request from the database
+        with db_code.Session() as db:
+            inference_request = db.exec(
+                select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_request_id)
+            ).one_or_none()
+        if inference_request is None:
+            logger.warning(f"Invalid inference request ID: {inference_request_id}")
+            return
+        # Retrieve the inference API usage request response from the database
+        with db_code.Session() as db:
+            inference_response = db.exec(
+                select(db_code.InferenceAPIUsageResponse).where(db_code.InferenceAPIUsageResponse.inference_request_id == inference_request_id)
+            ).one_or_none()
+
+        if inference_request.requested_model_canonical_string.startswith("stability-"):
+            output_results, output_results_file_type_strings = await submit_inference_request_to_stability_api(inference_request)
+        elif inference_request.requested_model_canonical_string.startswith("openai-"):
+            output_results, output_results_file_type_strings = await submit_inference_request_to_openai_api(inference_request)
+        elif inference_request.requested_model_canonical_string.startswith("mistralapi-"):
+            output_results, output_results_file_type_strings = await submit_inference_request_to_mistral_api(inference_request)
+        elif inference_request.requested_model_canonical_string.startswith("groq-"):
+            output_results, output_results_file_type_strings = await submit_inference_request_to_groq_api(inference_request)
+        elif "claude" in inference_request.requested_model_canonical_string.lower():
+            output_results, output_results_file_type_strings = await submit_inference_request_to_claude_api(inference_request)
+        else:
+            output_results, output_results_file_type_strings = await submit_inference_request_to_swiss_army_llama(inference_request)
+
+        if output_results is not None and output_results_file_type_strings is not None:
+            # Save the inference output results to the database
+            await save_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results, output_results_file_type_strings)
     except Exception as e:
         logger.error(f"Error executing inference request: {str(e)}")
         raise
-    
+
 async def check_status_of_inference_request_results(inference_response_id: str) -> bool:
-    async with AsyncSessionLocal() as db_session:
+    with db_code.Session() as db_session:
         # Retrieve the inference output result
-        inference_output_result = await db_session.execute(
-            select(InferenceAPIOutputResult).where(InferenceAPIOutputResult.inference_response_id == inference_response_id)
-        )    
-        inference_output_result = inference_output_result.scalar_one_or_none()
+        inference_output_result = db_session.exec(
+            select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_response_id == inference_response_id)
+        ).one_or_none()
         if inference_output_result is None:
             return False
         else:
             return True
     
-async def get_inference_output_results_and_verify_authorization(inference_response_id: str, requesting_pastelid: str) -> InferenceOutputResultsModel:
-    async with AsyncSessionLocal() as db_session:
+async def get_inference_output_results_and_verify_authorization(inference_response_id: str, requesting_pastelid: str) -> db_code.InferenceAPIOutputResult:
+    with db_code.Session() as db_session:
         # Retrieve the inference output result
-        inference_output_result = await db_session.execute(
-            select(InferenceAPIOutputResult).where(InferenceAPIOutputResult.inference_response_id == inference_response_id)
-        )
-        inference_output_result = inference_output_result.scalar_one_or_none()
+        inference_output_result = db_session.exec(
+            select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_response_id == inference_response_id)
+        ).one_or_none()
         if inference_output_result is None:
             raise ValueError("Inference output results not found")
         # Retrieve the inference request to verify requesting PastelID
-        inference_request = await db_session.execute(
-            select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_output_result.inference_request_id)
-        )
-        inference_request = inference_request.scalar_one_or_none()
+        inference_request = db_session.exec(
+            select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_output_result.inference_request_id)
+        ).one_or_none()
         if inference_request is None or inference_request.requesting_pastelid != requesting_pastelid:
             raise ValueError("Unauthorized access to inference output results")
-        # Create an InferenceOutputResultsModel instance
-        inference_output_results_model = InferenceOutputResultsModel(
-            inference_result_id=inference_output_result.inference_result_id,
-            inference_request_id=inference_output_result.inference_request_id,
-            inference_response_id=inference_output_result.inference_response_id,
-            responding_supernode_pastelid=inference_output_result.responding_supernode_pastelid,
-            inference_result_json_base64=inference_output_result.inference_result_json_base64,
-            inference_result_file_type_strings=inference_output_result.inference_result_file_type_strings,
-            responding_supernode_signature_on_inference_result_id=inference_output_result.responding_supernode_signature_on_inference_result_id
-        )
-        return inference_output_results_model
+        return inference_output_result
 
 async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address):
     """
@@ -2895,29 +2965,26 @@ async def update_inference_sn_reputation_score(supernode_pastelid: str, reputati
         logger.error(f"Error updating inference SN reputation score: {str(e)}")
         raise
     
-async def get_inference_api_usage_request_for_audit(inference_request_id: str) -> InferenceAPIUsageRequest:
-    async with AsyncSessionLocal() as db_session:
-        result = await db_session.execute(
-            select(InferenceAPIUsageRequest).where(InferenceAPIUsageRequest.inference_request_id == inference_request_id)
-        )
-        return result.scalar_one_or_none()    
+async def get_inference_api_usage_request_for_audit(inference_request_id: str) -> db_code.InferenceAPIUsageRequest:
+    with db_code.Session() as db_session:
+        result = db_session.exec(
+            select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_request_id)
+        ).one_or_none()
+        return result
         
-async def get_inference_api_usage_response_for_audit(inference_response_id: str) -> InferenceAPIUsageResponse:
-    async with AsyncSessionLocal() as db_session:
-        result = await db_session.execute(
-            select(InferenceAPIUsageResponse).where(InferenceAPIUsageResponse.inference_response_id == inference_response_id)
-        )
-        return result.scalar_one_or_none()
+async def get_inference_api_usage_response_for_audit(inference_response_id: str) -> db_code.InferenceAPIUsageResponse:
+    with db_code.Session() as db_session:
+        result = db_session.exec(
+            select(db_code.InferenceAPIUsageResponse).where(db_code.InferenceAPIUsageResponse.inference_response_id == inference_response_id)
+        ).one_or_none()
+        return result
 
-async def get_inference_api_usage_result_for_audit(inference_response_id: str) -> InferenceAPIOutputResult:
-    async with AsyncSessionLocal() as db_session:
-        result = await db_session.execute(
-            select(InferenceAPIOutputResult).where(InferenceAPIOutputResult.inference_response_id == inference_response_id)
-        )
-        return result.scalar_one_or_none()            
-    
-
-    
+async def get_inference_api_usage_result_for_audit(inference_response_id: str) -> db_code.InferenceAPIOutputResult:
+    with db_code.Session() as db_session:
+        result = db_session.exec(
+            select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_response_id == inference_response_id)
+        ).one_or_none()
+        return result
 # ________________________________________________________________________________________________________________________________
 
 # Blockchain ticket related functions:
@@ -3123,6 +3190,85 @@ def check_if_ip_address_is_valid_func(ip_address_string):
         ip_address_is_valid = 0
     return ip_address_is_valid
 
+
+def compare_datetimes(datetime_input1, datetime_input2):
+    # Check if the inputs are datetime objects, otherwise parse them
+    if not isinstance(datetime_input1, datetime):
+        datetime_input1 = pd.to_datetime(datetime_input1)
+    if not isinstance(datetime_input2, datetime):
+        datetime_input2 = pd.to_datetime(datetime_input2)
+    # Calculate the difference in seconds
+    difference_in_seconds = abs((datetime_input2 - datetime_input1).total_seconds())
+    # Check if the difference is within the acceptable range
+    datetimes_are_close_enough_to_consider_them_matching = (
+        difference_in_seconds <= MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING
+    )
+    return difference_in_seconds, datetimes_are_close_enough_to_consider_them_matching
+
+
+def compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance: SQLModel) -> str:
+    # Helper function to handle various types of field values
+    def format_field_value(value):
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        elif isinstance(value, (list, dict)):
+            return json.dumps(value, sort_keys=True)
+        elif isinstance(value, decimal.Decimal):
+            return str(value)
+        return value
+    concatenated_fields = ""
+    # Iterate over the fields defined in the model
+    for field_name, field_type in model_instance.__fields__.items():
+        if 'sha3_256_hash_of' in field_name:
+            break  # Stop before including the hash field itself or anything after
+        field_value = getattr(model_instance, field_name, None)
+        formatted_value = format_field_value(field_value)
+        concatenated_fields += f"{formatted_value}|"
+    # Remove the last separator
+    concatenated_fields = concatenated_fields.rstrip('|')
+    # Compute and return the SHA3-256 hash
+    sha256_hash_of_concatenated_fields = get_sha256_hash_of_input_data_func(concatenated_fields)
+    return sha256_hash_of_concatenated_fields
+
+async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel):
+    validation_errors = []
+    # Validate timestamp fields
+    for field_name, field_value in model_instance.__dict__.items():
+        if field_name.endswith("_timestamp_utc_iso_string"):
+            try:
+                pd.to_datetime(field_value)
+            except ValueError:
+                validation_errors.append(f"Invalid timestamp format for field {field_name}")
+            # Check if the timestamp is within an acceptable range of the current time
+            current_timestamp = pd.to_datetime(datetime.utcnow())
+            timestamp_diff, timestamps_match = compare_datetimes(field_value, current_timestamp)
+            if not timestamps_match:
+                validation_errors.append(f"Timestamp in field {field_name} is too far from the current time")
+    # Validate pastel block height and hash fields
+    best_block_hash, best_block_merkle_root, best_block_height = await get_best_block_hash_and_merkle_root_func()
+    for field_name, field_value in model_instance.__dict__.items():
+        if field_name.endswith("_pastel_block_height"):
+            if field_value != best_block_height:
+                validation_errors.append(f"Pastel block height in field {field_name} does not match the current block height")
+        elif field_name.endswith("_pastel_block_hash"):
+            if field_value != best_block_hash:
+                validation_errors.append(f"Pastel block hash in field {field_name} does not match the current block hash")
+    # Validate hash fields
+    expected_hash = compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance)
+    for field_name, field_value in model_instance.__dict__.items():
+        if "sha3_256_hash_of_" in field_name and field_name.endswith("_fields"):
+            if field_value != expected_hash:
+                validation_errors.append(f"SHA3-256 hash in field {field_name} does not match the computed hash of the response fields")
+    # Validate pastelid signature fields
+    for field_name, field_value in model_instance.__dict__.items():
+        if field_name.endswith("_pastelid_signature_on_request_hash"):
+            pastelid_field_name = field_name.replace("_signature_on_request_hash", "")
+            pastelid = getattr(model_instance, pastelid_field_name)
+            message_to_verify = getattr(model_instance, f"sha3_256_hash_of_{pastelid_field_name}_fields")
+            verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, field_value)
+            if verification_result != 'OK':
+                validation_errors.append(f"Pastelid signature in field {field_name} failed verification")
+    return validation_errors
 
 def get_external_ip_func():
     response = httpx.get("https://ipinfo.io/ip")

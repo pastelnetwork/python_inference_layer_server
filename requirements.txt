@@ -13,6 +13,7 @@ psutil
 python-decouple
 python-Levenshtein
 sqlalchemy
+sqlmodel
 starlette
 tiktoken
 torch
