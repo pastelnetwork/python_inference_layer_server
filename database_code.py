@@ -2,13 +2,12 @@ import json
 import warnings
 from logger_config import setup_logger
 from datetime import datetime
-from decimal import Decimal
 from typing import Optional
 from contextlib import asynccontextmanager
 from sqlmodel import Field, SQLModel, Relationship
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
 from sqlalchemy.orm import sessionmaker
-from pydantic import validator
+from pydantic import field_validator
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import create_async_engine
 from decouple import Config as DecoupleConfig, RepositoryEnv
@@ -108,7 +107,7 @@ class MessageSenderMetadata(SQLModel, table=True):
     sending_sn_txid_vout: str = Field(index=True)
     sending_sn_pubkey: str = Field(index=True)
     total_messages_sent: int
-    total_data_sent_bytes: Decimal
+    total_data_sent_bytes: float
     timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
     class Config:
         json_schema_extra = {
@@ -127,7 +126,7 @@ class MessageReceiverMetadata(SQLModel, table=True):
     receiving_sn_pastelid: str = Field(index=True)
     receiving_sn_txid_vout: str = Field(index=True)
     total_messages_received: int
-    total_data_received_bytes: Decimal
+    total_data_received_bytes: float
     timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
     class Config:
         json_schema_extra = {
@@ -145,7 +144,7 @@ class MessageSenderReceiverMetadata(SQLModel, table=True):
     sending_sn_pastelid: str = Field(index=True)
     receiving_sn_pastelid: str = Field(index=True)
     total_messages: int
-    total_data_bytes: Decimal
+    total_data_bytes: float
     timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
     class Config:
         json_schema_extra = {
@@ -276,7 +275,6 @@ class CreditPackPurchaseRequest(SQLModel, table=True):
     request_pastel_block_height: int
     request_pastel_block_hash: str
     credit_purchase_request_message_version_string: str
-    credit_pack_purchase_request_version_string: str
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(unique=True, index=True)
     requesting_end_user_pastelid_signature_on_request_hash: str
     class Config:
@@ -290,18 +288,17 @@ class CreditPackPurchaseRequest(SQLModel, table=True):
                 "request_pastel_block_height": 123456,
                 "request_pastel_block_hash": "0x1234...",
                 "credit_purchase_request_message_version_string": "1.0",
-                "credit_pack_purchase_request_version_string": "1.0",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x5678...",
                 "requesting_end_user_pastelid_signature_on_request_hash": "0xabcd..."
             }
         }
     # Use validators to serialize/deserialize the list to/from JSON
-    @validator('list_of_authorized_pastelids_allowed_to_use_credit_pack', pre=True, always=True)
+    @field_validator("list_of_authorized_pastelids_allowed_to_use_credit_pack", mode="before")
     def serialize_list_to_json(cls, v):
         if isinstance(v, list):
             return json.dumps(v)
         return v
-    @validator('list_of_authorized_pastelids_allowed_to_use_credit_pack', pre=False, always=True)
+    @field_validator("list_of_authorized_pastelids_allowed_to_use_credit_pack", mode="after")
     def deserialize_json_to_list(cls, v):
         try:
             return json.loads(v)
@@ -312,8 +309,8 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     credit_pack_purchase_request_json: str
-    psl_cost_per_credit: Decimal
-    proposed_total_cost_of_credit_pack_in_psl: Decimal
+    psl_cost_per_credit: float
+    proposed_total_cost_of_credit_pack_in_psl: float
     credit_usage_tracking_psl_address: str = Field(index=True)
     request_response_timestamp_utc_iso_string: str
     request_response_pastel_block_height: int
@@ -345,12 +342,12 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
                 "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json": '["0xabcd...", "0xef01...", ...]'
             }
         }
-    @validator('list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json', pre=True, always=True)
+    @field_validator("list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms", "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash", "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json", mode="before")
     def serialize_lists_to_json(cls, v):
         if isinstance(v, list):
             return json.dumps(v)
         return v
-    @validator('list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash', 'list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json', pre=False, always=True)
+    @field_validator("list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms", "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash", "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json", mode="after")
     def deserialize_json_to_lists(cls, v):
         try:
             return json.loads(v)
@@ -684,7 +681,7 @@ class CreditPackStorageRetryRequestResponse(SQLModel):
             }
         }
             
-#_________________________________________________________________________________________
+##______________________________________________________________________________________________________________________
 # Inference request related models (i.e., using the credit packs to do inferences):
     
 class InferenceAPIUsageRequest(SQLModel, table=True):
@@ -696,15 +693,18 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
     model_inference_type_string: str
     model_parameters_json: str = Field()  # Store the dict serialized as a JSON string
     model_input_data_json_b64: str
-    total_psl_cost_for_pack: Decimal
-    initial_credit_balance: Decimal
-    requesting_pastelid_signature: str
-    @validator('model_parameters_json', pre=True, always=True)
+    inference_request_utc_iso_string: str
+    inference_request_pastel_block_height: int
+    inference_request_pastel_block_hash: str
+    inference_request_message_version_string: str
+    sha3_256_hash_of_inference_request_fields: str
+    requesting_pastelid_signature_on_request_hash: str
+    @field_validator("model_parameters_json", mode="before")
     def serialize_dict_to_json(cls, v):
         if isinstance(v, dict):
             return json.dumps(v)
         return v
-    @validator('model_parameters_json', pre=False, always=True)
+    @field_validator("model_parameters_json", mode="after")
     def deserialize_json_to_dict(cls, v):
         try:
             return json.loads(v)
@@ -721,9 +721,12 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
                 "model_inference_type_string": "text-completion",
                 "model_parameters_json": '{"max_tokens": 100, "temperature": 0.7}',
                 "model_input_data_json_b64": "eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9",
-                "total_psl_cost_for_pack": 1000,
-                "initial_credit_balance": 1000,
-                "requesting_pastelid_signature": "0xabcd..."
+                "inference_request_utc_iso_string": "2023-06-01T12:00:00Z",
+                "inference_request_pastel_block_height": 123456,
+                "inference_request_pastel_block_hash": "0x1234...",
+                "inference_request_message_version_string": "1.0",
+                "sha3_256_hash_of_inference_request_fields": "0x5678...",
+                "requesting_pastelid_signature_on_request_hash": "0xabcd..."
             }
         }
 
@@ -731,12 +734,17 @@ class InferenceAPIUsageResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     inference_response_id: str = Field(unique=True, index=True)
     inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
-    proposed_cost_of_request_in_inference_credits: Decimal
-    remaining_credits_in_pack_after_request_processed: Decimal
+    proposed_cost_of_request_in_inference_credits: float
+    remaining_credits_in_pack_after_request_processed: float
     credit_usage_tracking_psl_address: str = Field(index=True)
     request_confirmation_message_amount_in_patoshis: int
     max_block_height_to_include_confirmation_transaction: int
-    supernode_pastelid_and_signature_on_inference_response_id: str
+    inference_request_response_utc_iso_string: str
+    inference_request_response_pastel_block_height: int
+    inference_request_response_pastel_block_hash: str
+    inference_request_response_message_version_string: str    
+    sha3_256_hash_of_inference_request_response_fields: str
+    supernode_pastelid_and_signature_on_inference_request_response_hash: str
     class Config:
         json_schema_extra = {
             "example": {
@@ -747,7 +755,12 @@ class InferenceAPIUsageResponse(SQLModel, table=True):
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
                 "request_confirmation_message_amount_in_patoshis": 1000,
                 "max_block_height_to_include_confirmation_transaction": 123456,
-                "supernode_pastelid_and_signature_on_inference_response_id": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk:0xabcd..."
+                "inference_request_response_utc_iso_string": "2023-06-01T12:00:00Z",
+                "inference_request_response_pastel_block_height": 123456,
+                "inference_request_response_pastel_block_hash": "0x1234...",
+                "inference_request_response_message_version_string": "1.0",
+                "sha3_256_hash_of_inference_request_response_fields": "0x5678...",
+                "supernode_pastelid_and_signature_on_inference_request_response_hash": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk:0xabcd..."
             }
         }
         
@@ -759,6 +772,11 @@ class InferenceAPIOutputResult(SQLModel, table=True):
     responding_supernode_pastelid: str = Field(index=True)
     inference_result_json_base64: str
     inference_result_file_type_strings: str
+    inference_result_utc_iso_string: str
+    inference_result_pastel_block_height: int
+    inference_result_pastel_block_hash: str
+    inference_result_message_version_string: str    
+    sha3_256_hash_of_inference_result_fields: str    
     responding_supernode_signature_on_inference_result_id: str
     class Config:
         json_schema_extra = {
@@ -769,38 +787,15 @@ class InferenceAPIOutputResult(SQLModel, table=True):
                 "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "inference_result_json_base64": "eyJvdXRwdXQiOiAiSGVsbG8sIEknbSBkb2luZyBncmVhdCEgSG93IGFib3V0IHlvdT8ifQ==",
                 "inference_result_file_type_strings": "json",
+                "inference_result_utc_iso_string": "2023-06-01T12:00:00Z",
+                "inference_result_pastel_block_height": 123456,
+                "inference_result_pastel_block_hash": "0x1234...",
+                "inference_result_message_version_string": "1.0",
+                "sha3_256_hash_of_inference_result_fields": "0x5678...",
                 "responding_supernode_signature_on_inference_result_id": "0xdef0..."
             }
         }
-
-class InferenceCreditPackRequest(SQLModel):
-    authorized_pastelids_to_use_credits: str = Field()
-    psl_cost_per_credit: float
-    total_psl_cost_for_pack: float
-    initial_credit_balance: float
-    credit_usage_tracking_psl_address: str
-    @validator('authorized_pastelids_to_use_credits', pre=True, always=True)
-    def serialize_list_to_json(cls, v):
-        if isinstance(v, list):
-            return json.dumps(v)
-        return v
-    @validator('authorized_pastelids_to_use_credits', pre=False, always=True)
-    def deserialize_json_to_list(cls, v):
-        try:
-            return json.loads(v)
-        except ValueError:
-            return []
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "authorized_pastelids_to_use_credits": '["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk"]',
-                "psl_cost_per_credit": 0.1,
-                "total_psl_cost_for_pack": 1000,
-                "initial_credit_balance": 1000,
-                "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV"
-            }
-        }
-
+        
 class InferenceConfirmation(SQLModel):
     inference_request_id: str
     confirmation_transaction: dict
@@ -815,7 +810,6 @@ class InferenceConfirmation(SQLModel):
                 }
             }
         }
-
 
 # class InferenceAPIUsageRequestModel(BaseModel):
 #     requesting_pastelid: str

@@ -4,14 +4,15 @@ import hashlib
 import sys
 import os
 import io
-import random
-from decimal import Decimal
-from binascii import hexlify
-import zstandard as zstd
 import asyncio
 import base64
 import json
+from functools import lru_cache
 import urllib.parse as urlparse
+import heapq
+from decimal import Decimal
+from binascii import hexlify
+import zstandard as zstd
 import httpx
 from logger_config import setup_logger
 logger = setup_logger()
@@ -137,20 +138,24 @@ class BlockchainUTXOStorage:
             input_data = input_data.encode('utf-8')
         return hashlib.sha3_256(input_data).digest()
 
+    @lru_cache(maxsize=128)
+    async def get_unspent_transactions(self):
+        return await self.rpc_connection.listunspent()
+    
     async def select_txins(self, value):
-        unspent = await self.rpc_connection.listunspent()
-        random.shuffle(unspent)
-        r = []
-        total = 0
-        for tx in unspent:
-            total += tx['amount']
-            r.append(tx)
-            if total >= value:
-                break
-        if total < value:
+        unspent = await self.get_unspent_transactions()
+        heap = [(-tx['amount'], tx) for tx in unspent]
+        heapq.heapify(heap)
+        selected_txins = []
+        total_amount = 0
+        while heap and total_amount < value:
+            neg_amount, tx = heapq.heappop(heap)
+            selected_txins.append(tx)
+            total_amount -= neg_amount
+        if total_amount < value:
             return None
         else:
-            return (r, total)
+            return selected_txins, total_amount
 
     def varint(self, n):
         if n < 0xfd:
@@ -224,7 +229,10 @@ class BlockchainUTXOStorage:
     def compress_data(self, input_data):
         if isinstance(input_data, str):
             input_data = input_data.encode('utf-8')
-        return zstd.compress(input_data)
+        zstd_compression_level = 22
+        zstandard_compressor = zstd.ZstdCompressor(level=zstd_compression_level, write_content_size=True)
+        zstd_compressed_data = zstandard_compressor.compress(input_data)
+        return zstd_compressed_data
 
     def decompress_data(self, compressed_data):
         return zstd.decompress(compressed_data)
