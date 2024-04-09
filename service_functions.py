@@ -159,6 +159,9 @@ MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET =
 MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
 MAXIMUM_LOCAL_UTC_TIMESTAMP_DIFFERENCE_IN_SECONDS = config.get("MAXIMUM_LOCAL_UTC_TIMESTAMP_DIFFERENCE_IN_SECONDS", default=15.0, cast=float)
 MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS = config.get("MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS", default=1, cast=int)
+SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE", default=0.51, cast=float)
+SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE", default=0.85, cast=float)
+
 challenge_store = {}
 
 def parse_timestamp(timestamp_str):
@@ -1281,22 +1284,6 @@ async def check_credit_pack_purchase_request_status(credit_pack_purchase_request
                     else:
                         return "failed"
 
-async def send_price_agreement_request_to_supernodes(request: db_code.CreditPackPurchasePriceAgreementRequest, supernodes: List[str]) -> None:
-    try:
-        async with httpx.AsyncClient() as client:
-            tasks = []
-            for supernode in supernodes:
-                url = f"http://{supernode}:7123/credit_pack_price_agreement_request"
-                task = asyncio.create_task(client.post(url, json=request.model_dump()))
-                tasks.append(task)
-            responses = await asyncio.gather(*tasks)
-            for response in responses:
-                if response.status_code != 200:
-                    logger.warning(f"Error sending price agreement request to supernode {response.url}: {response.text}")
-    except Exception as e:
-        logger.error(f"Error sending price agreement request to supernodes: {str(e)}")
-        raise
-
 async def calculate_preliminary_psl_price_per_credit():
     try:
         # Get the current PSL market price in USD
@@ -1446,6 +1433,9 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
         best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
         # Get the list of all supernodes
         supernode_list_df, _ = await check_supernode_list_func()
+        if len(supernode_list_df) < 12:
+            logger.warning(f"Fewer than 12 supernodes available. Using all available supernodes.")
+            return supernode_list_df['extKey'].tolist()
         # Compute the XOR distance between each supernode's hash(pastelid) and the best block's merkle root
         xor_distances = []
         for _, row in supernode_list_df.iterrows():
@@ -1463,14 +1453,88 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
     except Exception as e:
         logger.error(f"Error selecting potentially agreeing supernodes: {str(e)}")
         raise
+
+async def send_price_agreement_request_to_supernodes(request: db_code.CreditPackPurchasePriceAgreementRequest, supernodes: List[str]) -> List[db_code.CreditPackPurchasePriceAgreementRequestResponse]:
+    try:
+        async with httpx.AsyncClient() as client:
+            tasks = []
+            for supernode in supernodes:
+                url = f"http://{supernode}:7123/credit_pack_price_agreement_request"
+                task = asyncio.create_task(client.post(url, json=request.model_dump()))
+                tasks.append(task)
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            price_agreement_request_responses = []
+            for response in responses:
+                if isinstance(response, httpx.Response):
+                    if response.status_code == 200:
+                        price_agreement_request_response = db_code.CreditPackPurchasePriceAgreementRequestResponse(**response.json())
+                        price_agreement_request_responses.append(price_agreement_request_response)
+                    else:
+                        logger.warning(f"Error sending price agreement request to supernode {response.url}: {response.text}")
+                else:
+                    logger.error(f"Error sending price agreement request to supernode: {str(response)}")
+            return price_agreement_request_responses
+    except Exception as e:
+        logger.error(f"Error sending price agreement request to supernodes: {str(e)}")
+        raise
+    
+async def request_and_sign_challenge(supernode_url: str) -> Dict[str, str]:
+    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+        response = await client.get(f"{supernode_url}/request_challenge/{MY_PASTELID}")
+        response.raise_for_status()
+        result = response.json()
+        challenge = result["challenge"]
+        challenge_id = result["challenge_id"]
+        # Sign the challenge string using the local RPC client
+        challenge_signature = await sign_message_with_pastelid_func(MY_PASTELID, challenge, MY_PASTELID_PASSPHRASE)
+        return {
+            "challenge": challenge,
+            "challenge_id": challenge_id,
+            "challenge_signature": challenge_signature
+        }    
         
-async def process_credit_purchase_preliminary_price_quote_response(response: db_code.CreditPackPurchaseRequestPreliminaryPriceQuoteResponse) -> db_code.CreditPackPurchasePriceAgreementRequest:
+async def send_credit_pack_purchase_request_final_response_to_supernodes(response: db_code.CreditPackPurchaseRequestResponse, supernodes: List[str]) -> None:
+    try:
+        async with httpx.AsyncClient() as client:
+            tasks = []
+            for supernode in supernodes:
+                supernode_url = f"http://{supernode}:7123"
+                challenge_dict = await request_and_sign_challenge(supernode_url)
+                url = f"{supernode_url}/credit_pack_purchase_request_final_response_announcement"
+
+                challenge = challenge_dict["challenge"]
+                challenge_id = challenge_dict["challenge_id"]
+                challenge_signature = challenge_dict["challenge_signature"]
+                payload = {
+                    "response": response.model_dump(),
+                    "challenge": challenge,
+                    "challenge_id": challenge_id,
+                    "challenge_signature": challenge_signature
+                }
+                task = asyncio.create_task(client.post(url, json=payload))
+                tasks.append(task)
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for response in responses:
+                if isinstance(response, httpx.Response):
+                    if response.status_code != 200:
+                        logger.warning(f"Error sending final response announcement to supernode {response.url}: {response.text}")
+                else:
+                    logger.error(f"Error sending final response announcement to supernode: {str(response)}")
+            return responses
+    except Exception as e:
+        logger.error(f"Error sending final response announcement to supernodes: {str(e)}")
+        raise    
+            
+async def process_credit_purchase_preliminary_price_quote_response(response: db_code.CreditPackPurchaseRequestPreliminaryPriceQuoteResponse) -> Union[db_code.CreditPackPurchaseRequestResponse, db_code.CreditPackPurchaseRequestResponseTermination]:
     try:
         # Validate the response fields
         if not response.agree_with_preliminary_price_quote:
+            logger.warning("End user does not agree with preliminary price quote! Unable to proceed with credit pack purchase.")
             raise ValueError("End user does not agree with preliminary price quote")
         # Select the potentially agreeing supernodes
+        logger.info("Now selecting potentially agreeing supernodes to sign off on the proposed credit pricing for the credit pack purchase request...")
         potentially_agreeing_supernodes = await select_potentially_agreeing_supernodes()
+        logger.info(f"Selected {len(potentially_agreeing_supernodes)} potentially agreeing supernodes: {potentially_agreeing_supernodes}")
         # Create the price agreement request without the hash and signature fields
         request = db_code.CreditPackPurchasePriceAgreementRequest(
             sha3_256_hash_of_credit_pack_purchase_request_response_fields=response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields,
@@ -1488,18 +1552,108 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
             MY_PASTELID_PASSPHRASE
         )
         # Send the price agreement request to the potentially agreeing supernodes
-        await send_price_agreement_request_to_supernodes(request, potentially_agreeing_supernodes)
-        return request
+        logger.info(f"Now sending price agreement request to {len(potentially_agreeing_supernodes)} potentially agreeing supernodes...")
+        price_agreement_request_responses = await send_price_agreement_request_to_supernodes(request, potentially_agreeing_supernodes)
+        # Process the price agreement request responses
+        valid_price_agreement_request_responses = []
+        for response in price_agreement_request_responses:
+            validation_errors = await validate_credit_pack_ticket_message_data_func(response)
+            if not validation_errors:
+                valid_price_agreement_request_responses.append(response)
+        logger.info(f"Received {len(valid_price_agreement_request_responses)} valid price agreement responses from potentially agreeing supernodes out of {len(potentially_agreeing_supernodes)} asked.")                
+        # Check if enough supernodes responded with valid responses
+        supernode_price_agreement_response_percentage_achieved = len(valid_price_agreement_request_responses) / len(potentially_agreeing_supernodes)
+        if supernode_price_agreement_response_percentage_achieved <= SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:
+            logger.warning(f"Not enough supernodes responded with valid price agreement responses; only {supernode_price_agreement_response_percentage_achieved:.2%} of the supernodes responded, less than the required quorum percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.2%}")
+            logger.info("Responding to end user with termination message...")
+            termination_message = db_code.CreditPackPurchaseRequestResponseTermination(
+                sha3_256_hash_of_credit_pack_purchase_request_fields=response.sha3_256_hash_of_credit_pack_purchase_request_fields,
+                credit_pack_purchase_request_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(response),
+                termination_reason_string="Not enough supernodes responded with valid price agreement responses",
+                termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+                termination_pastel_block_height=await get_current_pastel_block_height_func(),
+                credit_purchase_request_termination_message_version_string="1.0",
+                responding_supernode_pastelid=MY_PASTELID
+            )
+            termination_message.sha3_256_hash_of_credit_pack_purchase_request_termination_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(termination_message)
+            termination_message.responding_supernode_signature_on_credit_pack_purchase_request_termination_hash = await sign_message_with_pastelid_func(
+                MY_PASTELID,
+                termination_message.sha3_256_hash_of_credit_pack_purchase_request_termination_fields,
+                MY_PASTELID_PASSPHRASE
+            )
+            return termination_message
+        # Tally the agreeing supernodes
+        list_of_agreeing_supernodes = [response.responding_supernode_pastelid for response in valid_price_agreement_request_responses if response.agree_with_proposed_price]
+        supernode_price_agreement_voting_percentage = len(list_of_agreeing_supernodes) / len(valid_price_agreement_request_responses)
+        logger.info(f"Of the {len(valid_price_agreement_request_responses)} valid price agreement responses, {len(list_of_agreeing_supernodes)} supernodes agreed to the proposed pricing, achieving a voting percentage of {supernode_price_agreement_voting_percentage:.2%}")
+        # Check if enough supernodes agreed to the proposed pricing
+        if supernode_price_agreement_voting_percentage <= SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:
+            logger.warning(f"Not enough supernodes agreed to the proposed pricing; only {supernode_price_agreement_voting_percentage:.2%} of the supernodes agreed, less than the required majority percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:.2%}")
+            logger.info(f"Responding to end user with termination message...")
+            termination_message = db_code.CreditPackPurchaseRequestResponseTermination(
+                sha3_256_hash_of_credit_pack_purchase_request_fields=response.sha3_256_hash_of_credit_pack_purchase_request_fields,
+                credit_pack_purchase_request_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(response),
+                termination_reason_string="Not enough supernodes agreed to the proposed pricing",
+                termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+                termination_pastel_block_height=await get_current_pastel_block_height_func(),
+                credit_purchase_request_termination_message_version_string="1.0",
+                responding_supernode_pastelid=MY_PASTELID
+            )
+            termination_message.sha3_256_hash_of_credit_pack_purchase_request_termination_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(termination_message)
+            termination_message.responding_supernode_signature_on_credit_pack_purchase_request_termination_hash = await sign_message_with_pastelid_func(
+                MY_PASTELID,
+                termination_message.sha3_256_hash_of_credit_pack_purchase_request_termination_fields,
+                MY_PASTELID_PASSPHRASE
+            )
+            return termination_message
+        logger.info(f"Enough supernodes agreed to the proposed pricing; {len(list_of_agreeing_supernodes)} supernodes agreed to the proposed pricing, achieving a voting percentage of {supernode_price_agreement_voting_percentage:.2%}, more than the required minimum percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:.2%}")
+        # Create the credit pack purchase request response
+        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(
+            sha3_256_hash_of_credit_pack_purchase_request_fields=response.sha3_256_hash_of_credit_pack_purchase_request_fields,
+            credit_pack_purchase_request_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(response),
+            psl_cost_per_credit=response.preliminary_quoted_price_per_credit_in_psl,
+            proposed_total_cost_of_credit_pack_in_psl=response.preliminary_total_cost_of_credit_pack_in_psl,
+            credit_usage_tracking_psl_address=response.credit_usage_tracking_psl_address,
+            request_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+            request_response_pastel_block_height=await get_current_pastel_block_height_func(),
+            credit_purchase_request_response_message_version_string="1.0",
+            responding_supernode_pastelid=MY_PASTELID,
+            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms=list_of_agreeing_supernodes
+        )
+        logger.info(f"Now generating the final credit pack purchase request response and assembling the {len(list_of_agreeing_supernodes)} agreeing supernode signatures...")
+        # Generate the hash and signature fields
+        credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_purchase_request_response)
+        credit_pack_purchase_request_response.responding_supernode_signature_on_credit_pack_purchase_request_response_hash = await sign_message_with_pastelid_func(
+            MY_PASTELID,
+            credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
+            MY_PASTELID_PASSPHRASE
+        )
+        # Collect the signatures from the agreeing supernodes
+        credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash = []
+        credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json = []
+        for response in valid_price_agreement_request_responses:
+            if response.agree_with_proposed_price:
+                credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash.append(
+                    response.responding_supernode_signature_on_price_agreement_request_response_hash
+                )
+                credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json.append(
+                    response.responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json
+                )
+        # Send the final credit pack purchase request response to the agreeing supernodes
+        logger.info(f"Now sending the final credit pack purchase request response to the list of {len(list_of_agreeing_supernodes)} agreeing supernodes: {list_of_agreeing_supernodes}")
+        announcement_responses = await send_credit_pack_purchase_request_final_response_to_supernodes(credit_pack_purchase_request_response, list_of_agreeing_supernodes)
+        logger.info(f"Received {len(announcement_responses)} responses to the final credit pack purchase request response announcement, of which {len([response for response in announcement_responses if response.status_code == 200])} were successful")
+        return credit_pack_purchase_request_response
     except Exception as e:
         logger.error(f"Error processing credit purchase preliminary price quote response: {str(e)}")
         raise
 
-async def process_credit_pack_price_agreement_request(request: db_code.CreditPackPurchasePriceAgreementRequest) -> db_code.CreditPackPurchasePriceAgreementRequestResponse:
+async def process_credit_pack_price_agreement_request(request: db_code.CreditPackPurchasePriceAgreementRequest) -> Union[db_code.CreditPackPurchasePriceAgreementRequestResponse, str]:
     try:
         # Validate the request fields
         validation_errors = await validate_credit_pack_ticket_message_data_func(request)
         if validation_errors:
-            raise ValueError(f"Invalid price agreement request: {', '.join(validation_errors)}")
+            return f"Invalid price agreement request: {', '.join(validation_errors)}"
         # Determine if the supernode agrees with the proposed price
         agree_with_proposed_price = await determine_agreement_with_proposed_price(request.credit_pack_purchase_request_response_fields_json)
         # Create the response without the hash and signature fields
@@ -1527,7 +1681,7 @@ async def process_credit_pack_price_agreement_request(request: db_code.CreditPac
         # Validate the response
         validation_errors = await validate_credit_pack_ticket_message_data_func(response)
         if validation_errors:
-            raise ValueError(f"Invalid price agreement request response: {', '.join(validation_errors)}")
+            return f"Invalid price agreement request response: {', '.join(validation_errors)}"
         return response
     except Exception as e:
         logger.error(f"Error processing credit pack price agreement request: {str(e)}")
