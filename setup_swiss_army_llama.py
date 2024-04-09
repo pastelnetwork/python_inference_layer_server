@@ -54,9 +54,31 @@ def is_rust_installed():
     except subprocess.CalledProcessError:
         return False
     
+def set_timezone_utc():
+    """
+    Sets the timezone to UTC for the current Python session and permanently for the system.
+    For permanent setting, it appends `export TZ=UTC` to the user's shell profile file.
+    """
+    # Set timezone to UTC for the current session
+    os.environ['TZ'] = 'UTC'
+    # Determine the user's shell profile file
+    shell_profile_path = os.path.expanduser('~/.bashrc')  # Default to .bashrc
+    if os.path.exists(os.path.expanduser('~/.zshrc')):
+        shell_profile_path = os.path.expanduser('~/.zshrc')  # Use .zshrc if it exists
+    # Command to append TZ=UTC export to the shell profile
+    append_tz_command = f'echo "export TZ=UTC" >> {shell_profile_path}'
+    # Check if TZ=UTC is already in the profile to avoid duplicates
+    try:
+        with open(shell_profile_path, 'r') as shell_profile:
+            if 'export TZ=UTC' not in shell_profile.read():
+                # Append the export command to the profile
+                subprocess.run(append_tz_command, shell=True)
+    except Exception as e:
+        logger.error(f"An error occurred while setting timezone: {e}")    
+    
 def setup_swiss_army_llama(security_token):
+    set_timezone_utc()
     swiss_army_llama_path = os.path.expanduser("~/swiss_army_llama")
-
     if not os.path.exists(swiss_army_llama_path):
         logger.info("Changing to the home directory.")
         os.chdir(os.path.expanduser("~"))
@@ -71,18 +93,14 @@ def setup_swiss_army_llama(security_token):
         command = "git stash && git pull"
         logger.info(f"Now running command: {command}")
         subprocess.run(command, shell=True, executable="/bin/bash")
-
     logger.info("Updating the Swiss Army Llama code file with the provided security token.")
     swiss_army_llama_file_path = os.path.join(swiss_army_llama_path, "swiss_army_llama.py")
     with open(swiss_army_llama_file_path, "r") as file:
         code_content = file.read()
-
     code_content = re.sub(r'SECURITY_TOKEN\s*=\s*"[^"]+"', f'SECURITY_TOKEN = "{security_token}"', code_content)
     code_content = re.sub(r'use_hardcoded_security_token\s*=\s*\d+', 'use_hardcoded_security_token = 1', code_content)
-
     with open(swiss_army_llama_file_path, "w") as file:
         file.write(code_content)
-
     logger.info("Checking for pyenv installation.")
     if not is_pyenv_installed():
         logger.info("pyenv is not installed. Installing pyenv.")
@@ -106,7 +124,6 @@ def setup_swiss_army_llama(security_token):
         logger.info(f"Added pyenv initialization to {shell_rc_path}. Attempting to source it.")
     else:
         logger.info("pyenv is already installed.")
-
     if not is_python_3_12_installed():
         logger.info("Python 3.12 is not installed. Installing the latest version of Python 3.12.")
         commands = [
@@ -118,7 +135,6 @@ def setup_swiss_army_llama(security_token):
             subprocess.run(command, shell=True, executable="/bin/bash")
     else:
         logger.info("Python 3.12 is already installed.")
-
     logger.info("Creating and activating virtual environment in ~/swiss_army_llama.")
     os.chdir(swiss_army_llama_path)
     # Initialize the commands list with Python environment setup commands
@@ -177,5 +193,4 @@ def check_and_setup_swiss_army_llama(security_token):
         if not is_port_available(swiss_army_llama_port):
             logger.error(f"Port {swiss_army_llama_port} is not available. Please ensure that Swiss Army Llama is not running on another process.")
             return
-
         setup_swiss_army_llama(security_token)

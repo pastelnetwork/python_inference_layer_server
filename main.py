@@ -1,6 +1,7 @@
 from logger_config import setup_logger
 from endpoint_functions import router
 import asyncio
+import os
 import fastapi
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +17,7 @@ from setup_swiss_army_llama import check_and_setup_swiss_army_llama
 config = DecoupleConfig(RepositoryEnv('.env'))
 UVICORN_PORT = config.get("UVICORN_PORT", cast=int)
 SWISS_ARMY_LLAMA_SECURITY_TOKEN = config.get("SWISS_ARMY_LLAMA_SECURITY_TOKEN", cast=str)
+os.environ['TZ'] = 'UTC' # Set timezone to UTC for the current session
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
 
@@ -71,7 +73,7 @@ async def startup():
         logger.info(f"Database initialization complete: {db_init_complete}")
         encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
         decrypt_sensitive_fields() # Now decrypt sensitive fields        
-        asyncio.create_task(monitor_new_messages())  # Create a background task
+        # asyncio.create_task(monitor_new_messages())  # Create a background task
         asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
     except Exception as e:
         logger.error(f"Error during startup: {e}")

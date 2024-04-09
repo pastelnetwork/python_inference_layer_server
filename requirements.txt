@@ -12,6 +12,7 @@ pandas
 psutil
 python-decouple
 python-Levenshtein
+pytz
 sqlalchemy
 sqlmodel
 starlette

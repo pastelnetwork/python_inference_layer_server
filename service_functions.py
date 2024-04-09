@@ -13,8 +13,10 @@ import random
 import re
 import html
 import warnings
+import pytz
 from urllib.parse import quote_plus, unquote_plus
 from datetime import datetime, timedelta, date
+import datetime as dt
 import pandas as pd
 import httpx
 from httpx import AsyncClient, Limits, Timeout
@@ -155,6 +157,8 @@ MINIMUM_COST_IN_CREDITS = config.get("MINIMUM_COST_IN_CREDITS", default=0.1, cas
 CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER = config.get("CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER", default=10, cast=int) # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis     
 MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET = config.get("MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET", default=50, cast=int)
 MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
+MAXIMUM_LOCAL_UTC_TIMESTAMP_DIFFERENCE_IN_SECONDS = config.get("MAXIMUM_LOCAL_UTC_TIMESTAMP_DIFFERENCE_IN_SECONDS", default=15.0, cast=float)
+MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS = config.get("MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS", default=1, cast=int)
 challenge_store = {}
 
 def parse_timestamp(timestamp_str):
@@ -1109,7 +1113,7 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
             "message": user_message_data['message_body'],  # The content of the message
             "message_type": "user_message",  # Static type as per your design
             "sending_sn_pastelid": sending_sn_pastelid,  # From local machine supernode data
-            "timestamp": datetime.utcnow().isoformat(),  # Current UTC timestamp
+            "timestamp": datetime.now(dt.UTC).isoformat(),  # Current UTC timestamp
             "id": supernode_user_message_data['id'],  # ID from the supernode user message record
             "signature": pastelid_signature_on_message,
             "user_message": {
@@ -1397,9 +1401,8 @@ async def process_credit_purchase_initial_request(request: db_code.CreditPackPur
             credit_pack_purchase_request_response_fields_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(request),
             preliminary_quoted_price_per_credit_in_psl=preliminary_quoted_price_per_credit_in_psl,
             preliminary_total_cost_of_credit_pack_in_psl=preliminary_total_cost_of_credit_pack_in_psl,
-            preliminary_price_quote_timestamp_utc_iso_string=datetime.utcnow().isoformat(),
+            preliminary_price_quote_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             preliminary_price_quote_pastel_block_height=await get_current_pastel_block_height_func(),
-            preliminary_price_quote_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
             preliminary_price_quote_message_version_string="1.0",
             responding_supernode_pastelid=MY_PASTELID
         )
@@ -1424,9 +1427,8 @@ async def generate_credit_pack_request_rejection_message(credit_pack_request: db
         sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
         credit_pack_purchase_request_response_fields_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(credit_pack_request),
         rejection_reason_string=", ".join(validation_errors),
-        rejection_timestamp_utc_iso_string=datetime.utcnow().isoformat(),
+        rejection_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
         rejection_pastel_block_height=await get_current_pastel_block_height_func(),
-        rejection_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
         credit_purchase_request_rejection_message_version_string="1.0",
         responding_supernode_pastelid=MY_PASTELID
     )
@@ -1474,9 +1476,8 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
             sha3_256_hash_of_credit_pack_purchase_request_response_fields=response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields,
             supernode_requesting_price_agreement_pastelid=MY_PASTELID,
             credit_pack_purchase_request_response_fields_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(response),
-            price_agreement_request_timestamp_utc_iso_string=datetime.utcnow().isoformat(),
+            price_agreement_request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             price_agreement_request_pastel_block_height=await get_current_pastel_block_height_func(),
-            price_agreement_request_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
             price_agreement_request_message_version_string="1.0"
         )
         # Generate the hash and signature fields
@@ -1506,9 +1507,8 @@ async def process_credit_pack_price_agreement_request(request: db_code.CreditPac
             sha3_256_hash_of_price_agreement_request_fields=request.sha3_256_hash_of_price_agreement_request_fields,
             credit_pack_purchase_request_response_fields_json=request.credit_pack_purchase_request_response_fields_json,
             agree_with_proposed_price=agree_with_proposed_price,
-            proposed_price_agreement_response_timestamp_utc_iso_string=datetime.utcnow().isoformat(),
+            proposed_price_agreement_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             proposed_price_agreement_response_pastel_block_height=await get_current_pastel_block_height_func(),
-            proposed_price_agreement_response_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
             proposed_price_agreement_response_message_version_string="1.0",
             responding_supernode_pastelid=MY_PASTELID
         )
@@ -1588,9 +1588,8 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 credit_pack_confirmation_outcome_string="success",
                 pastel_api_credit_pack_ticket_registration_txid=pastel_api_credit_pack_ticket_registration_txid,
                 credit_pack_confirmation_failure_reason_if_applicable="",
-                credit_purchase_request_confirmation_response_utc_iso_string=datetime.utcnow().isoformat(),
+                credit_purchase_request_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 credit_purchase_request_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
-                credit_purchase_request_confirmation_response_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
                 credit_purchase_request_confirmation_response_message_version_string="1.0",
                 responding_supernode_pastelid=MY_PASTELID
             )
@@ -1609,9 +1608,8 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 credit_pack_confirmation_outcome_string="failure",
                 pastel_api_credit_pack_ticket_registration_txid="",
                 credit_pack_confirmation_failure_reason_if_applicable="Burn transaction not confirmed",
-                credit_purchase_request_confirmation_response_utc_iso_string=datetime.utcnow().isoformat(),
+                credit_purchase_request_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 credit_purchase_request_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
-                credit_purchase_request_confirmation_response_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
                 credit_purchase_request_confirmation_response_message_version_string="1.0",
                 responding_supernode_pastelid=MY_PASTELID
             )
@@ -1671,9 +1669,8 @@ async def process_credit_pack_storage_retry_request(request: db_code.CreditPackS
                 credit_pack_storage_retry_confirmation_outcome_string="success",
                 pastel_api_credit_pack_ticket_registration_txid=pastel_api_credit_pack_ticket_registration_txid,
                 credit_pack_storage_retry_confirmation_failure_reason_if_applicable="",
-                credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.utcnow().isoformat(),
+                credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 credit_pack_storage_retry_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
-                credit_pack_storage_retry_confirmation_response_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
                 credit_pack_storage_retry_confirmation_response_message_version_string="1.0",
                 closest_agreeing_supernode_to_retry_storage_pastelid=MY_PASTELID
             )
@@ -1692,9 +1689,8 @@ async def process_credit_pack_storage_retry_request(request: db_code.CreditPackS
                 credit_pack_storage_retry_confirmation_outcome_string="failure",
                 pastel_api_credit_pack_ticket_registration_txid="",
                 credit_pack_storage_retry_confirmation_failure_reason_if_applicable="Original responding supernode already confirmed storage",
-                credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.utcnow().isoformat(),
+                credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 credit_pack_storage_retry_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
-                credit_pack_storage_retry_confirmation_response_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
                 credit_pack_storage_retry_confirmation_response_message_version_string="1.0",
                 closest_agreeing_supernode_to_retry_storage_pastelid=MY_PASTELID
             )
@@ -2248,9 +2244,8 @@ async def create_and_save_inference_api_usage_response(saved_request: db_code.In
         credit_usage_tracking_psl_address=credit_usage_tracking_psl_address,
         request_confirmation_message_amount_in_patoshis=int(proposed_cost_in_credits * CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER),
         max_block_height_to_include_confirmation_transaction=await get_current_pastel_block_height_func() + 10,  # Adjust as needed
-        inference_request_response_utc_iso_string=datetime.utcnow().isoformat(),
+        inference_request_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
         inference_request_response_pastel_block_height=await get_current_pastel_block_height_func(),
-        inference_request_response_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
         inference_request_response_message_version_string="1.0"
     )
     # Generate the hash and signature fields
@@ -2379,9 +2374,8 @@ async def save_inference_output_results(inference_request_id: str, inference_res
             responding_supernode_pastelid=local_supernode_pastelid,
             inference_result_json_base64=base64.b64encode(json.dumps(output_results).encode("utf-8")).decode("utf-8"),
             inference_result_file_type_strings=json.dumps(output_results_file_type_strings),
-            inference_result_utc_iso_string=datetime.utcnow().isoformat(),
+            inference_result_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             inference_result_pastel_block_height=await get_current_pastel_block_height_func(),
-            inference_result_pastel_block_hash=await get_best_block_hash_and_merkle_root_func()[0],
             inference_result_message_version_string="1.0"
         )
         # Generate the hash and signature fields
@@ -3159,26 +3153,16 @@ class MyTimer():
         msg = '({time} seconds to complete)'
         logger.info(msg.format(time=round(runtime, 2)))
 
-
 def compute_elapsed_time_in_minutes_between_two_datetimes_func(start_datetime, end_datetime):
     time_delta = (end_datetime - start_datetime)
     total_seconds_elapsed = time_delta.total_seconds()
     total_minutes_elapsed = total_seconds_elapsed / 60
     return total_minutes_elapsed
 
-
 def compute_elapsed_time_in_minutes_since_start_datetime_func(start_datetime):
     end_datetime = datetime.utcnow()
     total_minutes_elapsed = compute_elapsed_time_in_minutes_between_two_datetimes_func(start_datetime, end_datetime)
     return total_minutes_elapsed
-
-
-def get_sha256_hash_of_input_data_func(input_data_or_string):
-    if isinstance(input_data_or_string, str):
-        input_data_or_string = input_data_or_string.encode('utf-8')
-    sha256_hash_of_input_data = hashlib.sha3_256(input_data_or_string).hexdigest()
-    return sha256_hash_of_input_data
-
 
 def check_if_ip_address_is_valid_func(ip_address_string):
     try:
@@ -3189,6 +3173,11 @@ def check_if_ip_address_is_valid_func(ip_address_string):
         ip_address_is_valid = 0
     return ip_address_is_valid
 
+def get_sha256_hash_of_input_data_func(input_data_or_string):
+    if isinstance(input_data_or_string, str):
+        input_data_or_string = input_data_or_string.encode('utf-8')
+    sha256_hash_of_input_data = hashlib.sha3_256(input_data_or_string).hexdigest()
+    return sha256_hash_of_input_data
 
 def compare_datetimes(datetime_input1, datetime_input2):
     # Check if the inputs are datetime objects, otherwise parse them
@@ -3196,12 +3185,19 @@ def compare_datetimes(datetime_input1, datetime_input2):
         datetime_input1 = pd.to_datetime(datetime_input1)
     if not isinstance(datetime_input2, datetime):
         datetime_input2 = pd.to_datetime(datetime_input2)
+    # Ensure both datetime objects are timezone-aware
+    if datetime_input1.tzinfo is None:
+        datetime_input1 = datetime_input1.replace(tzinfo=pytz.UTC)
+    if datetime_input2.tzinfo is None:
+        datetime_input2 = datetime_input2.replace(tzinfo=pytz.UTC)
     # Calculate the difference in seconds
     difference_in_seconds = abs((datetime_input2 - datetime_input1).total_seconds())
     # Check if the difference is within the acceptable range
     datetimes_are_close_enough_to_consider_them_matching = (
-        difference_in_seconds <= MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING
+        difference_in_seconds <= MAXIMUM_LOCAL_UTC_TIMESTAMP_DIFFERENCE_IN_SECONDS
     )
+    if not datetimes_are_close_enough_to_consider_them_matching:
+        logger.warning(f"Timestamps are too far apart: {difference_in_seconds} seconds")
     return difference_in_seconds, datetimes_are_close_enough_to_consider_them_matching
 
 async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance: SQLModel) -> str:
@@ -3236,34 +3232,54 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
             except ValueError:
                 validation_errors.append(f"Invalid timestamp format for field {field_name}")
             # Check if the timestamp is within an acceptable range of the current time
-            current_timestamp = pd.to_datetime(datetime.utcnow())
+            current_timestamp = pd.to_datetime(datetime.utcnow().replace(tzinfo=pytz.UTC))
             timestamp_diff, timestamps_match = compare_datetimes(field_value, current_timestamp)
             if not timestamps_match:
                 validation_errors.append(f"Timestamp in field {field_name} is too far from the current time")
-    # Validate pastel block height and hash fields
+    # Validate pastel block height fields
     best_block_hash, best_block_merkle_root, best_block_height = await get_best_block_hash_and_merkle_root_func()
     for field_name, field_value in model_instance.__dict__.items():
         if field_name.endswith("_pastel_block_height"):
-            if field_value != best_block_height:
-                validation_errors.append(f"Pastel block height in field {field_name} does not match the current block height")
-        elif field_name.endswith("_pastel_block_hash"):
-            if field_value != best_block_hash:
-                validation_errors.append(f"Pastel block hash in field {field_name} does not match the current block hash")
+            if abs(field_value - best_block_height) > MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS:
+                validation_errors.append(f"Pastel block height in field {field_name} does not match the current block height; difference is {abs(field_value - best_block_height)} blocks (local: {field_value}, remote: {best_block_height})")
     # Validate hash fields
-    expected_hash = compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance)
-    for field_name, field_value in model_instance.__dict__.items():
+    expected_hash = await compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance)
+    hash_field_name = None
+    for field_name in model_instance.__fields__:
         if "sha3_256_hash_of_" in field_name and field_name.endswith("_fields"):
-            if field_value != expected_hash:
-                validation_errors.append(f"SHA3-256 hash in field {field_name} does not match the computed hash of the response fields")
+            hash_field_name = field_name
+            break
+    if hash_field_name:
+        actual_hash = getattr(model_instance, hash_field_name)
+        if actual_hash != expected_hash:
+            validation_errors.append(f"SHA3-256 hash in field {hash_field_name} does not match the computed hash of the response fields")
     # Validate pastelid signature fields
-    for field_name, field_value in model_instance.__dict__.items():
-        if field_name.endswith("_pastelid_signature_on_request_hash"):
-            pastelid_field_name = field_name.replace("_signature_on_request_hash", "")
-            pastelid = getattr(model_instance, pastelid_field_name)
-            message_to_verify = getattr(model_instance, f"sha3_256_hash_of_{pastelid_field_name}_fields")
-            verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, field_value)
-            if verification_result != 'OK':
-                validation_errors.append(f"Pastelid signature in field {field_name} failed verification")
+    signature_field_names = [
+        "_signature_on_request_hash",
+        "_signature_on_preliminary_price_quote_response_hash",
+        "_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields",
+        "_signature_on_credit_pack_purchase_request_response_hash",
+        "_signature_on_credit_pack_purchase_request_rejection_hash",
+        "_signature_on_credit_pack_purchase_request_preliminary_price_quote_hash",
+        "_signature_on_sha3_256_hash_of_credit_pack_purchase_request_fields",
+        "_signature_on_credit_pack_purchase_request_status_hash",
+        "_signature_on_credit_pack_purchase_request_termination_hash",
+        "_signature_on_credit_pack_storage_retry_request_hash",
+        "_signature_on_credit_pack_storage_retry_confirmation_response_hash",
+        "_signature_on_inference_request_response_hash",
+        "_supernode_signature_on_inference_result_id"
+    ]
+    for signature_field_name_suffix in signature_field_names:
+        for field_name in model_instance.__fields__:
+            if field_name.endswith(signature_field_name_suffix):
+                signature_field_name = field_name
+                pastelid_field_name = signature_field_name.replace(signature_field_name_suffix, "")
+                pastelid = getattr(model_instance, pastelid_field_name)
+                message_to_verify = getattr(model_instance, hash_field_name)
+                signature = getattr(model_instance, signature_field_name)
+                verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
+                if verification_result != 'OK':
+                    validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
     return validation_errors
 
 async def validate_inference_request_message_data_func(model_instance: SQLModel):
