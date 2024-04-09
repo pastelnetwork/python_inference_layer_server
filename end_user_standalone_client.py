@@ -34,7 +34,6 @@ MY_LOCAL_PASTELID = config.get("MY_LOCAL_PASTELID", cast=str)
 # MY_PASTELID_PASSPHRASE = config.get("MY_PASTELID_PASSPHRASE", cast=str)
 MY_PASTELID_PASSPHRASE = "5QcX9nX67buxyeC"
 LOCAL_CREDIT_TRACKING_PSL_ADDRESS = config.get("LOCAL_CREDIT_TRACKING_PSL_ADDRESS", cast=str)
-CREDIT_PACK_FILE = config.get("CREDIT_PACK_FILE", cast=str)
 MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
 
 def setup_logger():
@@ -1310,7 +1309,7 @@ class PastelMessagingClient:
             result = response.json()
             return [UserMessage.model_validate(message) for message in result]
 
-    async def create_credit_pack_ticket(self, supernode_url: str, credit_pack_request: CreditPackPurchaseRequest) -> CreditPackPurchaseRequestResponse:
+    async def credit_pack_ticket_initial_purchase_request(self, supernode_url: str, credit_pack_request: CreditPackPurchaseRequest) -> CreditPackPurchaseRequestResponse:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
@@ -1369,6 +1368,33 @@ class PastelMessagingClient:
             response.raise_for_status()
             result = response.json()
             return CreditPackPurchaseRequestConfirmationResponse.model_validate(result)
+        
+    async def check_status_of_credit_purchase_request(self, supernode_url: str, credit_pack_purchase_request_hash: str) -> CreditPackPurchaseRequestStatus:
+        challenge_result = await self.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        challenge_id = challenge_result["challenge_id"]
+        challenge_signature = challenge_result["signature"]
+        # Create the CreditPackRequestStatusCheck model instance
+        status_check = CreditPackRequestStatusCheck(
+            sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_purchase_request_hash,
+            requesting_end_user_pastelid=self.pastelid,
+            requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_fields=await sign_message_with_pastelid_func(self.pastelid, credit_pack_purchase_request_hash, self.passphrase)
+        )
+        # Convert the model instance to JSON payload
+        payload = status_check.model_dump()
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            response = await client.post(
+                f"{supernode_url}/check_status_of_credit_purchase_request",
+                json={
+                    "credit_pack_request_status_check": payload,
+                    "challenge": challenge,
+                    "challenge_id": challenge_id,
+                    "challenge_signature": challenge_signature
+                }
+            )
+            response.raise_for_status()
+            result = response.json()
+            return CreditPackPurchaseRequestStatus.model_validate(result)        
 
     async def make_inference_api_usage_request(self, supernode_url: str, request_data: InferenceAPIUsageRequest) -> InferenceAPIUsageResponse:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
