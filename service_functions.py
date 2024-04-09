@@ -1820,7 +1820,8 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             credit_pack_purchase_request_response_json = credit_pack_purchase_request_response.model_dump()
             credit_pack_purchase_request_response_json_formatted = json.dumps(json.loads(credit_pack_purchase_request_response_json), indent=2)
             credit_pack_ticket_bytes_before_compression = sys.getsizeof(credit_pack_purchase_request_response_json_formatted)
-            credit_pack_ticket_bytes_after_compression = sys.getsizeof(compress_data_with_zstd_func(credit_pack_purchase_request_response_json_formatted))
+            compressed_credit_pack_ticket, _ = compress_data_with_zstd_func(credit_pack_purchase_request_response_json_formatted)
+            credit_pack_ticket_bytes_after_compression = sys.getsizeof(compressed_credit_pack_ticket)
             logger.info(f"Required burn transaction confirmed with {num_confirmations} confirmations; now attempting to write the credit pack ticket to the blockchain (a total of {credit_pack_ticket_bytes_before_compression} bytes before compression and {credit_pack_ticket_bytes_after_compression} bytes after compression)...")
             ticket_json_formatted
             logger.info(f"Writing the credit pack ticket to the blockchain:\n {credit_pack_purchase_request_response_json_formatted}")
