@@ -159,6 +159,8 @@ MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET =
 MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
 MAXIMUM_LOCAL_UTC_TIMESTAMP_DIFFERENCE_IN_SECONDS = config.get("MAXIMUM_LOCAL_UTC_TIMESTAMP_DIFFERENCE_IN_SECONDS", default=15.0, cast=float)
 MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS = config.get("MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS", default=1, cast=int)
+MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED = config.get("MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED", default=10, cast=int)
+MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION = config.get("MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION", default=3, cast=int)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE", default=0.51, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE", default=0.85, cast=float)
 
@@ -265,7 +267,6 @@ async def get_n_closest_supernodes_to_pastelid_urls(n, input_pastelid, supernode
             supernode_urls_and_pastelids.append((supernode_url, supernode_pastelid))
         return supernode_urls_and_pastelids
     return []
-
 
 class JSONRPCException(Exception):
     def __init__(self, rpc_error):
@@ -597,7 +598,9 @@ async def get_sn_data_from_sn_pubkey_func(specified_sn_pubkey):
         return specified_machine_supernode_data
 
 async def compress_data_with_zstd_func(input_data):
-    zstd_compression_level = 20
+    if isinstance(input_data, str):
+        input_data = input_data.encode('utf-8')
+    zstd_compression_level = 22
     zstandard_compressor = zstd.ZstdCompressor(level=zstd_compression_level, write_content_size=True, write_checksum=True)
     zstd_compressed_data = zstandard_compressor.compress(input_data)
     zstd_compressed_data__base64_encoded = base64.b64encode(zstd_compressed_data).decode('utf-8')
@@ -1322,13 +1325,20 @@ async def determine_agreement_with_proposed_price(credit_pack_purchase_request_r
         logger.error(f"Error determining agreement with proposed price: {str(e)}")
         raise
     
-async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: str, total_cost_in_psl: float, request_response_pastel_block_height: int) -> bool:
-    try: # Basically, it's the exact same logic that we use for confirming the tracking transactions for inference requests, so we can just wrap that function:
+async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: str, total_cost_in_psl: float, request_response_pastel_block_height: int) -> Tuple[bool, int]:
+    try:
         max_block_height = request_response_pastel_block_height + MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET
         max_retries = 20
         initial_retry_delay_in_seconds = 180
-        transaction_confirmed = await check_burn_address_for_tracking_transaction(burn_address, credit_usage_tracking_psl_address, total_cost_in_psl, txid, max_block_height, max_retries, initial_retry_delay_in_seconds)
-        return transaction_confirmed
+        matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(
+            burn_address,
+            credit_usage_tracking_amount_in_psl,
+            txid,
+            max_block_height,
+            max_retries,
+            initial_retry_delay_in_seconds
+        )
+        return matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address
     except Exception as e:
         logger.error(f"Error checking burn transaction: {str(e)}")
         raise
@@ -1716,6 +1726,65 @@ async def process_credit_pack_purchase_request_final_response_announcement(respo
     except Exception as e:
         logger.error(f"Error processing credit pack purchase request final response announcement: {str(e)}")
         raise
+    
+async def get_block_height_for_credit_pack_purchase_request_confirmation(sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str) -> int:
+    try:
+        # Retrieve the CreditPackPurchaseRequestConfirmation from the database using the hash
+        confirmation = await db_code.CreditPackPurchaseRequestConfirmation.get(sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
+        return confirmation.credit_purchase_request_confirmation_pastel_block_height
+    except Exception as e:
+        logger.error(f"Error retrieving block height for CreditPackPurchaseRequestConfirmation: {str(e)}")
+        raise
+
+async def get_closest_agreeing_supernode_pastelid(end_user_pastelid: str, agreeing_supernode_pastelids: List[str]) -> str:
+    try:
+        end_user_pastelid_hash = compute_sha3_256_hexdigest(end_user_pastelid)
+        end_user_pastelid_int = int(end_user_pastelid_hash, 16)
+        xor_distances = []
+        for supernode_pastelid in agreeing_supernode_pastelids:
+            supernode_pastelid_hash = compute_sha3_256_hexdigest(supernode_pastelid)
+            supernode_pastelid_int = int(supernode_pastelid_hash, 16)
+            distance = end_user_pastelid_int ^ supernode_pastelid_int
+            xor_distances.append((supernode_pastelid, distance))
+        closest_supernode_pastelid = min(xor_distances, key=lambda x: x[1])[0]
+        return closest_supernode_pastelid
+    except Exception as e:
+        logger.error(f"Error getting closest agreeing supernode pastelid: {str(e)}")
+        raise    
+
+async def send_credit_pack_storage_completion_announcement_to_supernodes(response: db_code.CreditPackPurchaseRequestConfirmationResponse, agreeing_supernode_pastelids: List[str]) -> None:
+    try:
+        async with httpx.AsyncClient() as client:
+            tasks = []
+            for supernode_pastelid in agreeing_supernode_pastelids:
+                supernode_url = f"http://{await get_supernode_url_from_pastelid(supernode_pastelid)}:7123/credit_pack_storage_completion_announcement"
+                challenge_result = await get_challenge_from_supernode(supernode_url)
+                challenge = challenge_result["challenge"]
+                challenge_id = challenge_result["challenge_id"]
+                challenge_signature = await sign_message_with_pastelid_func(
+                    MY_PASTELID,
+                    challenge_id,
+                    MY_PASTELID_PASSPHRASE
+                )
+                payload = {
+                    "response": response.model_dump(),
+                    "challenge": challenge,
+                    "challenge_id": challenge_id,
+                    "challenge_signature": challenge_signature
+                }
+                task = asyncio.create_task(client.post(supernode_url, json=payload))
+                tasks.append(task)
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for response in responses:
+                if isinstance(response, httpx.Response):
+                    if response.status_code != 200:
+                        logger.warning(f"Error sending storage completion announcement to supernode {response.url}: {response.text}")
+                else:
+                    logger.error(f"Error sending storage completion announcement to supernode: {str(response)}")
+            return responses
+    except Exception as e:
+        logger.error(f"Error sending storage completion announcement to supernodes: {str(e)}")
+        raise
 
 async def process_credit_purchase_request_confirmation(confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> db_code.CreditPackPurchaseRequestConfirmationResponse:
     try:
@@ -1726,15 +1795,36 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
         # Retrieve the credit pack purchase request response
         credit_pack_purchase_request_response = await get_credit_pack_purchase_request_response(confirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
         # Check the burn transaction
-        transaction_confirmed = await check_burn_transaction(
-            confirmation.txid_of_credit_purchase_burn_transaction,
-            credit_pack_purchase_request_response.credit_usage_tracking_psl_address,
-            credit_pack_purchase_request_response.proposed_total_cost_of_credit_pack_in_psl,
-            credit_pack_purchase_request_response.request_response_pastel_block_height
-        )
-        if transaction_confirmed:
+        logger.info(f"Now checking the burn transaction for the credit pack purchase request...")
+        matching_transaction_found = False
+        exceeding_transaction_found = False
+        num_confirmations = 0
+        current_block_height = await get_current_pastel_block_height_func()
+        while current_block_height <= credit_pack_purchase_request_response.request_response_pastel_block_height + MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET:
+            matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_transaction(
+                confirmation.txid_of_credit_purchase_burn_transaction,
+                credit_pack_purchase_request_response.credit_usage_tracking_psl_address,
+                credit_pack_purchase_request_response.proposed_total_cost_of_credit_pack_in_psl,
+                credit_pack_purchase_request_response.request_response_pastel_block_height
+            )
+            if matching_transaction_found or exceeding_transaction_found:
+                if num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION:
+                    break
+                else:
+                    await asyncio.sleep(30)  # Wait for 30 seconds before checking again
+            else:
+                await asyncio.sleep(30)  # Wait for 30 seconds before checking again
+            current_block_height = await get_current_pastel_block_height_func()
+        if matching_transaction_found or exceeding_transaction_found:
             # Store the credit pack ticket on the blockchain
-            pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response)
+            credit_pack_purchase_request_response_json = credit_pack_purchase_request_response.model_dump()
+            credit_pack_purchase_request_response_json_formatted = json.dumps(json.loads(credit_pack_purchase_request_response_json), indent=2)
+            credit_pack_ticket_bytes_before_compression = sys.getsizeof(credit_pack_purchase_request_response_json_formatted)
+            credit_pack_ticket_bytes_after_compression = sys.getsizeof(compress_data_with_zstd_func(credit_pack_purchase_request_response_json_formatted))
+            logger.info(f"Required burn transaction confirmed with {num_confirmations} confirmations; now attempting to write the credit pack ticket to the blockchain (a total of {credit_pack_ticket_bytes_before_compression} bytes before compression and {credit_pack_ticket_bytes_after_compression} bytes after compression)...")
+            ticket_json_formatted
+            logger.info(f"Writing the credit pack ticket to the blockchain:\n {credit_pack_purchase_request_response_json_formatted}")
+            pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json_formatted)
             # Create the confirmation response without the hash and signature fields
             response = db_code.CreditPackPurchaseRequestConfirmationResponse(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields,
@@ -1754,6 +1844,9 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 response.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields,
                 MY_PASTELID_PASSPHRASE
             )
+            # Send the CreditPackPurchaseRequestConfirmationResponse to the agreeing supernodes
+            announcement_responses = await send_credit_pack_storage_completion_announcement_to_supernodes(response, credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
+            logger.info(f"Received {len(announcement_responses)} responses to the credit pack storage completion announcement, of which {len([response for response in announcement_responses if response.status_code == 200])} were successful")
         else:
             # Create the confirmation response with failure without the hash and signature fields
             response = db_code.CreditPackPurchaseRequestConfirmationResponse(
@@ -1761,7 +1854,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields,
                 credit_pack_confirmation_outcome_string="failure",
                 pastel_api_credit_pack_ticket_registration_txid="",
-                credit_pack_confirmation_failure_reason_if_applicable="Burn transaction not confirmed",
+                credit_pack_confirmation_failure_reason_if_applicable="Burn transaction not confirmed within the required number of blocks",
                 credit_purchase_request_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 credit_purchase_request_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_purchase_request_confirmation_response_message_version_string="1.0",
@@ -1781,7 +1874,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
         return response
     except Exception as e:
         logger.error(f"Error processing credit purchase request confirmation: {str(e)}")
-        raise
+        raise    
     
 async def process_credit_pack_purchase_completion_announcement(confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> None:
     try:
@@ -1811,6 +1904,19 @@ async def process_credit_pack_storage_retry_request(request: db_code.CreditPackS
         validation_errors = await validate_credit_pack_ticket_message_data_func(request)
         if validation_errors:
             raise ValueError(f"Invalid credit pack storage retry request: {', '.join(validation_errors)}")
+        # Check if the supernode receiving the retry request is the closest agreeing supernode to the end user's pastelid
+        closest_agreeing_supernode_pastelid = await get_closest_agreeing_supernode_pastelid(request.requesting_end_user_pastelid, json.loads(request.credit_pack_purchase_request_response_json)["list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms"])
+        if closest_agreeing_supernode_pastelid != MY_PASTELID:
+            error_message = f"The supernode receiving the retry request is not the closest agreeing supernode to the end user's pastelid! Closest agreeing supernode to end user's pastelid ({request.requesting_end_user_pastelid}) is {closest_agreeing_supernode_pastelid}, whereas our local pastelid is {MY_PASTELID}"
+            logger.error(error_message)
+            raise ValueError(error_message)
+        # Check if more than MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED Pastel blocks have elapsed since the CreditPackPurchaseRequestConfirmation was sent
+        confirmation_block_height = await get_block_height_for_credit_pack_purchase_request_confirmation(request.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
+        current_block_height = await get_current_pastel_block_height_func()
+        if current_block_height - confirmation_block_height <= MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED:
+            error_message = f"Insufficient time has elapsed since the CreditPackPurchaseRequestConfirmation was sent (current block height: {current_block_height}, confirmation block height: {confirmation_block_height}, so the elapsed block count of {current_block_height - confirmation_block_height} is less than the minimum required block count of {MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED})"
+            logger.error(error_message)
+            raise ValueError(error_message)
         # Check if the original responding supernode has confirmed the storage
         original_supernode_confirmed_storage = await check_original_supernode_storage_confirmation(request.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
         if not original_supernode_confirmed_storage:
@@ -2421,7 +2527,7 @@ async def check_burn_address_for_tracking_transaction(
     max_block_height: int,
     max_retries: int = 10,
     initial_retry_delay: int = 25
-) -> bool:
+) -> Tuple[bool, int, int]:
     """
     Repeatedly checks the burn address for a transaction with the correct identifier, amount,
     and originating address before a specified block height using the get_and_decode_raw_transaction function
@@ -2430,17 +2536,23 @@ async def check_burn_address_for_tracking_transaction(
     Args:
         burn_address (str): The burn address to check for the transaction.
         tracking_address (str): The address expected to have sent the transaction.
-        expected_amount (float): The exact amount of PSL expected in the transaction.
+        expected_amount (float): The minimum amount of PSL expected in the transaction.
         txid (str): The transaction identifier to look for.
         max_block_height (int): The maximum block height to include the confirmation transaction.
         max_retries (int, optional): Maximum number of retries for checking the transaction. Defaults to 10.
         initial_retry_delay (int, optional): Delay between retries in seconds. Defaults to 25. Increases by 15% each retry.
 
     Returns:
-        bool: True if a matching transaction is found, False otherwise.
+        Tuple[bool, int, int]: A tuple containing:
+            - bool: True if a matching transaction is found, False otherwise.
+            - bool: True if value exceeding transaction is found, False otherwise.
+            - int: The block height of the transaction, or None if not found.
+            - int: The number of confirmations for the transaction, or None if not found.
+            - float: The total amount that was sent to the burn address
     """
     try_count = 0
     retry_delay = initial_retry_delay
+    total_amount_to_burn_address = 0.0
     while try_count < max_retries:
         # Retrieve and decode the transaction details using the txid
         if len(txid) > 0:
@@ -2454,14 +2566,25 @@ async def check_burn_address_for_tracking_transaction(
                         if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address
                     )
                     if total_amount_to_burn_address == expected_amount:
-                        if decoded_tx_data.get("confirmations", 0) >= 0 and decoded_tx_data.get("blockheight", max_block_height + 1) <= max_block_height:
+                        transaction_block_height = decoded_tx_data.get("blockheight", None)
+                        num_confirmations = decoded_tx_data.get("confirmations", 0)
+                        if num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION and transaction_block_height <= max_block_height:
                             logger.info("Matching confirmed transaction found!")
-                            return True
+                            return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
                         else:
-                            logger.info("Matching unconfirmed transaction found!") 
-                            return True
+                            logger.info("Matching unconfirmed transaction found!")
+                            return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
+                    elif total_amount_to_burn_address >= expected_amount:
+                        transaction_block_height = decoded_tx_data.get("blockheight", None)
+                        num_confirmations = decoded_tx_data.get("confirmations", 0)
+                        if num_confirmations >= 3 and transaction_block_height <= max_block_height:
+                            logger.info(f"Matching confirmed transaction was not found, but we did find a confirmed (with {num_confirmations} confirmation blocks) burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
+                            return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address
+                        else:
+                            logger.info(f"Matching unconfirmed transaction was not found, but we did find an unconfirmed burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
+                            return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address                        
                     else:
-                        logger.warning(f"Transaction {txid} found, but the amount sent to the burn address ({total_amount_to_burn_address}) does not match the expected amount ({expected_amount})")
+                        logger.warning(f"Transaction {txid} found, but the amount sent to the burn address ({total_amount_to_burn_address}) is less than the expected amount ({expected_amount})")
                 else:
                     logger.warning(f"Transaction {txid} does not send funds to the specified burn address")
             # If the transaction is not found or does not match the criteria, wait before retrying
@@ -2471,7 +2594,7 @@ async def check_burn_address_for_tracking_transaction(
         else:
             logger.error(f"Invalid txid for tracking transaction: {txid}")
     logger.info(f"Transaction not found or did not match the criteria after {max_retries} attempts.")
-    return False
+    return False, False, None, None, total_amount_to_burn_address
 
 async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: db_code.InferenceConfirmation) -> bool:
     try:
@@ -2495,9 +2618,9 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
         # Check burn address for tracking transaction:
         confirmation_transaction_txid = confirmation_transaction.confirmation_transaction['txid']
         credit_usage_tracking_amount_in_psl = float(inference_response.request_confirmation_message_amount_in_patoshis)/(10**5) # Divide by number of Patoshis per PSL
-        transaction_found = await check_burn_address_for_tracking_transaction(burn_address, inference_response.credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, confirmation_transaction_txid, inference_response.max_block_height_to_include_confirmation_transaction)
-        if transaction_found:
-            logger.info(f"Found correct inference request confirmation tracking transaction in burn address! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};") 
+        matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(burn_address, inference_response.credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, confirmation_transaction_txid, inference_response.max_block_height_to_include_confirmation_transaction)
+        if matching_transaction_found:
+            logger.info(f"Found correct inference request confirmation tracking transaction in burn address (with {num_confirmations} confirmation blocks so far)! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};") 
             computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address)
             logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address} tracking transactions from tracking address to burn address.")       
             # Update the inference request status to "confirmed"

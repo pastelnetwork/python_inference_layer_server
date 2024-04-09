@@ -230,11 +230,10 @@ class BlockchainUTXOStorage:
         if isinstance(input_data, str):
             input_data = input_data.encode('utf-8')
         zstd_compression_level = 22
-        zstandard_compressor = zstd.ZstdCompressor(level=zstd_compression_level, write_content_size=True)
+        zstandard_compressor = zstd.ZstdCompressor(level=zstd_compression_level, write_content_size=True, write_checksum=True)
         zstd_compressed_data = zstandard_compressor.compress(input_data)
-        zstd_compressed_data
         return zstd_compressed_data
-
+        
     def decompress_data(self, compressed_data):
         return zstd.decompress(compressed_data)
 
