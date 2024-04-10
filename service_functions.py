@@ -1515,9 +1515,20 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
     try:
         async with httpx.AsyncClient() as client:
             tasks = []
-            for supernode in supernodes:
-                url = f"http://{supernode}:7123/credit_pack_price_agreement_request"
-                task = asyncio.create_task(client.post(url, json=request.model_dump()))
+            for supernode_pastelid in supernodes:
+                supernode_base_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid)}:7123"
+                url = f"{supernode_base_url}/credit_pack_price_agreement_request"
+                challenge_dict = await request_and_sign_challenge(supernode_base_url)
+                challenge = challenge_dict["challenge"]
+                challenge_id = challenge_dict["challenge_id"]
+                challenge_signature = challenge_dict["challenge_signature"]
+                payload = {
+                    "credit_pack_price_agreement_request": request.model_dump(),
+                    "challenge": challenge,
+                    "challenge_id": challenge_id,
+                    "challenge_signature": challenge_signature
+                }                
+                task = asyncio.create_task(client.post(url, json=payload))
                 tasks.append(task)
             responses = await asyncio.gather(*tasks, return_exceptions=True)
             price_agreement_request_responses = []
@@ -1554,11 +1565,10 @@ async def send_credit_pack_purchase_request_final_response_to_supernodes(respons
     try:
         async with httpx.AsyncClient() as client:
             tasks = []
-            for supernode in supernodes:
-                supernode_url = f"http://{supernode}:7123"
-                challenge_dict = await request_and_sign_challenge(supernode_url)
-                url = f"{supernode_url}/credit_pack_purchase_request_final_response_announcement"
-
+            for supernode_pastelid in supernodes:
+                supernode_base_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid)}:7123"
+                url = f"{supernode_base_url}/credit_pack_purchase_request_final_response_announcement"
+                challenge_dict = await request_and_sign_challenge(supernode_base_url)
                 challenge = challenge_dict["challenge"]
                 challenge_id = challenge_dict["challenge_id"]
                 challenge_signature = challenge_dict["challenge_signature"]
