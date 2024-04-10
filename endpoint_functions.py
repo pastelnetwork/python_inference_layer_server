@@ -646,6 +646,29 @@ async def credit_pack_storage_retry_request_endpoint(
         logger.error(f"Error processing credit pack storage retry request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing credit pack storage retry request: {str(e)}")
     
+    
+@router.post("/credit_pack_storage_retry_completion_announcement")
+async def credit_pack_storage_retry_completion_announcement_endpoint(
+    response: db.CreditPackStorageRetryRequestResponse = Body(...),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(
+            response.responding_supernode_pastelid, challenge_signature, challenge_id
+        )
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        await service_functions.process_credit_pack_storage_retry_completion_announcement(response)
+        logger.info("Processed credit pack storage retry completion announcement")
+        return {"message": "Announcement processed successfully"}
+    except Exception as e:
+        logger.error(f"Error processing credit pack storage retry completion announcement: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing credit pack storage retry completion announcement: {str(e)}")
+
+    
 #__________________________________________________________________________________________________________
 
 

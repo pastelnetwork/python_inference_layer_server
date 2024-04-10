@@ -1148,96 +1148,143 @@ async def get_user_messages_for_pastelid(pastelid: str) -> List[db_code.UserMess
 # Credit pack related service functions:
 
 async def get_credit_pack_purchase_request(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> db_code.CreditPackPurchaseRequest:
-    async with db_code.Session() as db_session:
-        result = db_session.exec(
-            select(db_code.CreditPackPurchaseRequest).where(db_code.CreditPackPurchaseRequest.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
-        )
-        return result.one_or_none()
+    try:
+        async with db_code.Session() as db_session:
+            result = db_session.exec(
+                select(db_code.CreditPackPurchaseRequest).where(db_code.CreditPackPurchaseRequest.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
+            )
+            return result.one_or_none()
+    except Exception as e:
+        logger.error(f"Error getting credit pack purchase request: {str(e)}")
+        raise
 
 async def save_credit_pack_purchase_request(credit_pack_purchase_request: db_code.CreditPackPurchaseRequest) -> None:
-    async with db_code.Session() as db_session:
-        db_session.add(credit_pack_purchase_request)
-        db_session.commit()
+    try:
+        async with db_code.Session() as db_session:
+            db_session.add(credit_pack_purchase_request)
+            db_session.commit()
+    except Exception as e:
+        logger.error(f"Error saving credit pack purchase request: {str(e)}")
+        raise
 
 async def get_credit_pack_purchase_request_response(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> db_code.CreditPackPurchaseRequestResponse:
-    async with db_code.Session() as db_session:
-        result = db_session.exec(
-            select(db_code.CreditPackPurchaseRequestResponse).where(db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == sha3_256_hash_of_credit_pack_purchase_request_response_fields)
-        )
-        return result.one_or_none()
+    try:
+        async with db_code.Session() as db_session:
+            result = db_session.exec(
+                select(db_code.CreditPackPurchaseRequestResponse).where(db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == sha3_256_hash_of_credit_pack_purchase_request_response_fields)
+            )
+            return result.one_or_none()
+    except Exception as e:
+        logger.error(f"Error getting credit pack purchase request response: {str(e)}")
+        raise
 
 async def save_credit_pack_purchase_request_response(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse) -> None:
-    async with db_code.Session() as db_session:
-        db_session.add(credit_pack_purchase_request_response)
-        db_session.commit()
+    try:
+        async with db_code.Session() as db_session:
+            db_session.add(credit_pack_purchase_request_response)
+            db_session.commit()
+    except Exception as e:
+        logger.error(f"Error saving credit pack purchase request response: {str(e)}")
+        raise
 
 async def get_credit_pack_purchase_request_rejection(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> db_code.CreditPackPurchaseRequestRejection:
-    async with db_code.Session() as db_session:
-        result = db_session.exec(
-            select(db_code.CreditPackPurchaseRequestRejection).where(db_code.CreditPackPurchaseRequestRejection.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
-        )
-        return result.one_or_none()
+    try:
+        async with db_code.Session() as db_session:
+            result = db_session.exec(
+                select(db_code.CreditPackPurchaseRequestRejection).where(db_code.CreditPackPurchaseRequestRejection.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
+            )
+            return result.one_or_none()
+    except Exception as e:
+        logger.error(f"Error getting credit pack purchase request rejection: {str(e)}")
+        raise
 
 async def save_credit_pack_purchase_request_rejection(credit_pack_purchase_request_rejection: db_code.CreditPackPurchaseRequestRejection) -> None:
-    async with db_code.Session() as db_session:
-        db_session.add(credit_pack_purchase_request_rejection)
-        db_session.commit()
+    try:
+        async with db_code.Session() as db_session:
+            db_session.add(credit_pack_purchase_request_rejection)
+            db_session.commit()
+    except Exception as e:
+        logger.error(f"Error saving credit pack purchase request rejection: {str(e)}")
+        raise
 
 async def get_credit_pack_purchase_request_response_termination(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> db_code.CreditPackPurchaseRequestResponseTermination:
-    async with db_code.Session() as db_session:
-        result = db_session.exec(
-            select(db_code.CreditPackPurchaseRequestResponseTermination).where(db_code.CreditPackPurchaseRequestResponseTermination.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
-        )
-        return result.one_or_none()
+    try:
+        async with db_code.Session() as db_session:
+            result = db_session.exec(
+                select(db_code.CreditPackPurchaseRequestResponseTermination).where(db_code.CreditPackPurchaseRequestResponseTermination.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
+            )
+            return result.one_or_none()
+    except Exception as e:
+        logger.error(f"Error getting credit pack purchase request response termination: {str(e)}")
+        raise
 
 async def save_credit_pack_purchase_request_response_termination(credit_pack_purchase_request_response_termination: db_code.CreditPackPurchaseRequestResponseTermination) -> None:
-    async with db_code.Session() as db_session:
-        db_session.add(credit_pack_purchase_request_response_termination)
-        db_session.commit()
+    try:
+        async with db_code.Session() as db_session:
+            db_session.add(credit_pack_purchase_request_response_termination)
+            db_session.commit()
+    except Exception as e:
+        logger.error(f"Error saving credit pack purchase request response termination: {str(e)}")
+        raise
 
 async def get_credit_pack_purchase_request_confirmation(sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str) -> db_code.CreditPackPurchaseRequestConfirmation:
-    async with db_code.Session() as db_session:
-        result = db_session.exec(
-            select(db_code.CreditPackPurchaseRequestConfirmation).where(db_code.CreditPackPurchaseRequestConfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields == sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
-        )
-        return result.one_or_none()
+    try:
+        async with db_code.Session() as db_session:
+            result = db_session.exec(
+                select(db_code.CreditPackPurchaseRequestConfirmation).where(db_code.CreditPackPurchaseRequestConfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields == sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
+            )
+            return result.one_or_none()
+    except Exception as e:
+        logger.error(f"Error getting credit pack purchase request confirmation: {str(e)}")
+        raise
 
 async def save_credit_pack_purchase_request_confirmation(credit_pack_purchase_request_confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> None:
-    async with db_code.Session() as db_session:
-        db_session.add(credit_pack_purchase_request_confirmation)
-        db_session.commit()
+    try:
+        async with db_code.Session() as db_session:
+            db_session.add(credit_pack_purchase_request_confirmation)
+            db_session.commit()
+    except Exception as e:
+        logger.error(f"Error saving credit pack purchase request confirmation: {str(e)}")
+        raise
 
 async def get_credit_pack_purchase_request_confirmation_response(sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields: str) -> db_code.CreditPackPurchaseRequestConfirmationResponse:
-    async with db_code.Session() as db_session:
-        result = db_session.exec(
-            select(db_code.CreditPackPurchaseRequestConfirmationResponse).where(db_code.CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields == sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields)
-        )
-        return result.one_or_none()
+    try:
+        async with db_code.Session() as db_session:
+            result = db_session.exec(
+                select(db_code.CreditPackPurchaseRequestConfirmationResponse).where(db_code.CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields == sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields)
+            )
+            return result.one_or_none()
+    except Exception as e:
+        logger.error(f"Error getting credit pack purchase request confirmation response: {str(e)}")
+        raise
 
 async def save_credit_pack_purchase_request_confirmation_response(credit_pack_purchase_request_confirmation_response: db_code.CreditPackPurchaseRequestConfirmationResponse) -> None:
-    async with db_code.Session() as db_session:
-        db_session.add(credit_pack_purchase_request_confirmation_response)
-        db_session.commit()
-
-async def get_original_supernode_storage_confirmation(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> bool:
     try:
-        # Check if the original responding supernode has confirmed the storage
         async with db_code.Session() as db_session:
-            statement = select(db_code.CreditPackPurchaseRequestConfirmationResponse).where(
-                db_code.CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == sha3_256_hash_of_credit_pack_purchase_request_response_fields
-            )
-            result = db_session.exec(statement).first()
-        original_supernode_confirmed_storage = result is not None
-        return original_supernode_confirmed_storage
+            db_session.add(credit_pack_purchase_request_confirmation_response)
+            db_session.commit()
     except Exception as e:
-        logger.error(f"Error checking original supernode storage confirmation: {str(e)}")
+        logger.error(f"Error saving credit pack purchase request confirmation response: {str(e)}")
         raise
 
 async def save_credit_pack_purchase_request_final_response(response: db_code.CreditPackPurchaseRequestResponse) -> None:
-    async with db_code.Session() as db:
-        db.add(response)
-        db.commit()
+    try:
+        async with db_code.Session() as db:
+            db.add(response)
+            db.commit()
+    except Exception as e:
+        logger.error(f"Error saving credit pack purchase request final response: {str(e)}")
+        raise
 
+async def save_credit_pack_storage_completion_announcement(response: db_code.CreditPackPurchaseRequestConfirmationResponse) -> None:
+    try:
+        async with db_code.Session() as db:
+            db.add(response)
+            db.commit()
+    except Exception as e:
+        logger.error(f"Error saving credit pack storage completion announcement: {str(e)}")
+        raise
+        
 async def save_credit_pack_purchase_completion_announcement(confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> None:
     try:
         async with db_code.Session() as db:
@@ -1247,11 +1294,15 @@ async def save_credit_pack_purchase_completion_announcement(confirmation: db_cod
     except Exception as e:
         logger.error(f"Error storing credit pack purchase completion announcement: {str(e)}")
         raise
-    
-async def save_credit_pack_storage_completion_announcement(response: db_code.CreditPackPurchaseRequestConfirmationResponse) -> None:
-    async with db_code.Session() as db:
-        db.add(response)
-        db.commit()
+
+async def save_credit_pack_storage_retry_completion_announcement(response: db_code.CreditPackPurchaseRequestConfirmationResponse) -> None:
+    try:
+        async with db_code.Session() as db:
+            db.add(response)
+            db.commit()
+    except Exception as e:
+        logger.error(f"Error saving credit pack storage retry completion announcement: {str(e)}")
+        raise
             
 async def check_credit_pack_purchase_request_status(credit_pack_purchase_request: db_code.CreditPackPurchaseRequest) -> str:
     async with db_code.Session() as db:
@@ -1401,7 +1452,7 @@ async def process_credit_purchase_initial_request(request: db_code.CreditPackPur
         response.responding_supernode_signature_on_credit_pack_purchase_request_preliminary_price_quote_hash = await sign_message_with_pastelid_func(
             MY_PASTELID,
             response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields,
-            MY_PASTELID_PASSPHRASE
+            LOCAL_PASTEL_ID_PASSPHRASE
         )
         # Validate the response
         validation_errors = await validate_credit_pack_ticket_message_data_func(response)
@@ -1428,7 +1479,7 @@ async def generate_credit_pack_request_rejection_message(credit_pack_request: db
     rejection_message.responding_supernode_signature_on_credit_pack_purchase_request_rejection_hash = await sign_message_with_pastelid_func(
         MY_PASTELID,
         rejection_message.sha3_256_hash_of_credit_pack_purchase_request_rejection_fields,
-        MY_PASTELID_PASSPHRASE
+        LOCAL_PASTEL_ID_PASSPHRASE
     )
     return rejection_message
     
@@ -1557,7 +1608,7 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
         request.supernode_requesting_price_agreement_pastelid_signature_on_request_hash = await sign_message_with_pastelid_func(
             MY_PASTELID,
             request.sha3_256_hash_of_price_agreement_request_fields,
-            MY_PASTELID_PASSPHRASE
+            LOCAL_PASTEL_ID_PASSPHRASE
         )
         # Send the price agreement request to the potentially agreeing supernodes
         logger.info(f"Now sending price agreement request to {len(potentially_agreeing_supernodes)} potentially agreeing supernodes...")
@@ -1589,7 +1640,7 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
             termination_message.responding_supernode_signature_on_credit_pack_purchase_request_termination_hash = await sign_message_with_pastelid_func(
                 MY_PASTELID,
                 termination_message.sha3_256_hash_of_credit_pack_purchase_request_termination_fields,
-                MY_PASTELID_PASSPHRASE
+                LOCAL_PASTEL_ID_PASSPHRASE
             )
             return termination_message
         # Tally the agreeing supernodes
@@ -1615,7 +1666,7 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
             termination_message.responding_supernode_signature_on_credit_pack_purchase_request_termination_hash = await sign_message_with_pastelid_func(
                 MY_PASTELID,
                 termination_message.sha3_256_hash_of_credit_pack_purchase_request_termination_fields,
-                MY_PASTELID_PASSPHRASE
+                LOCAL_PASTEL_ID_PASSPHRASE
             )
             return termination_message
         logger.info(f"Enough supernodes agreed to the proposed pricing; {len(list_of_agreeing_supernodes)} supernodes agreed to the proposed pricing, achieving a voting percentage of {supernode_price_agreement_voting_percentage:.2%}, more than the required minimum percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:.2%}")
@@ -1640,7 +1691,7 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
         credit_pack_purchase_request_response.responding_supernode_signature_on_credit_pack_purchase_request_response_hash = await sign_message_with_pastelid_func(
             MY_PASTELID,
             credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
-            MY_PASTELID_PASSPHRASE
+            LOCAL_PASTEL_ID_PASSPHRASE
         )
         # Collect the signatures from the agreeing supernodes
         credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash = []
@@ -1687,12 +1738,12 @@ async def process_credit_pack_price_agreement_request(request: db_code.CreditPac
         response.responding_supernode_signature_on_price_agreement_request_response_hash = await sign_message_with_pastelid_func(
             MY_PASTELID,
             response.sha3_256_hash_of_price_agreement_request_response_fields,
-            MY_PASTELID_PASSPHRASE
+            LOCAL_PASTEL_ID_PASSPHRASE
         )
         response.responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json = await sign_message_with_pastelid_func(
             MY_PASTELID,
             request.credit_pack_purchase_request_response_fields_json,
-            MY_PASTELID_PASSPHRASE
+            LOCAL_PASTEL_ID_PASSPHRASE
         )
         # Validate the response
         validation_errors = await validate_credit_pack_ticket_message_data_func(response)
@@ -1850,7 +1901,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             response.responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash = await sign_message_with_pastelid_func(
                 MY_PASTELID,
                 response.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields,
-                MY_PASTELID_PASSPHRASE
+                LOCAL_PASTEL_ID_PASSPHRASE
             )
             # Send the CreditPackPurchaseRequestConfirmationResponse to the agreeing supernodes
             announcement_responses = await send_credit_pack_storage_completion_announcement_to_supernodes(response, credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
@@ -1875,7 +1926,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             response.responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash = await sign_message_with_pastelid_func(
                 MY_PASTELID,
                 response.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields,
-                MY_PASTELID_PASSPHRASE
+                LOCAL_PASTEL_ID_PASSPHRASE
             )
         # Validate the response
         validation_errors = await validate_credit_pack_ticket_message_data_func(response)
@@ -1951,7 +2002,7 @@ async def process_credit_pack_storage_retry_request(request: db_code.CreditPackS
             response.closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash = await sign_message_with_pastelid_func(
                 MY_PASTELID,
                 response.sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields,
-                MY_PASTELID_PASSPHRASE
+                LOCAL_PASTEL_ID_PASSPHRASE
             )
         else:
             # Create the retry request response with failure without the hash and signature fields
@@ -1973,7 +2024,7 @@ async def process_credit_pack_storage_retry_request(request: db_code.CreditPackS
             response.closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash = await sign_message_with_pastelid_func(
                 MY_PASTELID,
                 response.sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields,
-                MY_PASTELID_PASSPHRASE
+                LOCAL_PASTEL_ID_PASSPHRASE
             )
         # Validate the response
         validation_errors = await validate_credit_pack_ticket_message_data_func(response)
@@ -1984,6 +2035,18 @@ async def process_credit_pack_storage_retry_request(request: db_code.CreditPackS
         logger.error(f"Error processing credit pack storage retry request: {str(e)}")
         raise
                     
+async def process_credit_pack_storage_retry_completion_announcement(response: db_code.CreditPackStorageRetryRequestResponse) -> None:
+    try:
+        # Validate the response fields
+        if not response.sha3_256_hash_of_credit_pack_purchase_request_fields or not response.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields:
+            raise ValueError("Invalid credit pack storage retry completion announcement")
+        # Store the storage retry completion announcement
+        await save_credit_pack_storage_retry_completion_announcement(response)
+    except Exception as e:
+        logger.error(f"Error processing credit pack storage retry completion announcement: {str(e)}")
+        raise
+    
+    
 #________________________________________________________________________________________________________________            
                 
 # Inference request related service functions:
@@ -3502,9 +3565,9 @@ async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_f
             last_hash_field_name = field_name
         elif "_pastelid_signature_on_" in field_name:
             last_signature_field_name = field_name
-    # Iterate over the model fields and exclude the last hash, last signature, and '_sa_instance_state' fields
+    # Iterate over the model fields and exclude the last hash, last signature, 'id', and '_sa_instance_state' fields
     for field_name, field_value in model_instance.__dict__.items():
-        if field_name == last_hash_field_name or field_name == last_signature_field_name or field_name == '_sa_instance_state':
+        if field_name == last_hash_field_name or field_name == last_signature_field_name or field_name == 'id' or field_name == '_sa_instance_state':
             continue
         if field_value is not None:
             if isinstance(field_value, (datetime, date)):
