@@ -369,19 +369,28 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
             validation_errors.append(f"SHA3-256 hash in field {hash_field_name} does not match the computed hash of the response fields")
     # Validate pastelid signature fields
     last_signature_field_name = None
+    last_hash_field_name = None
+    for field_name in model_instance.__fields__:
+        if "_pastelid" in field_name:
+            first_pastelid = field_name
+            break
     for field_name in model_instance.__fields__:
         if "_signature_on_" in field_name:
             last_signature_field_name = field_name
-    if last_signature_field_name:
+        elif "sha3_256_hash_of_" in field_name and field_name.endswith("_fields"):
+            last_hash_field_name = field_name
+    if last_signature_field_name and last_hash_field_name:
         signature_field_name = last_signature_field_name
-        pastelid_field_name = signature_field_name.replace("_signature_on_", "")
-        pastelid = getattr(model_instance, pastelid_field_name)
-        message_to_verify = getattr(model_instance, hash_field_name)
-        signature = getattr(model_instance, signature_field_name)
-        verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
-        if verification_result != 'OK':
-            validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
-    return validation_errors
+        hash_field_name = last_hash_field_name
+        if hasattr(model_instance, first_pastelid):
+            pastelid = getattr(model_instance, first_pastelid)
+            message_to_verify = getattr(model_instance, hash_field_name)
+            signature = getattr(model_instance, signature_field_name)
+            verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
+            if verification_result != 'OK':
+                validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
+        else:
+            validation_errors.append(f"Corresponding pastelid field {first_pastelid} not found for signature field {signature_field_name}")
 
 async def calculate_xor_distance(pastelid1: str, pastelid2: str) -> int:
     hash1 = hashlib.sha3_256(pastelid1.encode()).hexdigest()
