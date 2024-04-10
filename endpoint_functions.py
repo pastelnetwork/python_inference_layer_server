@@ -496,9 +496,7 @@ async def credit_pack_price_agreement_request_endpoint(
         )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        
         response = await service_functions.process_credit_pack_price_agreement_request(credit_pack_price_agreement_request)
-        
         if isinstance(response, db.CreditPackPurchasePriceAgreementRequestResponse):
             response_dict = response.model_dump()
             logger.info(f"Processed credit pack price agreement request: {response_dict}")

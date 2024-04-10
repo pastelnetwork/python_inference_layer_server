@@ -363,6 +363,7 @@ class CreditPackPurchasePriceAgreementRequest(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
     supernode_requesting_price_agreement_pastelid: str
     credit_pack_purchase_request_response_fields_json: str
+    proposed_psl_price_per_credit: float
     price_agreement_request_timestamp_utc_iso_string: str
     price_agreement_request_pastel_block_height: int
     price_agreement_request_message_version_string: str
@@ -374,6 +375,7 @@ class CreditPackPurchasePriceAgreementRequest(SQLModel):
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x1234...",
                 "supernode_requesting_price_agreement_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "proposed_psl_price_per_credit": 0.1,
                 "price_agreement_request_timestamp_utc_iso_string": "2023-06-01T12:20:00Z",
                 "price_agreement_request_pastel_block_height": 123457,
                 "price_agreement_request_message_version_string": "1.0",

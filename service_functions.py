@@ -162,6 +162,7 @@ MAXIMUM_LOCAL_UTC_TIMESTAMP_DIFFERENCE_IN_SECONDS = config.get("MAXIMUM_LOCAL_UT
 MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS = config.get("MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS", default=1, cast=int)
 MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED = config.get("MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED", default=10, cast=int)
 MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION = config.get("MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION", default=3, cast=int)
+MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES = config.get("MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES", default=10, cast=int)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE", default=0.51, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE", default=0.85, cast=float)
 
@@ -350,66 +351,6 @@ class AsyncAuthServiceProxy:
                     'code': -343, 'message': 'missing JSON-RPC result'})
             else:
                 return response_json['result']
-            
-class InferenceCreditPackMockup:
-    def __init__(self, credit_pack_identifier: str, authorized_pastelids: List[str], psl_cost_per_credit: float, total_psl_cost_for_pack: float, initial_credit_balance: float, credit_usage_tracking_psl_address: str):
-        self.credit_pack_identifier = credit_pack_identifier
-        self.authorized_pastelids = authorized_pastelids
-        self.psl_cost_per_credit = psl_cost_per_credit
-        self.total_psl_cost_for_pack = total_psl_cost_for_pack
-        self.current_credit_balance = initial_credit_balance
-        self.initial_credit_balance = initial_credit_balance
-        self.credit_usage_tracking_psl_address = credit_usage_tracking_psl_address
-        self.version = 1
-        self.purchase_height = 0
-        self.timestamp = datetime.utcnow()
-
-    def is_authorized(self, pastelid: str) -> bool:
-        return pastelid in self.authorized_pastelids
-
-    def has_sufficient_credits(self, requested_credits: float) -> bool:
-        return self.current_credit_balance >= requested_credits
-
-    def deduct_credits(self, credits_to_deduct: float):
-        if self.has_sufficient_credits(credits_to_deduct):
-            self.current_credit_balance -= credits_to_deduct
-        else:
-            raise ValueError("Insufficient credits in the pack.")
-
-    def to_dict(self):
-        return {
-            "credit_pack_identifier": self.credit_pack_identifier,
-            "authorized_pastelids": self.authorized_pastelids,
-            "psl_cost_per_credit": self.psl_cost_per_credit,
-            "total_psl_cost_for_pack": self.total_psl_cost_for_pack,
-            "initial_credit_balance": self.initial_credit_balance,
-            "current_credit_balance": self.current_credit_balance,
-            "credit_usage_tracking_psl_address": self.credit_usage_tracking_psl_address,
-            "version": self.version,
-            "purchase_height": self.purchase_height,
-            "timestamp": self.timestamp.isoformat()
-        }
-        
-    @classmethod
-    def load_from_json(cls, file_path):
-        try:
-            with open(file_path, "r") as file:
-                data = json.load(file)
-                return cls(
-                    credit_pack_identifier=data["credit_pack_identifier"],
-                    authorized_pastelids=data["authorized_pastelids"],
-                    psl_cost_per_credit=data["psl_cost_per_credit"],
-                    total_psl_cost_for_pack=data["total_psl_cost_for_pack"],
-                    initial_credit_balance=data["initial_credit_balance"],
-                    credit_usage_tracking_psl_address=data["credit_usage_tracking_psl_address"]
-                )
-        except FileNotFoundError:
-            return None
-
-    def save_to_json(self, file_path):
-        data = self.to_dict()
-        with open(file_path, "w") as file:
-            json.dump(data, file, indent=2)        
                 
 async def get_current_pastel_block_height_func():
     global rpc_connection
@@ -1345,20 +1286,16 @@ async def calculate_preliminary_psl_price_per_credit():
         logger.error(f"Error calculating preliminary price per credit: {str(e)}")
         raise
 
-async def determine_agreement_with_proposed_price(credit_pack_purchase_request_response_fields_json: str) -> bool:
+async def determine_agreement_with_proposed_price(proposed_psl_price_per_credit: float) -> bool:
     try:
-        # Load the credit pack purchase request response fields
-        credit_pack_purchase_request_response_fields = json.loads(credit_pack_purchase_request_response_fields_json)
-        # Get the proposed price per credit from the response fields
-        proposed_price_per_credit = credit_pack_purchase_request_response_fields["psl_cost_per_credit"]
         # Calculate the local preliminary price per credit
         local_price_per_credit = await calculate_preliminary_psl_price_per_credit()
         # Calculate the acceptable price range (within 10% of the local price)
         min_acceptable_price = local_price_per_credit * (1.0 - MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING)
         max_acceptable_price = local_price_per_credit * (1.0 + MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING)
         # Determine if the proposed price is within the acceptable range
-        agree_with_proposed_price = min_acceptable_price <= proposed_price_per_credit <= max_acceptable_price
-        logger.info(f"Proposed price per credit: {proposed_price_per_credit:.1f} PSL")
+        agree_with_proposed_price = min_acceptable_price <= proposed_psl_price_per_credit <= max_acceptable_price
+        logger.info(f"Proposed price per credit: {proposed_psl_price_per_credit:.1f} PSL")
         logger.info(f"Local price per credit: {local_price_per_credit:.1f} PSL")
         logger.info(f"Acceptable price range: [{min_acceptable_price:.1f}, {max_acceptable_price:.1f}] PSL")
         logger.info(f"Agreement with proposed price: {agree_with_proposed_price}")
@@ -1489,10 +1426,11 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
         best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
         # Get the list of all supernodes
         supernode_list_df, _ = await check_supernode_list_func()
-        number_of_supernodes_found = len(supernode_list_df)
-        if number_of_supernodes_found < 12:
-            logger.warning(f"Fewer than 12 supernodes available. Using all {number_of_supernodes_found} available supernodes.")
-            return supernode_list_df['extKey'].tolist()
+        number_of_supernodes_found = len(supernode_list_df) - 1
+        if number_of_supernodes_found < MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES:
+            logger.warning(f"Fewer than {MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES} supernodes available. Using all {number_of_supernodes_found} available supernodes.")
+            all_other_supernode_pastelids = [x for x in supernode_list_df['extKey'].tolist() if x != MY_PASTELID]
+            return all_other_supernode_pastelids
         # Compute the XOR distance between each supernode's hash(pastelid) and the best block's merkle root
         xor_distances = []
         for _, row in supernode_list_df.iterrows():
@@ -1504,8 +1442,8 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
             xor_distances.append((supernode_pastelid, xor_distance))
         # Sort the supernodes based on their XOR distances in ascending order
         sorted_supernodes = sorted(xor_distances, key=lambda x: x[1])
-        # Select the 12 supernodes with the closest XOR distances
-        potentially_agreeing_supernodes = [supernode[0] for supernode in sorted_supernodes[:12]]
+        # Select the supernodes with the closest XOR distances
+        potentially_agreeing_supernodes = [supernode[0] for supernode in sorted_supernodes[:MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES] if supernode[0] != MY_PASTELID]
         return potentially_agreeing_supernodes
     except Exception as e:
         logger.error(f"Error selecting potentially agreeing supernodes: {str(e)}")
@@ -1517,20 +1455,25 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             tasks = []
             supernode_list_df, _ = await check_supernode_list_func()
             for supernode_pastelid in supernodes:
-                supernode_base_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)}:7123"
-                url = f"{supernode_base_url}/credit_pack_price_agreement_request"
-                challenge_dict = await request_and_sign_challenge(supernode_base_url)
-                challenge = challenge_dict["challenge"]
-                challenge_id = challenge_dict["challenge_id"]
-                challenge_signature = challenge_dict["challenge_signature"]
-                payload = {
-                    "credit_pack_price_agreement_request": request.model_dump(),
-                    "challenge": challenge,
-                    "challenge_id": challenge_id,
-                    "challenge_signature": challenge_signature
-                }                
-                task = asyncio.create_task(client.post(url, json=payload))
-                tasks.append(task)
+                payload = {}
+                try:
+                    supernode_base_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
+                    url = f"{supernode_base_url}/credit_pack_price_agreement_request"
+                    challenge_dict = await request_and_sign_challenge(supernode_base_url)
+                    challenge = challenge_dict["challenge"]
+                    challenge_id = challenge_dict["challenge_id"]
+                    challenge_signature = challenge_dict["challenge_signature"]
+                    payload = {
+                        "credit_pack_price_agreement_request": request.model_dump(),
+                        "challenge": challenge,
+                        "challenge_id": challenge_id,
+                        "challenge_signature": challenge_signature
+                    }     
+                except Exception as e:
+                    logger.warning(f"Error getting challenge from supernode {supernode_pastelid}: {str(e)}")        
+                if len(payload) > 0:
+                    task = asyncio.create_task(client.post(url, json=payload))
+                    tasks.append(task)
             responses = await asyncio.gather(*tasks, return_exceptions=True)
             price_agreement_request_responses = []
             for response in responses:
@@ -1555,7 +1498,7 @@ async def request_and_sign_challenge(supernode_url: str) -> Dict[str, str]:
         challenge = result["challenge"]
         challenge_id = result["challenge_id"]
         # Sign the challenge string using the local RPC client
-        challenge_signature = await sign_message_with_pastelid_func(MY_PASTELID, challenge, MY_PASTELID_PASSPHRASE)
+        challenge_signature = await sign_message_with_pastelid_func(MY_PASTELID, challenge, LOCAL_PASTEL_ID_PASSPHRASE)
         return {
             "challenge": challenge,
             "challenge_id": challenge_id,
@@ -1568,7 +1511,7 @@ async def send_credit_pack_purchase_request_final_response_to_supernodes(respons
             tasks = []
             supernode_list_df, _ = await check_supernode_list_func()
             for supernode_pastelid in supernodes:
-                supernode_base_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)}:7123"
+                supernode_base_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
                 url = f"{supernode_base_url}/credit_pack_purchase_request_final_response_announcement"
                 challenge_dict = await request_and_sign_challenge(supernode_base_url)
                 challenge = challenge_dict["challenge"]
@@ -1732,7 +1675,7 @@ async def process_credit_pack_price_agreement_request(request: db_code.CreditPac
         if validation_errors:
             return f"Invalid price agreement request: {', '.join(validation_errors)}"
         # Determine if the supernode agrees with the proposed price
-        agree_with_proposed_price = await determine_agreement_with_proposed_price(request.credit_pack_purchase_request_response_fields_json)
+        agree_with_proposed_price = await determine_agreement_with_proposed_price(request.proposed_psl_price_per_credit)
         # Create the response without the hash and signature fields
         response = db_code.CreditPackPurchasePriceAgreementRequestResponse(
             sha3_256_hash_of_price_agreement_request_fields=request.sha3_256_hash_of_price_agreement_request_fields,
@@ -2493,22 +2436,22 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         model_inference_type_string = inference_api_usage_request.model_inference_type_string
         model_parameters = inference_api_usage_request.model_parameters_json
         input_data = inference_api_usage_request.model_input_data_json_b64
-        # TODO: Remove this placeholder code and replace with actual credit pack ticket
-        # Check if the credit pack identifier matches the global credit pack
-        if credit_pack_identifier != credit_pack.credit_pack_identifier:
-            logger.warning(f"Invalid credit pack identifier: {credit_pack_identifier}")
-            return False, 0, credit_pack.current_credit_balance
+        # # TODO: Remove this placeholder code and replace with actual credit pack ticket
+        # # Check if the credit pack identifier matches the global credit pack
+        # if credit_pack_identifier != credit_pack.credit_pack_identifier:
+        #     logger.warning(f"Invalid credit pack identifier: {credit_pack_identifier}")
+        #     return False, 0, credit_pack.current_credit_balance
         # Check if the requesting PastelID is authorized to use the credit pack
-        if not credit_pack.is_authorized(requesting_pastelid):
-            logger.warning(f"Unauthorized PastelID: {requesting_pastelid}")
-            return False, 0, credit_pack.current_credit_balance
-        # Retrieve the model menu
+        # if not credit_pack.is_authorized(requesting_pastelid):
+        #     logger.warning(f"Unauthorized PastelID: {requesting_pastelid}")
+        #     return False, 0, credit_pack.current_credit_balance
+        # # Retrieve the model menu
         model_menu = await get_inference_model_menu()
         # Check if the requested model exists in the model menu
         requested_model_data = next((model for model in model_menu["models"] if normalize_string(model["model_name"]) == normalize_string(requested_model)), None)
         if requested_model_data is None:
             logger.warning(f"Invalid model requested: {requested_model}")
-            return False, 0, credit_pack.current_credit_balance
+            return False, 0, 0
         if "api_based_pricing" in requested_model_data['credit_costs']:
             is_api_based_model = 1
         else:
@@ -2516,7 +2459,7 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         # Check if the requested inference type is supported by the model
         if model_inference_type_string not in requested_model_data["supported_inference_type_strings"]:
             logger.warning(f"Unsupported inference type '{model_inference_type_string}' for model '{requested_model}'")
-            return False, 0, credit_pack.current_credit_balance
+            return False, 0, 0
         if not is_api_based_model:
             if is_swiss_army_llama_responding():
                 # Validate the requested model against the Swiss Army Llama API
@@ -2530,10 +2473,10 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
                             add_model_response = await client.post(f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/add_new_model/", params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "model_url": requested_model_data["model_url"]})
                             if add_model_response.status_code != 200:
                                 logger.warning(f"Failed to add new model to Swiss Army Llama: {requested_model}")
-                                return False, 0, credit_pack.current_credit_balance
+                                return False, 0, 0
                     else:
                         logger.warning("Failed to retrieve available models from Swiss Army Llama API")
-                        return False, 0, credit_pack.current_credit_balance
+                        return False, 0, 0
             else:
                 logger.error(f"Error! Swiss Army Llama is not running on port {SWISS_ARMY_LLAMA_PORT}")
         # Calculate the proposed cost in credits based on the requested model and input data
@@ -2545,15 +2488,16 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
             input_data = input_data_binary.decode("utf-8")
         proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, input_data)
         # TODO: Remove this placeholder code and replace with actual credit pack ticket
-        # Check if the credit pack has sufficient credits for the request
-        if not credit_pack.has_sufficient_credits(proposed_cost_in_credits):
-            logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {credit_pack.current_credit_balance}")
-            return False, proposed_cost_in_credits, credit_pack.current_credit_balance
+        # # Check if the credit pack has sufficient credits for the request
+        # if not credit_pack.has_sufficient_credits(proposed_cost_in_credits):
+        #     logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {credit_pack.current_credit_balance}")
+        #     return False, proposed_cost_in_credits, credit_pack.current_credit_balance
         # Calculate the remaining credits after the request
-        remaining_credits_after_request = credit_pack.current_credit_balance - proposed_cost_in_credits
-        if remaining_credits_after_request < 0:
-            logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {credit_pack.current_credit_balance}")
-            return False, proposed_cost_in_credits, credit_pack.current_credit_balance
+        # remaining_credits_after_request = credit_pack.current_credit_balance - proposed_cost_in_credits
+        # if remaining_credits_after_request < 0:
+        #     logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {credit_pack.current_credit_balance}")
+        #     return False, proposed_cost_in_credits, credit_pack.current_credit_balance
+        remaining_credits_after_request = 1000
         return True, proposed_cost_in_credits, remaining_credits_after_request
     except Exception as e:
         logger.error(f"Error validating inference API usage request: {str(e)}")
@@ -2571,13 +2515,14 @@ async def process_inference_api_usage_request(inference_api_usage_request: db_co
     # Save the inference API usage request
     saved_request = await save_inference_api_usage_request(inference_api_usage_request)
     credit_pack_identifier = inference_api_usage_request.credit_pack_identifier
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    credit_pack_json_file_path = os.path.join(current_dir, CREDIT_PACK_FILE) 
-    credit_pack = InferenceCreditPackMockup.load_from_json(credit_pack_json_file_path)
+    # current_dir = os.path.dirname(os.path.abspath(__file__))
+    # credit_pack_json_file_path = os.path.join(current_dir, CREDIT_PACK_FILE) 
+    # credit_pack = InferenceCreditPackMockup.load_from_json(credit_pack_json_file_path)
     # TODO: Remove this placeholder code and replace with actual credit pack ticket
-    if credit_pack.credit_pack_identifier == credit_pack_identifier:
-        credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
+    # if credit_pack.credit_pack_identifier == credit_pack_identifier:
+    #     credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
     # Create and save the InferenceAPIUsageResponse
+    credit_usage_tracking_psl_address = "44oSueBgdMaAnGxrbTNZwQeDnxvPJg4dGAR3"
     inference_response = await create_and_save_inference_api_usage_response(saved_request, proposed_cost_in_credits, remaining_credits_after_request, credit_usage_tracking_psl_address)
     return inference_response
 
@@ -2711,6 +2656,7 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(burn_address, inference_response.credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, confirmation_transaction_txid, inference_response.max_block_height_to_include_confirmation_transaction)
         if matching_transaction_found:
             logger.info(f"Found correct inference request confirmation tracking transaction in burn address (with {num_confirmations} confirmation blocks so far)! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};") 
+            credit_pack = ""
             computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address)
             logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address} tracking transactions from tracking address to burn address.")       
             # Update the inference request status to "confirmed"
@@ -3268,7 +3214,7 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
             raise ValueError("Unauthorized access to inference output results")
         return inference_output_result
 
-async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address):
+async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address: str):
     """
     Determines the current credit balance of an inference credit pack based on the tracking transactions.
 
@@ -3282,8 +3228,10 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     """
     global rpc_connection
     # TODO: Remove this placeholder code and replace with actual credit pack ticket
-    initial_credit_balance = credit_pack.initial_credit_balance
-    credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
+    # initial_credit_balance = credit_pack.initial_credit_balance
+    initial_credit_balance = 1000
+    # credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
+    credit_usage_tracking_psl_address = "44oSueBgdMaAnGxrbTNZwQeDnxvPJg4dGAR3"
     # Get all transactions sent to the burn address
     transactions = await rpc_connection.listtransactions("*", 100000, 0, True)
     burn_address_transactions = [
@@ -3721,27 +3669,12 @@ elif rpc_port == '19932':
 elif rpc_port == '29932':
     burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
 
-# TODO: Remove this placeholder code and replace with actual credit pack ticket
-# Load or create the global InferenceCreditPackMockup instance
-CREDIT_PACK_FILE = "credit_pack.json"
-credit_pack = InferenceCreditPackMockup.load_from_json(CREDIT_PACK_FILE)
 users_credit_tracking_psl_address = '44oSueBgdMaAnGxrbTNZwQeDnxvPJg4dGAR3'
-
-if credit_pack is None:
-    # Create a new credit pack if the file doesn't exist or is invalid
-    credit_pack = InferenceCreditPackMockup(
-        credit_pack_identifier="credit_pack_123",
-        authorized_pastelids=["jXYdog1FfN1YBphHrrRuMVsXT76gdfMTvDBo2aJyjQnLdz2HWtHUdE376imdgeVjQNK93drAmwWoc7A3G4t2Pj"],
-        psl_cost_per_credit=10.0,
-        total_psl_cost_for_pack=10000.0,
-        initial_credit_balance=100000.0,
-        credit_usage_tracking_psl_address=users_credit_tracking_psl_address
-    )
-    credit_pack.save_to_json(CREDIT_PACK_FILE)
 
 encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
 decrypt_sensitive_fields()
 MY_PASTELID = asyncio.run(get_my_local_pastelid_func())
+logger.info(f"Using local PastelID: {MY_PASTELID}")
 
 use_encrypt_new_secrets = 0
 if use_encrypt_new_secrets:
