@@ -745,18 +745,6 @@ class InferenceConfirmation(SQLModel):
             }
         }
 
-# class InferenceAPIUsageRequestModel(BaseModel):
-#     requesting_pastelid: str
-#     credit_pack_identifier: str
-#     requested_model_canonical_string: str
-#     model_inference_type_string: str
-#     model_parameters_json: str
-#     model_input_data_json_b64: str
-#     class Config:
-#         protected_namespaces = ()
-#     def dict(self, *args, **kwargs):
-#         return super().dict(*args, **kwargs)
-
 #_____________________________________________________________________________
 
 engine = create_async_engine(DATABASE_URL, echo=False, future=True, connect_args={"check_same_thread": False}, execution_options={"isolation_level": "SERIALIZABLE"})    
