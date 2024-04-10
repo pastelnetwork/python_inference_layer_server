@@ -1420,7 +1420,9 @@ async def generate_credit_pack_request_rejection_message(credit_pack_request: db
         rejection_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
         rejection_pastel_block_height=await get_current_pastel_block_height_func(),
         credit_purchase_request_rejection_message_version_string="1.0",
-        responding_supernode_pastelid=MY_PASTELID
+        responding_supernode_pastelid=MY_PASTELID,
+        sha3_256_hash_of_credit_pack_purchase_request_rejection_fields="",
+        responding_supernode_signature_on_credit_pack_purchase_request_rejection_hash=""
     )
     rejection_message.sha3_256_hash_of_credit_pack_purchase_request_rejection_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(rejection_message)
     rejection_message.responding_supernode_signature_on_credit_pack_purchase_request_rejection_hash = await sign_message_with_pastelid_func(
@@ -3218,6 +3220,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     # Fetch and decode raw transactions in parallel using asyncio.gather
     decoded_tx_data_list = await asyncio.gather(*[get_and_decode_raw_transaction(txid) for txid in burn_address_txids])
     # Filter the tracking transactions to include only those sent from the credit_usage_tracking_psl_address
+
     tracking_transactions = []
     for decoded_tx_data in decoded_tx_data_list:
         decoded_tx_data_as_string = json.dumps(decoded_tx_data)
@@ -3495,13 +3498,13 @@ async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_f
     last_signature_field_name = None
     # Find the last hash field and last signature field
     for field_name in model_instance.__fields__.keys():
-        if field_name.endswith("_hash"):
+        if field_name.startswith("sha3_256_hash_of"):
             last_hash_field_name = field_name
-        elif field_name.endswith("_signature"):
+        elif "_pastelid_signature_on_" in field_name:
             last_signature_field_name = field_name
-    # Iterate over the model fields and exclude the last hash and signature fields
+    # Iterate over the model fields and exclude the last hash, last signature, and '_sa_instance_state' fields
     for field_name, field_value in model_instance.__dict__.items():
-        if field_name == last_hash_field_name or field_name == last_signature_field_name:
+        if field_name == last_hash_field_name or field_name == last_signature_field_name or field_name == '_sa_instance_state':
             continue
         if field_value is not None:
             if isinstance(field_value, (datetime, date)):
@@ -3554,32 +3557,19 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
         if actual_hash != expected_hash:
             validation_errors.append(f"SHA3-256 hash in field {hash_field_name} does not match the computed hash of the response fields")
     # Validate pastelid signature fields
-    signature_field_names = [
-        "_signature_on_request_hash",
-        "_signature_on_preliminary_price_quote_response_hash",
-        "_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields",
-        "_signature_on_credit_pack_purchase_request_response_hash",
-        "_signature_on_credit_pack_purchase_request_rejection_hash",
-        "_signature_on_credit_pack_purchase_request_preliminary_price_quote_hash",
-        "_signature_on_sha3_256_hash_of_credit_pack_purchase_request_fields",
-        "_signature_on_credit_pack_purchase_request_status_hash",
-        "_signature_on_credit_pack_purchase_request_termination_hash",
-        "_signature_on_credit_pack_storage_retry_request_hash",
-        "_signature_on_credit_pack_storage_retry_confirmation_response_hash",
-        "_signature_on_inference_request_response_hash",
-        "_supernode_signature_on_inference_result_id"
-    ]
-    for signature_field_name_suffix in signature_field_names:
-        for field_name in model_instance.__fields__:
-            if field_name.endswith(signature_field_name_suffix):
-                signature_field_name = field_name
-                pastelid_field_name = signature_field_name.replace(signature_field_name_suffix, "")
-                pastelid = getattr(model_instance, pastelid_field_name)
-                message_to_verify = getattr(model_instance, hash_field_name)
-                signature = getattr(model_instance, signature_field_name)
-                verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
-                if verification_result != 'OK':
-                    validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
+    last_signature_field_name = None
+    for field_name in model_instance.__fields__:
+        if "_signature_on_" in field_name:
+            last_signature_field_name = field_name
+    if last_signature_field_name:
+        signature_field_name = last_signature_field_name
+        pastelid_field_name = signature_field_name.replace("_signature_on_", "")
+        pastelid = getattr(model_instance, pastelid_field_name)
+        message_to_verify = getattr(model_instance, hash_field_name)
+        signature = getattr(model_instance, signature_field_name)
+        verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
+        if verification_result != 'OK':
+            validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
     return validation_errors
 
 async def validate_inference_request_message_data_func(model_instance: SQLModel):

@@ -745,6 +745,7 @@ class InferenceConfirmation(SQLModel):
             }
         }
 
+
 #_____________________________________________________________________________
 
 engine = create_async_engine(DATABASE_URL, echo=False, future=True, connect_args={"check_same_thread": False}, execution_options={"isolation_level": "SERIALIZABLE"})    

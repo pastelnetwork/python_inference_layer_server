@@ -15,6 +15,7 @@ import random
 import time
 import uuid
 from decimal import Decimal
+import decimal
 import pandas as pd
 from datetime import datetime, date
 import datetime as dt
@@ -284,20 +285,20 @@ async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_f
     last_signature_field_name = None
     # Find the last hash field and last signature field
     for field_name in model_instance.__fields__.keys():
-        if field_name.endswith("_hash"):
+        if field_name.startswith("sha3_256_hash_of"):
             last_hash_field_name = field_name
-        elif field_name.endswith("_signature"):
+        elif "_signature_on_" in field_name:
             last_signature_field_name = field_name
-    # Iterate over the model fields and exclude the last hash and signature fields
+    # Iterate over the model fields and exclude the last hash, last signature, and '_sa_instance_state' fields
     for field_name, field_value in model_instance.__dict__.items():
-        if field_name == last_hash_field_name or field_name == last_signature_field_name:
+        if field_name == last_hash_field_name or field_name == last_signature_field_name or field_name == '_sa_instance_state':
             continue
         if field_value is not None:
             if isinstance(field_value, (datetime, date)):
                 response_fields[field_name] = field_value.isoformat()
             elif isinstance(field_value, (list, dict)):
                 response_fields[field_name] = json.dumps(field_value, sort_keys=True)
-            elif isinstance(field_value, Decimal):
+            elif isinstance(field_value, decimal.Decimal):
                 response_fields[field_name] = str(field_value)
             else:
                 response_fields[field_name] = field_value
@@ -367,32 +368,19 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
         if actual_hash != expected_hash:
             validation_errors.append(f"SHA3-256 hash in field {hash_field_name} does not match the computed hash of the response fields")
     # Validate pastelid signature fields
-    signature_field_names = [
-        "_signature_on_request_hash",
-        "_signature_on_preliminary_price_quote_response_hash",
-        "_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields",
-        "_signature_on_credit_pack_purchase_request_response_hash",
-        "_signature_on_credit_pack_purchase_request_rejection_hash",
-        "_signature_on_credit_pack_purchase_request_preliminary_price_quote_hash",
-        "_signature_on_sha3_256_hash_of_credit_pack_purchase_request_fields",
-        "_signature_on_credit_pack_purchase_request_status_hash",
-        "_signature_on_credit_pack_purchase_request_termination_hash",
-        "_signature_on_credit_pack_storage_retry_request_hash",
-        "_signature_on_credit_pack_storage_retry_confirmation_response_hash",
-        "_signature_on_inference_request_response_hash",
-        "_supernode_signature_on_inference_result_id"
-    ]
-    for signature_field_name_suffix in signature_field_names:
-        for field_name in model_instance.__fields__:
-            if field_name.endswith(signature_field_name_suffix):
-                signature_field_name = field_name
-                pastelid_field_name = signature_field_name.replace(signature_field_name_suffix, "")
-                pastelid = getattr(model_instance, pastelid_field_name)
-                message_to_verify = getattr(model_instance, hash_field_name)
-                signature = getattr(model_instance, signature_field_name)
-                verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
-                if verification_result != 'OK':
-                    validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
+    last_signature_field_name = None
+    for field_name in model_instance.__fields__:
+        if "_signature_on_" in field_name:
+            last_signature_field_name = field_name
+    if last_signature_field_name:
+        signature_field_name = last_signature_field_name
+        pastelid_field_name = signature_field_name.replace("_signature_on_", "")
+        pastelid = getattr(model_instance, pastelid_field_name)
+        message_to_verify = getattr(model_instance, hash_field_name)
+        signature = getattr(model_instance, signature_field_name)
+        verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
+        if verification_result != 'OK':
+            validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
     return validation_errors
 
 async def calculate_xor_distance(pastelid1: str, pastelid2: str) -> int:
@@ -1907,11 +1895,11 @@ async def handle_credit_pack_ticket_end_to_end(
         request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
         request_pastel_block_height=await get_current_pastel_block_height_func(),
         credit_purchase_request_message_version_string="1.0",
+        sha3_256_hash_of_credit_pack_purchase_request_fields="",
+        requesting_end_user_pastelid_signature_on_request_hash=""
     )
-    sha3_256_hash_of_credit_pack_purchase_request_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_request)
-    credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields = sha3_256_hash_of_credit_pack_purchase_request_fields
-    requesting_end_user_pastelid_signature_on_request_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_credit_pack_purchase_request_fields, MY_PASTELID_PASSPHRASE)
-    credit_pack_request.requesting_end_user_pastelid_signature_on_request_hash = requesting_end_user_pastelid_signature_on_request_hash
+    credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_request)
+    credit_pack_request.requesting_end_user_pastelid_signature_on_request_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields, MY_PASTELID_PASSPHRASE)
     # Send the credit pack request to the highest-ranked supernode
     closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(1, MY_LOCAL_PASTELID, supernode_list_df)
     highest_ranked_supernode_url = closest_supernodes[0][0]
@@ -1942,7 +1930,7 @@ async def handle_credit_pack_ticket_end_to_end(
     requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields, MY_PASTELID_PASSPHRASE)
     credit_pack_purchase_request_confirmation.requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields
     # Store the signed credit pack ticket on the blockchain
-    credit_pack_purchase_request_confirmation_response = await messaging_client.store_credit_pack_ticket(highest_ranked_supernode_url, credit_pack_purchase_request_confirmation)
+    credit_pack_purchase_request_confirmation_response = await messaging_client.confirm_credit_purchase_request(highest_ranked_supernode_url, credit_pack_purchase_request_confirmation)
     # Send the credit pack purchase completion announcement to the agreeing supernodes
     for supernode_pastelid in signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
         supernode_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
@@ -1960,7 +1948,9 @@ async def handle_credit_pack_ticket_end_to_end(
             closest_agreeing_supernode_to_retry_storage_pastelid=closest_agreeing_supernode_pastelid,
             credit_pack_storage_retry_request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             credit_pack_storage_retry_request_pastel_block_height=await get_current_pastel_block_height_func(),
-            credit_pack_storage_retry_request_message_version_string="1.0"
+            credit_pack_storage_retry_request_message_version_string="1.0",
+            sha3_256_hash_of_credit_pack_storage_retry_request_fields="",
+            requesting_end_user_pastelid_signature_on_credit_pack_storage_retry_request_hash=""
         )
         sha3_256_hash_of_credit_pack_storage_retry_request_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_storage_retry_request)
         credit_pack_storage_retry_request.sha3_256_hash_of_credit_pack_storage_retry_request_fields = sha3_256_hash_of_credit_pack_storage_retry_request_fields
@@ -1971,77 +1961,7 @@ async def handle_credit_pack_ticket_end_to_end(
         pastel_api_credit_pack_ticket_registration_txid = credit_pack_storage_retry_request_response.pastel_api_credit_pack_ticket_registration_txid
     else:
         pastel_api_credit_pack_ticket_registration_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
-    
     return pastel_api_credit_pack_ticket_registration_txid
-
-async def handle_credit_pack_ticket_end_to_end(
-    number_of_credits: float,
-    psl_cost_per_credit: float,
-    credit_usage_tracking_psl_address: str,
-    burn_address: str
-):
-    global MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE
-    # Create messaging client to use:
-    messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)    
-    # Get the list of Supernodes
-    supernode_list_df, supernode_list_json = await check_supernode_list_func()
-    # Prepare the credit pack request
-    credit_pack_request = CreditPackPurchaseRequest(
-        requesting_end_user_pastelid=MY_LOCAL_PASTELID,
-        requested_initial_credits_in_credit_pack=number_of_credits,
-        list_of_authorized_pastelids_allowed_to_use_credit_pack=json.dumps([MY_LOCAL_PASTELID]),
-        credit_usage_tracking_psl_address=credit_usage_tracking_psl_address,
-        request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
-        request_pastel_block_height=await get_current_pastel_block_height_func(),
-        credit_purchase_request_message_version_string="1.0",
-    )
-    sha3_256_hash_of_credit_pack_purchase_request_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_request)
-    credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields = sha3_256_hash_of_credit_pack_purchase_request_fields
-    requesting_end_user_pastelid_signature_on_request_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_credit_pack_purchase_request_fields, MY_PASTELID_PASSPHRASE)
-    credit_pack_request.requesting_end_user_pastelid_signature_on_request_hash = requesting_end_user_pastelid_signature_on_request_hash
-    # Send the credit pack request to the highest-ranked supernode
-    closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(1, MY_LOCAL_PASTELID, supernode_list_df)
-    highest_ranked_supernode_url = closest_supernodes[0][0]
-    preliminary_price_quote = await messaging_client.credit_pack_ticket_initial_purchase_request(highest_ranked_supernode_url, credit_pack_request)
-    # Check if the end user agrees with the preliminary price quote
-    preliminary_price_quote_response = CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(
-        sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
-        sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields=preliminary_price_quote.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields,
-        credit_pack_purchase_request_response_fields_json=preliminary_price_quote.credit_pack_purchase_request_response_fields_json,
-        agree_with_preliminary_price_quote=True,
-        preliminary_price_quote_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
-        preliminary_price_quote_response_pastel_block_height=await get_current_pastel_block_height_func(),
-        preliminary_price_quote_response_message_version_string="1.0",
-        requesting_end_user_pastelid=MY_LOCAL_PASTELID,
-    )
-    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(preliminary_price_quote_response)
-    preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields = sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields
-    requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields, MY_PASTELID_PASSPHRASE)
-    preliminary_price_quote_response.requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash = requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash
-    # Send the preliminary price quote response to the responding supernode
-    signed_credit_pack_ticket = await messaging_client.sign_credit_pack_ticket(highest_ranked_supernode_url, preliminary_price_quote_response)
-    # Calculate the total cost of the credit pack
-    total_psl_cost = number_of_credits * psl_cost_per_credit
-    # Send the required PSL from the credit usage tracking address to the burn address
-    burn_transaction_txid = await send_to_address_func(burn_address, total_psl_cost, "Burn transaction for credit pack ticket")
-    # Prepare the credit pack purchase request confirmation
-    credit_pack_purchase_request_confirmation = CreditPackPurchaseRequestConfirmation(
-        sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
-        sha3_256_hash_of_credit_pack_purchase_request_response_fields=signed_credit_pack_ticket.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
-        credit_pack_purchase_request_response_json=signed_credit_pack_ticket.credit_pack_purchase_request_json,
-        requesting_end_user_pastelid=MY_LOCAL_PASTELID,
-        txid_of_credit_purchase_burn_transaction=burn_transaction_txid,
-        credit_purchase_request_confirmation_utc_iso_string=datetime.now(dt.UTC).isoformat(),
-        credit_purchase_request_confirmation_pastel_block_height=await get_current_pastel_block_height_func(),
-        credit_purchase_request_confirmation_message_version_string="1.0"
-    )
-    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_purchase_request_confirmation)
-    credit_pack_purchase_request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields
-    requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields, MY_PASTELID_PASSPHRASE)
-    credit_pack_purchase_request_confirmation.requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields
-    # Store the signed credit pack ticket on the blockchain
-    credit_pack_purchase_request_confirmation_response = await messaging_client.confirm_credit_purchase_request(highest_ranked_supernode_url, credit_pack_purchase_request_confirmation)
-    return credit_pack_purchase_request_confirmation_response
 
 async def handle_inference_request_end_to_end(
     input_prompt_to_llm: str,
@@ -2074,7 +1994,9 @@ async def handle_inference_request_end_to_end(
         model_input_data_json_b64=input_prompt_to_llm__base64_encoded,
         inference_request_utc_iso_string=datetime.now(dt.UTC).isoformat(),
         inference_request_pastel_block_height=await get_current_pastel_block_height_func(),
-        inference_request_message_version_string="1.0"
+        inference_request_message_version_string="1.0",
+        sha3_256_hash_of_inference_request_fields="",
+        requesting_pastelid_signature_on_request_hash=""
     )
     sha3_256_hash_of_inference_request_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(inference_request_data)
     inference_request_data.sha3_256_hash_of_inference_request_fields = sha3_256_hash_of_inference_request_fields
@@ -2186,13 +2108,11 @@ async def main():
     if use_test_credit_pack_ticket_functionality:
         # Test credit pack ticket functionality
         number_of_credits = 1000
-        psl_cost_per_credit = 0.1
         credit_usage_tracking_psl_address = LOCAL_CREDIT_TRACKING_PSL_ADDRESS
         credit_pack_purchase_request_confirmation_response = await handle_credit_pack_ticket_end_to_end(
             number_of_credits,
-            psl_cost_per_credit,
             credit_usage_tracking_psl_address,
-            burn_address
+            burn_address,
         )
         logger.info(f"Credit pack ticket stored on the blockchain with transaction ID: {credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid}")
         logger.info(f"Credit pack details: {credit_pack_purchase_request_confirmation_response}")
