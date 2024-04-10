@@ -11,6 +11,7 @@ import time
 import uuid
 import random
 import re
+import sys
 import html
 import warnings
 import pytz
@@ -25,7 +26,7 @@ from logger_config import setup_logger
 from blockchain_ticket_storage import BlockchainUTXOStorage
 import zstandard as zstd
 from sqlalchemy.exc import OperationalError, InvalidRequestError
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Union, Optional
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from magika import Magika
 import tiktoken
@@ -219,52 +220,42 @@ def compute_sha3_256_hexdigest(input_str):
     """Compute the SHA3-256 hash of the input string and return the hexadecimal digest."""
     return hashlib.sha3_256(input_str.encode()).hexdigest()
 
-def get_closest_supernode_to_pastelid_url(input_pastelid, supernode_list_df):
-    if not supernode_list_df.empty:
-        # Compute SHA3-256 hash of the input_pastelid
-        input_pastelid_hash = compute_sha3_256_hexdigest(input_pastelid)
-        input_pastelid_int = int(input_pastelid_hash, 16)
-        list_of_supernode_pastelids = supernode_list_df['extKey'].values.tolist()
-        xor_distance_to_supernodes = []
-        for x in list_of_supernode_pastelids:
-            # Compute SHA3-256 hash of each supernode_pastelid
-            supernode_pastelid_hash = compute_sha3_256_hexdigest(x)
-            supernode_pastelid_int = int(supernode_pastelid_hash, 16)
-            # Compute XOR distance
-            distance = input_pastelid_int ^ supernode_pastelid_int
-            xor_distance_to_supernodes.append(distance)
-        closest_supernode_index = xor_distance_to_supernodes.index(min(xor_distance_to_supernodes))
-        closest_supernode_pastelid = list_of_supernode_pastelids[closest_supernode_index]
-        closest_supernode_ipaddress_port = supernode_list_df.loc[supernode_list_df['extKey'] == closest_supernode_pastelid]['ipaddress:port'].values[0]
-        ipaddress = closest_supernode_ipaddress_port.split(':')[0]
+async def calculate_xor_distance(pastelid1: str, pastelid2: str) -> int:
+    hash1 = compute_sha3_256_hexdigest(pastelid1)
+    hash2 = compute_sha3_256_hexdigest(pastelid2)
+    xor_result = int(hash1, 16) ^ int(hash2, 16)
+    return xor_result
+
+async def get_supernode_url_from_pastelid_func(pastelid: str, supernode_list_df: pd.DataFrame) -> str:
+    supernode_row = supernode_list_df[supernode_list_df['extKey'] == pastelid]
+    if not supernode_row.empty:
+        supernode_ipaddress_port = supernode_row['ipaddress:port'].values[0]
+        ipaddress = supernode_ipaddress_port.split(':')[0]
         supernode_url = f"http://{ipaddress}:7123"
+        return supernode_url
+    else:
+        raise ValueError(f"Supernode with PastelID {pastelid} not found in the supernode list")
+
+async def get_closest_supernode_pastelid_from_list(local_pastelid: str, supernode_pastelids: List[str]) -> str:
+    xor_distances = [(supernode_pastelid, await calculate_xor_distance(local_pastelid, supernode_pastelid)) for supernode_pastelid in supernode_pastelids]
+    closest_supernode = min(xor_distances, key=lambda x: x[1])
+    return closest_supernode[0]
+
+async def get_closest_supernode_to_pastelid_url(input_pastelid: str, supernode_list_df: pd.DataFrame) -> Tuple[Optional[str], Optional[str]]:
+    if not supernode_list_df.empty:
+        list_of_supernode_pastelids = supernode_list_df['extKey'].tolist()
+        closest_supernode_pastelid = await get_closest_supernode_pastelid_from_list(input_pastelid, list_of_supernode_pastelids)
+        supernode_url = await get_supernode_url_from_pastelid_func(closest_supernode_pastelid, supernode_list_df)
         return supernode_url, closest_supernode_pastelid
     return None, None
 
-async def get_n_closest_supernodes_to_pastelid_urls(n, input_pastelid, supernode_list_df):
+async def get_n_closest_supernodes_to_pastelid_urls(n: int, input_pastelid: str, supernode_list_df: pd.DataFrame) -> List[Tuple[str, str]]:
     if not supernode_list_df.empty:
-        # Compute SHA3-256 hash of the input_pastelid
-        input_pastelid_hash = compute_sha3_256_hexdigest(input_pastelid)
-        input_pastelid_int = int(input_pastelid_hash, 16)
-        list_of_supernode_pastelids = supernode_list_df['extKey'].values.tolist()
-        xor_distances = []
-        # Compute XOR distances for each supernode PastelID
-        for supernode_pastelid in list_of_supernode_pastelids:
-            supernode_pastelid_hash = compute_sha3_256_hexdigest(supernode_pastelid)
-            supernode_pastelid_int = int(supernode_pastelid_hash, 16)
-            distance = input_pastelid_int ^ supernode_pastelid_int
-            xor_distances.append((supernode_pastelid, distance))
-        # Sort the XOR distances in ascending order
+        list_of_supernode_pastelids = supernode_list_df['extKey'].tolist()
+        xor_distances = [(supernode_pastelid, await calculate_xor_distance(input_pastelid, supernode_pastelid)) for supernode_pastelid in list_of_supernode_pastelids]
         sorted_xor_distances = sorted(xor_distances, key=lambda x: x[1])
-        # Get the N closest supernodes
         closest_supernodes = sorted_xor_distances[:n]
-        # Retrieve the URLs and PastelIDs of the N closest supernodes
-        supernode_urls_and_pastelids = []
-        for supernode_pastelid, _ in closest_supernodes:
-            supernode_ipaddress_port = supernode_list_df.loc[supernode_list_df['extKey'] == supernode_pastelid]['ipaddress:port'].values[0]
-            ipaddress = supernode_ipaddress_port.split(':')[0]
-            supernode_url = f"http://{ipaddress}:7123"
-            supernode_urls_and_pastelids.append((supernode_url, supernode_pastelid))
+        supernode_urls_and_pastelids = [(await get_supernode_url_from_pastelid_func(pastelid, supernode_list_df), pastelid) for pastelid, _ in closest_supernodes]
         return supernode_urls_and_pastelids
     return []
 
@@ -1332,7 +1323,7 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
         initial_retry_delay_in_seconds = 180
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(
             burn_address,
-            credit_usage_tracking_amount_in_psl,
+            total_cost_in_psl,
             txid,
             max_block_height,
             max_retries,
@@ -1401,7 +1392,9 @@ async def process_credit_purchase_initial_request(request: db_code.CreditPackPur
             preliminary_price_quote_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             preliminary_price_quote_pastel_block_height=await get_current_pastel_block_height_func(),
             preliminary_price_quote_message_version_string="1.0",
-            responding_supernode_pastelid=MY_PASTELID
+            responding_supernode_pastelid=MY_PASTELID,
+            sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields="",
+            responding_supernode_signature_on_credit_pack_purchase_request_preliminary_price_quote_hash=""
         )
         # Generate the hash and signature fields
         response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(response)
@@ -1443,8 +1436,9 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
         best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
         # Get the list of all supernodes
         supernode_list_df, _ = await check_supernode_list_func()
-        if len(supernode_list_df) < 12:
-            logger.warning(f"Fewer than 12 supernodes available. Using all available supernodes.")
+        number_of_supernodes_found = len(supernode_list_df)
+        if number_of_supernodes_found < 12:
+            logger.warning(f"Fewer than 12 supernodes available. Using all {number_of_supernodes_found} available supernodes.")
             return supernode_list_df['extKey'].tolist()
         # Compute the XOR distance between each supernode's hash(pastelid) and the best block's merkle root
         xor_distances = []
@@ -1552,7 +1546,9 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
             credit_pack_purchase_request_response_fields_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(response),
             price_agreement_request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             price_agreement_request_pastel_block_height=await get_current_pastel_block_height_func(),
-            price_agreement_request_message_version_string="1.0"
+            price_agreement_request_message_version_string="1.0",
+            sha3_256_hash_of_price_agreement_request_fields="",
+            supernode_requesting_price_agreement_pastelid_signature_on_request_hash=""
         )
         # Generate the hash and signature fields
         request.sha3_256_hash_of_price_agreement_request_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(request)
@@ -1583,7 +1579,9 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
                 termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_purchase_request_termination_message_version_string="1.0",
-                responding_supernode_pastelid=MY_PASTELID
+                responding_supernode_pastelid=MY_PASTELID,
+                sha3_256_hash_of_credit_pack_purchase_request_termination_fields="",
+                responding_supernode_signature_on_credit_pack_purchase_request_termination_hash="",
             )
             termination_message.sha3_256_hash_of_credit_pack_purchase_request_termination_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(termination_message)
             termination_message.responding_supernode_signature_on_credit_pack_purchase_request_termination_hash = await sign_message_with_pastelid_func(
@@ -1599,7 +1597,7 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
         # Check if enough supernodes agreed to the proposed pricing
         if supernode_price_agreement_voting_percentage <= SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:
             logger.warning(f"Not enough supernodes agreed to the proposed pricing; only {supernode_price_agreement_voting_percentage:.2%} of the supernodes agreed, less than the required majority percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:.2%}")
-            logger.info(f"Responding to end user with termination message...")
+            logger.info("Responding to end user with termination message...")
             termination_message = db_code.CreditPackPurchaseRequestResponseTermination(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=response.sha3_256_hash_of_credit_pack_purchase_request_fields,
                 credit_pack_purchase_request_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(response),
@@ -1607,7 +1605,9 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
                 termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_purchase_request_termination_message_version_string="1.0",
-                responding_supernode_pastelid=MY_PASTELID
+                responding_supernode_pastelid=MY_PASTELID,
+                sha3_256_hash_of_credit_pack_purchase_request_termination_fields="",
+                responding_supernode_signature_on_credit_pack_purchase_request_termination_hash=""
             )
             termination_message.sha3_256_hash_of_credit_pack_purchase_request_termination_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(termination_message)
             termination_message.responding_supernode_signature_on_credit_pack_purchase_request_termination_hash = await sign_message_with_pastelid_func(
@@ -1628,7 +1628,9 @@ async def process_credit_purchase_preliminary_price_quote_response(response: db_
             request_response_pastel_block_height=await get_current_pastel_block_height_func(),
             credit_purchase_request_response_message_version_string="1.0",
             responding_supernode_pastelid=MY_PASTELID,
-            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms=list_of_agreeing_supernodes
+            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms=list_of_agreeing_supernodes,
+            sha3_256_hash_of_credit_pack_purchase_request_response_fields="",
+            responding_supernode_signature_on_credit_pack_purchase_request_response_hash=""
         )
         logger.info(f"Now generating the final credit pack purchase request response and assembling the {len(list_of_agreeing_supernodes)} agreeing supernode signatures...")
         # Generate the hash and signature fields
@@ -1674,7 +1676,9 @@ async def process_credit_pack_price_agreement_request(request: db_code.CreditPac
             proposed_price_agreement_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             proposed_price_agreement_response_pastel_block_height=await get_current_pastel_block_height_func(),
             proposed_price_agreement_response_message_version_string="1.0",
-            responding_supernode_pastelid=MY_PASTELID
+            responding_supernode_pastelid=MY_PASTELID,
+            sha3_256_hash_of_price_agreement_request_response_fields="",
+            responding_supernode_signature_on_price_agreement_request_response_hash=""
         )
         # Generate the hash and signature fields
         response.sha3_256_hash_of_price_agreement_request_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(response)
@@ -1752,36 +1756,36 @@ async def get_closest_agreeing_supernode_pastelid(end_user_pastelid: str, agreei
         logger.error(f"Error getting closest agreeing supernode pastelid: {str(e)}")
         raise    
 
-async def send_credit_pack_storage_completion_announcement_to_supernodes(response: db_code.CreditPackPurchaseRequestConfirmationResponse, agreeing_supernode_pastelids: List[str]) -> None:
+async def send_credit_pack_storage_completion_announcement_to_supernodes(response: db_code.CreditPackPurchaseRequestConfirmationResponse, agreeing_supernode_pastelids: List[str]) -> List[httpx.Response]:
     try:
         async with httpx.AsyncClient() as client:
             tasks = []
             for supernode_pastelid in agreeing_supernode_pastelids:
-                supernode_url = f"http://{await get_supernode_url_from_pastelid(supernode_pastelid)}:7123/credit_pack_storage_completion_announcement"
-                challenge_result = await get_challenge_from_supernode(supernode_url)
-                challenge = challenge_result["challenge"]
-                challenge_id = challenge_result["challenge_id"]
-                challenge_signature = await sign_message_with_pastelid_func(
-                    MY_PASTELID,
-                    challenge_id,
-                    MY_PASTELID_PASSPHRASE
-                )
+                supernode_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid)}:7123"
+                challenge_dict = await request_and_sign_challenge(supernode_url)
+                url = f"{supernode_url}/credit_pack_storage_completion_announcement"
+                challenge = challenge_dict["challenge"]
+                challenge_id = challenge_dict["challenge_id"]
+                challenge_signature = challenge_dict["challenge_signature"]
                 payload = {
                     "response": response.model_dump(),
                     "challenge": challenge,
                     "challenge_id": challenge_id,
                     "challenge_signature": challenge_signature
                 }
-                task = asyncio.create_task(client.post(supernode_url, json=payload))
+                task = asyncio.create_task(client.post(url, json=payload))
                 tasks.append(task)
             responses = await asyncio.gather(*tasks, return_exceptions=True)
+            valid_responses = []
             for response in responses:
                 if isinstance(response, httpx.Response):
-                    if response.status_code != 200:
+                    if response.status_code == 200:
+                        valid_responses.append(response)
+                    else:
                         logger.warning(f"Error sending storage completion announcement to supernode {response.url}: {response.text}")
                 else:
                     logger.error(f"Error sending storage completion announcement to supernode: {str(response)}")
-            return responses
+            return valid_responses
     except Exception as e:
         logger.error(f"Error sending storage completion announcement to supernodes: {str(e)}")
         raise
@@ -1795,7 +1799,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
         # Retrieve the credit pack purchase request response
         credit_pack_purchase_request_response = await get_credit_pack_purchase_request_response(confirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
         # Check the burn transaction
-        logger.info(f"Now checking the burn transaction for the credit pack purchase request...")
+        logger.info("Now checking the burn transaction for the credit pack purchase request...")
         matching_transaction_found = False
         exceeding_transaction_found = False
         num_confirmations = 0
@@ -1823,7 +1827,6 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             compressed_credit_pack_ticket, _ = compress_data_with_zstd_func(credit_pack_purchase_request_response_json_formatted)
             credit_pack_ticket_bytes_after_compression = sys.getsizeof(compressed_credit_pack_ticket)
             logger.info(f"Required burn transaction confirmed with {num_confirmations} confirmations; now attempting to write the credit pack ticket to the blockchain (a total of {credit_pack_ticket_bytes_before_compression} bytes before compression and {credit_pack_ticket_bytes_after_compression} bytes after compression)...")
-            ticket_json_formatted
             logger.info(f"Writing the credit pack ticket to the blockchain:\n {credit_pack_purchase_request_response_json_formatted}")
             pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json_formatted)
             # Create the confirmation response without the hash and signature fields
@@ -1836,7 +1839,9 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 credit_purchase_request_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 credit_purchase_request_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_purchase_request_confirmation_response_message_version_string="1.0",
-                responding_supernode_pastelid=MY_PASTELID
+                responding_supernode_pastelid=MY_PASTELID,
+                sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields="",
+                responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash=""
             )
             # Generate the hash and signature fields
             response.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(response)
@@ -1859,7 +1864,9 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 credit_purchase_request_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 credit_purchase_request_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_purchase_request_confirmation_response_message_version_string="1.0",
-                responding_supernode_pastelid=MY_PASTELID
+                responding_supernode_pastelid=MY_PASTELID,
+                sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields="",
+                responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash=""
             )
             # Generate the hash and signature fields
             response.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(response)
@@ -1933,7 +1940,9 @@ async def process_credit_pack_storage_retry_request(request: db_code.CreditPackS
                 credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 credit_pack_storage_retry_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_pack_storage_retry_confirmation_response_message_version_string="1.0",
-                closest_agreeing_supernode_to_retry_storage_pastelid=MY_PASTELID
+                closest_agreeing_supernode_to_retry_storage_pastelid=MY_PASTELID,
+                sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields="",
+                closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash=""
             )
             # Generate the hash and signature fields
             response.sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(response)
@@ -1953,7 +1962,9 @@ async def process_credit_pack_storage_retry_request(request: db_code.CreditPackS
                 credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 credit_pack_storage_retry_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_pack_storage_retry_confirmation_response_message_version_string="1.0",
-                closest_agreeing_supernode_to_retry_storage_pastelid=MY_PASTELID
+                closest_agreeing_supernode_to_retry_storage_pastelid=MY_PASTELID,
+                sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields="",
+                closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash=""
             )
             # Generate the hash and signature fields
             response.sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(response)
@@ -3451,12 +3462,6 @@ def check_if_ip_address_is_valid_func(ip_address_string):
         ip_address_is_valid = 0
     return ip_address_is_valid
 
-def get_sha256_hash_of_input_data_func(input_data_or_string):
-    if isinstance(input_data_or_string, str):
-        input_data_or_string = input_data_or_string.encode('utf-8')
-    sha256_hash_of_input_data = hashlib.sha3_256(input_data_or_string).hexdigest()
-    return sha256_hash_of_input_data
-
 def compare_datetimes(datetime_input1, datetime_input2):
     # Check if the inputs are datetime objects, otherwise parse them
     if not isinstance(datetime_input1, datetime):
@@ -3478,22 +3483,39 @@ def compare_datetimes(datetime_input1, datetime_input2):
         logger.warning(f"Timestamps are too far apart: {difference_in_seconds} seconds")
     return difference_in_seconds, datetimes_are_close_enough_to_consider_them_matching
 
+def get_sha256_hash_of_input_data_func(input_data_or_string):
+    if isinstance(input_data_or_string, str):
+        input_data_or_string = input_data_or_string.encode('utf-8')
+    sha256_hash_of_input_data = hashlib.sha3_256(input_data_or_string).hexdigest()
+    return sha256_hash_of_input_data
+
 async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance: SQLModel) -> str:
     response_fields = {}
-    for field_name, field_type in model_instance.__fields__.items():
-        if 'sha3_256_hash_of' in field_name:
-            break  # Stop before including the hash field itself or anything after
-        field_value = getattr(model_instance, field_name, None)
+    last_hash_field_name = None
+    last_signature_field_name = None
+    # Find the last hash field and last signature field
+    for field_name in model_instance.__fields__.keys():
+        if field_name.endswith("_hash"):
+            last_hash_field_name = field_name
+        elif field_name.endswith("_signature"):
+            last_signature_field_name = field_name
+    # Iterate over the model fields and exclude the last hash and signature fields
+    for field_name, field_value in model_instance.__dict__.items():
+        if field_name == last_hash_field_name or field_name == last_signature_field_name:
+            continue
         if field_value is not None:
             if isinstance(field_value, (datetime, date)):
                 response_fields[field_name] = field_value.isoformat()
             elif isinstance(field_value, (list, dict)):
-                response_fields[field_name] = field_value
+                response_fields[field_name] = json.dumps(field_value, sort_keys=True)
             elif isinstance(field_value, decimal.Decimal):
                 response_fields[field_name] = str(field_value)
             else:
                 response_fields[field_name] = field_value
-    return json.dumps(response_fields, sort_keys=True)
+    # Sort the response fields by field name to ensure a consistent order
+    sorted_response_fields = dict(sorted(response_fields.items()))
+    # Convert the sorted response fields to a JSON string
+    return json.dumps(sorted_response_fields, sort_keys=True)
 
 async def compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance: SQLModel) -> str:
     response_fields_json = await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance)

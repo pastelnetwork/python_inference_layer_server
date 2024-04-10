@@ -2,6 +2,7 @@ import json
 import warnings
 from logger_config import setup_logger
 from datetime import datetime
+import datetime as dt
 from typing import Optional
 from contextlib import asynccontextmanager
 from sqlmodel import Field, SQLModel, Relationship, Column, JSON
@@ -32,7 +33,7 @@ class Message(SQLModel, table=True):
     message_type: str = Field(index=True)
     message_body: str = Field(sa_column=Column(JSON))
     signature: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
     def __repr__(self):
         return f"<Message(id={self.id}, sending_sn_pastelid='{self.sending_sn_pastelid}', receiving_sn_pastelid='{self.receiving_sn_pastelid}', message_type='{self.message_type}', timestamp='{self.timestamp}')>"
     class Config:
@@ -56,7 +57,7 @@ class UserMessage(SQLModel, table=True):
     to_pastelid: str = Field(index=True)
     message_body: str = Field(sa_column=Column(JSON))
     message_signature: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
     class Config:
         arbitrary_types_allowed = True  # Allow arbitrary types
         json_schema_extra = {
@@ -93,7 +94,7 @@ class MessageMetadata(SQLModel, table=True):
     total_messages: int
     total_senders: int
     total_receivers: int
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
     class Config:
         json_schema_extra = {
             "example": {
@@ -111,7 +112,7 @@ class MessageSenderMetadata(SQLModel, table=True):
     sending_sn_pubkey: str = Field(index=True)
     total_messages_sent: int
     total_data_sent_bytes: float
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
     class Config:
         json_schema_extra = {
             "example": {
@@ -130,7 +131,7 @@ class MessageReceiverMetadata(SQLModel, table=True):
     receiving_sn_txid_vout: str = Field(index=True)
     total_messages_received: int
     total_data_received_bytes: float
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
     class Config:
         json_schema_extra = {
             "example": {
@@ -148,7 +149,7 @@ class MessageSenderReceiverMetadata(SQLModel, table=True):
     receiving_sn_pastelid: str = Field(index=True)
     total_messages: int
     total_data_bytes: float
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
     class Config:
         json_schema_extra = {
             "example": {

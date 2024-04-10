@@ -35,6 +35,11 @@ MY_LOCAL_PASTELID = config.get("MY_LOCAL_PASTELID", cast=str)
 MY_PASTELID_PASSPHRASE = "5QcX9nX67buxyeC"
 LOCAL_CREDIT_TRACKING_PSL_ADDRESS = config.get("LOCAL_CREDIT_TRACKING_PSL_ADDRESS", cast=str)
 MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
+MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS = config.get("MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS", default=1, cast=int)
+TARGET_VALUE_PER_CREDIT_IN_USD = config.get("TARGET_VALUE_PER_CREDIT_IN_USD", default=0.1, cast=float)
+TARGET_PROFIT_MARGIN = config.get("TARGET_PROFIT_MARGIN", default=0.1, cast=float)
+MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
+MAXIMUM_PER_CREDIT_PRICE_IN_PSL_FOR_CLIENT = config.get("MAXIMUM_PER_CREDIT_PRICE_IN_PSL_FOR_CLIENT", default=100.0, cast=float)
 
 def setup_logger():
     if logger.handlers:
@@ -275,20 +280,31 @@ def get_sha256_hash_of_input_data_func(input_data_or_string):
 
 async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance: SQLModel) -> str:
     response_fields = {}
-    for field_name, field_type in model_instance.__fields__.items():
-        if 'sha3_256_hash_of' in field_name:
-            break  # Stop before including the hash field itself or anything after
-        field_value = getattr(model_instance, field_name, None)
+    last_hash_field_name = None
+    last_signature_field_name = None
+    # Find the last hash field and last signature field
+    for field_name in model_instance.__fields__.keys():
+        if field_name.endswith("_hash"):
+            last_hash_field_name = field_name
+        elif field_name.endswith("_signature"):
+            last_signature_field_name = field_name
+    # Iterate over the model fields and exclude the last hash and signature fields
+    for field_name, field_value in model_instance.__dict__.items():
+        if field_name == last_hash_field_name or field_name == last_signature_field_name:
+            continue
         if field_value is not None:
             if isinstance(field_value, (datetime, date)):
                 response_fields[field_name] = field_value.isoformat()
             elif isinstance(field_value, (list, dict)):
-                response_fields[field_name] = field_value
+                response_fields[field_name] = json.dumps(field_value, sort_keys=True)
             elif isinstance(field_value, Decimal):
                 response_fields[field_name] = str(field_value)
             else:
                 response_fields[field_name] = field_value
-    return json.dumps(response_fields, sort_keys=True)
+    # Sort the response fields by field name to ensure a consistent order
+    sorted_response_fields = dict(sorted(response_fields.items()))
+    # Convert the sorted response fields to a JSON string
+    return json.dumps(sorted_response_fields, sort_keys=True)
 
 async def compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance: SQLModel) -> str:
     response_fields_json = await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance)
@@ -380,15 +396,18 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
     return validation_errors
 
 async def calculate_xor_distance(pastelid1: str, pastelid2: str) -> int:
-    hash1 = hashlib.sha256(pastelid1.encode()).digest()
-    hash2 = hashlib.sha256(pastelid2.encode()).digest()
-    xor_result = bytes(a ^ b for a, b in zip(hash1, hash2))
-    return int.from_bytes(xor_result, byteorder='big')
+    hash1 = hashlib.sha3_256(pastelid1.encode()).hexdigest()
+    hash2 = hashlib.sha3_256(pastelid2.encode()).hexdigest()
+    xor_result = int(hash1, 16) ^ int(hash2, 16)
+    return xor_result
 
 async def get_supernode_url_from_pastelid_func(pastelid: str, supernode_list_df: pd.DataFrame) -> str:
-    supernode_row = supernode_list_df[supernode_list_df['pastelid'] == pastelid]
+    supernode_row = supernode_list_df[supernode_list_df['extKey'] == pastelid]
     if not supernode_row.empty:
-        return supernode_row.iloc[0]['ext_addr']
+        supernode_ipaddress_port = supernode_row['ipaddress:port'].values[0]
+        ipaddress = supernode_ipaddress_port.split(':')[0]
+        supernode_url = f"http://{ipaddress}:7123"
+        return supernode_url
     else:
         raise ValueError(f"Supernode with PastelID {pastelid} not found in the supernode list")
 
@@ -411,14 +430,53 @@ async def get_n_closest_supernodes_to_pastelid_urls(n: int, input_pastelid: str,
     return []
 
 async def get_closest_supernode_pastelid_from_list(local_pastelid: str, supernode_pastelids: List[str]) -> str:
-    min_distance = float('inf')
-    closest_supernode_pastelid = None
-    for supernode_pastelid in supernode_pastelids:
-        distance = await calculate_xor_distance(local_pastelid, supernode_pastelid)
-        if distance < min_distance:
-            min_distance = distance
-            closest_supernode_pastelid = supernode_pastelid
-    return closest_supernode_pastelid
+    xor_distances = [(supernode_pastelid, await calculate_xor_distance(local_pastelid, supernode_pastelid)) for supernode_pastelid in supernode_pastelids]
+    closest_supernode = min(xor_distances, key=lambda x: x[1])
+    return closest_supernode[0]
+
+async def fetch_current_psl_market_price():
+    async with httpx.AsyncClient() as client:
+        try:
+            # Fetch data from CoinMarketCap
+            response_cmc = await client.get("https://coinmarketcap.com/currencies/pastel/")
+            price_cmc = float(re.search(r'price today is \$([0-9\.]+) USD', response_cmc.text).group(1))
+        except (httpx.RequestError, AttributeError, ValueError):
+            price_cmc = None
+        try:
+            # Fetch data from CoinGecko
+            response_cg = await client.get("https://api.coingecko.com/api/v3/simple/price?ids=pastel&vs_currencies=usd")
+            if response_cg.status_code == 200:
+                data = response_cg.json()
+                price_cg = data.get("pastel", {}).get("usd")
+            else:
+                price_cg = None
+        except (httpx.RequestError, AttributeError, ValueError):
+            price_cg = None
+    # Calculate the average price
+    prices = [price for price in [price_cmc, price_cg] if price is not None]
+    if not prices:
+        raise ValueError("Could not retrieve PSL price from any source.")
+    average_price = sum(prices) / len(prices)
+    # Validate the price
+    if not 0.0000001 < average_price < 0.02:
+        raise ValueError(f"Invalid PSL price: {average_price}")
+    logger.info(f"The current Average PSL price is: ${average_price:.8f} based on {len(prices)} sources")
+    return average_price
+
+async def estimated_market_price_of_inference_credits_in_psl_terms() -> float:
+    try:
+        psl_price_usd = await fetch_current_psl_market_price()
+        target_value_per_credit_usd = TARGET_VALUE_PER_CREDIT_IN_USD
+        target_profit_margin = TARGET_PROFIT_MARGIN
+        # Calculate the cost per credit in USD, considering the profit margin
+        cost_per_credit_usd = target_value_per_credit_usd / (1 - target_profit_margin)
+        # Convert the cost per credit from USD to PSL
+        cost_per_credit_psl = cost_per_credit_usd / psl_price_usd
+        logger.info(f"Estimated market price of 1.0 inference credit: {cost_per_credit_psl:.4f} PSL")
+        return cost_per_credit_psl
+    except (ValueError, ZeroDivisionError) as e:
+        logger.error(f"Error calculating estimated market price of inference credits: {str(e)}")
+        raise
 
 async def send_to_address_func(address, amount, comment="", comment_to="", subtract_fee_from_amount=False):
     """
@@ -736,7 +794,7 @@ class Message(SQLModel, table=True):
     message_type: str = Field(index=True)
     message_body: str = Field(sa_column=Column(JSON))
     signature: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
     def __repr__(self):
         return f"<Message(id={self.id}, sending_sn_pastelid='{self.sending_sn_pastelid}', receiving_sn_pastelid='{self.receiving_sn_pastelid}', message_type='{self.message_type}', timestamp='{self.timestamp}')>"
     class Config:
@@ -760,8 +818,9 @@ class UserMessage(SQLModel, table=True):
     to_pastelid: str = Field(index=True)
     message_body: str = Field(sa_column=Column(JSON))
     message_signature: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow, index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
     class Config:
+        arbitrary_types_allowed = True  # Allow arbitrary types
         json_schema_extra = {
             "example": {
                 "from_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
@@ -1293,6 +1352,12 @@ class PastelMessagingClient:
             else:
                 return CreditPackPurchaseRequestPreliminaryPriceQuote.model_validate(result)
 
+    async def calculate_price_difference_percentage(self, quoted_price: float, estimated_price: float) -> float:
+        if estimated_price == 0:
+            raise ValueError("Estimated price cannot be zero.")
+        difference_percentage = abs(quoted_price - estimated_price) / estimated_price * 100
+        return difference_percentage
+
     async def confirm_preliminary_price_quote(
         self,
         preliminary_price_quote: CreditPackPurchaseRequestPreliminaryPriceQuote,
@@ -1300,7 +1365,7 @@ class PastelMessagingClient:
         maximum_per_credit_price_in_psl: Optional[float] = None
     ) -> bool:
         if maximum_total_credit_pack_price_in_psl is None and maximum_per_credit_price_in_psl is None:
-            raise ValueError("At least one of the maximum price parameters must be provided")
+            maximum_per_credit_price_in_psl = MAXIMUM_PER_CREDIT_PRICE_IN_PSL_FOR_CLIENT
         # Extract the relevant fields from the preliminary price quote
         quoted_price_per_credit = preliminary_price_quote.preliminary_quoted_price_per_credit_in_psl
         quoted_total_price = preliminary_price_quote.preliminary_total_cost_of_credit_pack_in_psl
@@ -1312,12 +1377,20 @@ class PastelMessagingClient:
             maximum_total_credit_pack_price_in_psl = maximum_per_credit_price_in_psl * requested_credits
         elif maximum_per_credit_price_in_psl is None:
             maximum_per_credit_price_in_psl = maximum_total_credit_pack_price_in_psl / requested_credits
-        # Compare the quoted prices with the maximum prices
-        if quoted_price_per_credit <= maximum_per_credit_price_in_psl and quoted_total_price <= maximum_total_credit_pack_price_in_psl:
-            logger.info(f"Preliminary price quote is within the acceptable range: {quoted_price_per_credit} PSL per credit, {quoted_total_price} PSL total, which is within the maximum of {maximum_per_credit_price_in_psl} PSL per credit and {maximum_total_credit_pack_price_in_psl} PSL total")
+        # Estimate the fair market price for the credits
+        estimated_price_per_credit = await estimated_market_price_of_inference_credits_in_psl_terms()
+        # Calculate the price difference percentage
+        price_difference_percentage = await self.calculate_price_difference_percentage(quoted_price_per_credit, estimated_price_per_credit)
+        # Compare the quoted prices with the maximum prices and the estimated fair price
+        if (
+            quoted_price_per_credit <= maximum_per_credit_price_in_psl and
+            quoted_total_price <= maximum_total_credit_pack_price_in_psl and
+            price_difference_percentage <= MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING
+        ):
+            logger.info(f"Preliminary price quote is within the acceptable range: {quoted_price_per_credit} PSL per credit, {quoted_total_price} PSL total, which is within the maximum of {maximum_per_credit_price_in_psl} PSL per credit and {maximum_total_credit_pack_price_in_psl} PSL total. The price difference from the estimated fair price is {price_difference_percentage:.2f}%, which is within the allowed maximum of {MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING:.2f}%.")
             return True
         else:
-            logger.warning(f"Preliminary price quote exceeds the maximum acceptable price! Quoted price: {quoted_price_per_credit} PSL per credit, {quoted_total_price} PSL total, maximum price: {maximum_per_credit_price_in_psl} PSL per credit, {maximum_total_credit_pack_price_in_psl} PSL total")
+            logger.warning(f"Preliminary price quote exceeds the maximum acceptable price or the price difference from the estimated fair price is too high! Quoted price: {quoted_price_per_credit} PSL per credit, {quoted_total_price} PSL total, maximum price: {maximum_per_credit_price_in_psl} PSL per credit, {maximum_total_credit_pack_price_in_psl} PSL total. The price difference from the estimated fair price is {price_difference_percentage:.2f}%, which exceeds the allowed maximum of {MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING:.2f}%.")
             return False
         
     async def credit_pack_ticket_preliminary_price_quote_response(
