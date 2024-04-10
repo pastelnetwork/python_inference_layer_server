@@ -1515,8 +1515,9 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
     try:
         async with httpx.AsyncClient() as client:
             tasks = []
+            supernode_list_df, _ = await check_supernode_list_func()
             for supernode_pastelid in supernodes:
-                supernode_base_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid)}:7123"
+                supernode_base_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)}:7123"
                 url = f"{supernode_base_url}/credit_pack_price_agreement_request"
                 challenge_dict = await request_and_sign_challenge(supernode_base_url)
                 challenge = challenge_dict["challenge"]
@@ -1565,8 +1566,9 @@ async def send_credit_pack_purchase_request_final_response_to_supernodes(respons
     try:
         async with httpx.AsyncClient() as client:
             tasks = []
+            supernode_list_df, _ = await check_supernode_list_func()
             for supernode_pastelid in supernodes:
-                supernode_base_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid)}:7123"
+                supernode_base_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)}:7123"
                 url = f"{supernode_base_url}/credit_pack_purchase_request_final_response_announcement"
                 challenge_dict = await request_and_sign_challenge(supernode_base_url)
                 challenge = challenge_dict["challenge"]
@@ -1823,8 +1825,9 @@ async def send_credit_pack_storage_completion_announcement_to_supernodes(respons
     try:
         async with httpx.AsyncClient() as client:
             tasks = []
+            supernode_list_df, _ = await check_supernode_list_func()
             for supernode_pastelid in agreeing_supernode_pastelids:
-                supernode_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid)}:7123"
+                supernode_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)}:7123"
                 challenge_dict = await request_and_sign_challenge(supernode_url)
                 url = f"{supernode_url}/credit_pack_storage_completion_announcement"
                 challenge = challenge_dict["challenge"]
