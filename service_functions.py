@@ -43,7 +43,7 @@ from sqlmodel import select, func, SQLModel
 encryption_key = None
 magika = Magika()
 
-SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "MY_PASTELID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "OPENAI_API_KEY", "CLAUDE3_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "STABILITY_API_KEY"]
+SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "MY_PASTELID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "OPENAI_API_KEY", "CLAUDE3_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "STABILITY_API_KEY", "OPENROUTER_API_KEY"]
 LOCAL_PASTEL_ID_PASSPHRASE = None
 MY_PASTELID_PASSPHRASE = None
 SWISS_ARMY_LLAMA_SECURITY_TOKEN = None
@@ -52,6 +52,7 @@ CLAUDE3_API_KEY = None
 GROQ_API_KEY = None
 MISTRAL_API_KEY = None
 STABILITY_API_KEY = None
+OPENROUTER_API_KEY = None
 
 def get_env_value(key):
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -122,7 +123,7 @@ def encrypt_sensitive_data(data, encryption_key):
     return url_encoded_encrypted_data
 
 def decrypt_sensitive_fields():
-    global LOCAL_PASTEL_ID_PASSPHRASE, MY_PASTELID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, OPENAI_API_KEY, CLAUDE3_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, STABILITY_API_KEY, encryption_key
+    global LOCAL_PASTEL_ID_PASSPHRASE, MY_PASTELID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, OPENAI_API_KEY, CLAUDE3_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, STABILITY_API_KEY, OPENROUTER_API_KEY, encryption_key
     LOCAL_PASTEL_ID_PASSPHRASE = decrypt_sensitive_data(get_env_value("LOCAL_PASTEL_ID_PASSPHRASE"), encryption_key)
     MY_PASTELID_PASSPHRASE = decrypt_sensitive_data(get_env_value("MY_PASTELID_PASSPHRASE"), encryption_key)
     SWISS_ARMY_LLAMA_SECURITY_TOKEN = decrypt_sensitive_data(get_env_value("SWISS_ARMY_LLAMA_SECURITY_TOKEN"), encryption_key)
@@ -131,6 +132,7 @@ def decrypt_sensitive_fields():
     GROQ_API_KEY = decrypt_sensitive_data(get_env_value("GROQ_API_KEY"), encryption_key)
     MISTRAL_API_KEY = decrypt_sensitive_data(get_env_value("MISTRAL_API_KEY"), encryption_key)
     STABILITY_API_KEY = decrypt_sensitive_data(get_env_value("STABILITY_API_KEY"), encryption_key)
+    OPENROUTER_API_KEY = decrypt_sensitive_data(get_env_value("OPENROUTER_API_KEY"), encryption_key)
         
 # Logger setup
 logger = setup_logger()
@@ -2046,6 +2048,11 @@ async def get_inference_model_menu(use_verbose=0):
                     filtered_model_menu["models"].append(model)
                     if use_verbose:
                         logger.info(f"Added Anthropic API model: {model['model_name']} to the filtered model menu.")
+            elif "openrouter" in model["model_name"].lower():
+                if OPENROUTER_API_KEY and await is_api_key_valid("openrouter", api_key_tests):
+                    filtered_model_menu["models"].append(model)
+                    if use_verbose:
+                        logger.info(f"Added OpenRouter model: {model['model_name']} to the filtered model menu.")
             else:
                 # Models that don't require API keys can be automatically included
                 filtered_model_menu["models"].append(model)
@@ -2099,6 +2106,8 @@ async def run_api_key_test(api_name):
         return await test_groq_api_key()
     elif api_name == "claude":
         return await test_claude_api_key()
+    elif api_name == "openrouter":
+        return await test_openrouter_api_key()    
     else:
         return False
 
@@ -2159,6 +2168,25 @@ async def test_stability_api_key():
     except Exception as e:
         logger.warning(f"Stability API key test failed: {str(e)}")
         return False
+    
+async def test_openrouter_api_key():
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "openai/gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "Test; just reply with the word yes if you're working!"}]
+                }
+            )
+            return response.status_code == 200
+    except Exception as e:
+        logger.warning(f"OpenRouter API key test failed: {str(e)}")
+        return False    
 
 async def test_mistral_api_key():
     try:
@@ -2241,7 +2269,18 @@ def get_tokenizer(model_name: str):
         "stability": "openai/clip-vit-large-patch14",
         "whisper": "openai/whisper-large-v2",
         "clip-interrogator": "openai/clip-vit-large-patch14",
-        "videocap-transformer": "ArhanK005/videocap-transformer"
+        "videocap-transformer": "ArhanK005/videocap-transformer",
+        "openrouter/google": "google/flan-t5-xl",
+        "openrouter/anthropic": "Xenova/claude-tokenizer",
+        "openrouter/meta-llama": "huggyllama/llama-7b",
+        "openrouter/distilgpt2": "distilgpt2",
+        "openrouter/bigscience/bloom": "bigscience/bloom-1b7",
+        "openrouter/databricks/dolly-v2-12b": "databricks/dolly-v2-12b",
+        "openrouter/EleutherAI/gpt-j-6b": "EleutherAI/gpt-j-6B",
+        "openrouter/OpenAssistant/oasst-sft-6-llama-30b-xor": "OpenAssistant/oasst-sft-6-llama-30b-xor",
+        "openrouter/stabilityai/stablelm-tuned-alpha-7b": "stabilityai/stablelm-base-alpha-7b",
+        "openrouter/togethercomputer/GPT-JT-6B-v1": "togethercomputer/GPT-JT-6B-v1",
+        "openrouter/tiiuae/falcon-7b-instruct": "tiiuae/falcon-7b-instruct"
     }
     best_match = process.extractOne(model_name.lower(), model_to_tokenizer_mapping.keys())
     return model_to_tokenizer_mapping.get(best_match[0], "gpt2")  # Default to "gpt2" if no match found
@@ -2306,7 +2345,86 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         "stability-search-and-replace": {"credits_per_call": 4},
         "stability-inpaint": {"credits_per_call": 3},
         "stability-outpaint": {"credits_per_call": 4},
-        "stability-remove-background": {"credits_per_call": 2}
+        "stability-remove-background": {"credits_per_call": 2},
+        "openrouter/auto": {"input_cost": 0.0005, "output_cost": 0.0015, "per_call_cost": 0},
+        "openrouter/nousresearch/nous-capybara-7b:free": {"input_cost": 0, "output_cost": 0, "per_call_cost": 0},
+        "openrouter/mistralai/mistral-7b-instruct:free": {"input_cost": 0, "output_cost": 0, "per_call_cost": 0},
+        "openrouter/gryphe/mythomist-7b:free": {"input_cost": 0, "output_cost": 0, "per_call_cost": 0},
+        "openrouter/undi95/toppy-m-7b:free": {"input_cost": 0, "output_cost": 0, "per_call_cost": 0},
+        "openrouter/cinematika-7b:free": {"input_cost": 0, "output_cost": 0, "per_call_cost": 0},
+        "openrouter/google/gemma-7b-it:free": {"input_cost": 0, "output_cost": 0, "per_call_cost": 0},
+        "openrouter/jebcarter/psyfighter-13b": {"input_cost": 0.001, "output_cost": 0.001, "per_call_cost": 0},
+        "openrouter/koboldai/psyfighter-13b-2": {"input_cost": 0.001, "output_cost": 0.001, "per_call_cost": 0},
+        "openrouter/intel/neural-chat-7b": {"input_cost": 0.005, "output_cost": 0.005, "per_call_cost": 0},
+        "openrouter/haotian-liu/llava-13b": {"input_cost": 0.005, "output_cost": 0.005, "per_call_cost": 0},
+        "openrouter/nousresearch/nous-hermes-2-vision-7b": {"input_cost": 0.005, "output_cost": 0.005, "per_call_cost": 0},
+        "openrouter/meta-llama/llama-2-13b-chat": {"input_cost": 0.0001474, "output_cost": 0.0001474, "per_call_cost": 0},
+        "openrouter/migtissera/synthia-70b": {"input_cost": 0.00375, "output_cost": 0.00375, "per_call_cost": 0},
+        "openrouter/pygmalionai/mythalion-13b": {"input_cost": 0.001125, "output_cost": 0.001125, "per_call_cost": 0},
+        "openrouter/xwin-lm/xwin-lm-70b": {"input_cost": 0.00375, "output_cost": 0.00375, "per_call_cost": 0},
+        "openrouter/alpindale/goliath-120b": {"input_cost": 0.009375, "output_cost": 0.009375, "per_call_cost": 0},
+        "openrouter/neversleep/noromaid-20b": {"input_cost": 0.00225, "output_cost": 0.00225, "per_call_cost": 0},
+        "openrouter/gryphe/mythomist-7b": {"input_cost": 0.000375, "output_cost": 0.000375, "per_call_cost": 0},
+        "openrouter/sophosympatheia/midnight-rose-70b": {"input_cost": 0.009, "output_cost": 0.009, "per_call_cost": 0},
+        "openrouter/undi95/remm-slerp-l2-13b:extended": {"input_cost": 0.001125, "output_cost": 0.001125, "per_call_cost": 0},
+        "openrouter/gryphe/mythomax-l2-13b:extended": {"input_cost": 0.001125, "output_cost": 0.001125, "per_call_cost": 0},
+        "openrouter/mancer/weaver": {"input_cost": 0.003375, "output_cost": 0.003375, "per_call_cost": 0},
+        "openrouter/nousresearch/nous-hermes-llama2-13b": {"input_cost": 0.00027, "output_cost": 0.00027, "per_call_cost": 0},
+        "openrouter/nousresearch/nous-capybara-7b": {"input_cost": 0.00018, "output_cost": 0.00018, "per_call_cost": 0},
+        "openrouter/meta-llama/codellama-34b-instruct": {"input_cost": 0.00072, "output_cost": 0.00072, "per_call_cost": 0},
+        "openrouter/codellama/codellama-70b-instruct": {"input_cost": 0.00081, "output_cost": 0.00081, "per_call_cost": 0},
+        "openrouter/phind/phind-codellama-34b": {"input_cost": 0.00072, "output_cost": 0.00072, "per_call_cost": 0},
+        "openrouter/teknium/openhermes-2-mistral-7b": {"input_cost": 0.00018, "output_cost": 0.00018, "per_call_cost": 0},
+        "openrouter/teknium/openhermes-2.5-mistral-7b": {"input_cost": 0.00018, "output_cost": 0.00018, "per_call_cost": 0},
+        "openrouter/undi95/remm-slerp-l2-13b": {"input_cost": 0.00027, "output_cost": 0.00027, "per_call_cost": 0},
+        "openrouter/undi95/toppy-m-7b": {"input_cost": 0.00018, "output_cost": 0.00018, "per_call_cost": 0},
+        "openrouter/cinematika-7b": {"input_cost": 0.00018, "output_cost": 0.00018, "per_call_cost": 0},
+        "openrouter/01-ai/yi-34b-chat": {"input_cost": 0.00072, "output_cost": 0.00072, "per_call_cost": 0},
+        "openrouter/01-ai/yi-34b": {"input_cost": 0.00072, "output_cost": 0.00072, "per_call_cost": 0},
+        "openrouter/01-ai/yi-6b": {"input_cost": 0.000126, "output_cost": 0.000126, "per_call_cost": 0},
+        "openrouter/togethercomputer/stripedhyena-nous-7b": {"input_cost": 0.00018, "output_cost": 0.00018, "per_call_cost": 0},
+        "openrouter/togethercomputer/stripedhyena-hessian-7b": {"input_cost": 0.00018, "output_cost": 0.00018, "per_call_cost": 0},
+        "openrouter/mistralai/mixtral-8x7b": {"input_cost": 0.00054, "output_cost": 0.00054, "per_call_cost": 0},
+        "openrouter/nousresearch/nous-hermes-yi-34b": {"input_cost": 0.00072, "output_cost": 0.00072, "per_call_cost": 0},
+        "openrouter/nousresearch/nous-hermes-2-mixtral-8x7b-sft": {"input_cost": 0.00054, "output_cost": 0.00054, "per_call_cost": 0},
+        "openrouter/nousresearch/nous-hermes-2-mistral-7b-dpo": {"input_cost": 0.00018, "output_cost": 0.00018, "per_call_cost": 0},
+        "openrouter/mistralai/mixtral-8x22b": {"input_cost": 0.00108, "output_cost": 0.00108, "per_call_cost": 0},
+        "openrouter/open-orca/mistral-7b-openorca": {"input_cost": 0.0001425, "output_cost": 0.0001425, "per_call_cost": 0},
+        "openrouter/huggingfaceh4/zephyr-7b-beta": {"input_cost": 0.0001425, "output_cost": 0.0001425, "per_call_cost": 0},
+        "openrouter/openai/gpt-3.5-turbo": {"input_cost": 0.0005, "output_cost": 0.0015, "per_call_cost": 0},
+        "openrouter/openai/gpt-3.5-turbo-0125": {"input_cost": 0.0005, "output_cost": 0.0015, "per_call_cost": 0},
+        "openrouter/openai/gpt-3.5-turbo-16k": {"input_cost": 0.003, "output_cost": 0.004, "per_call_cost": 0},
+        "openrouter/openai/gpt-4-turbo": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
+        "openrouter/openai/gpt-4-turbo-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
+        "openrouter/openai/gpt-4": {"input_cost": 0.03, "output_cost": 0.06, "per_call_cost": 0},
+        "openrouter/openai/gpt-4-32k": {"input_cost": 0.06, "output_cost": 0.12, "per_call_cost": 0},
+        "openrouter/openai/gpt-4-vision-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
+        "openrouter/openai/gpt-3.5-turbo-instruct": {"input_cost": 0.0015, "output_cost": 0.002, "per_call_cost": 0},
+        "openrouter/google/palm-2-chat-bison": {"input_cost": 0.00025, "output_cost": 0.0005, "per_call_cost": 0},
+        "openrouter/google/palm-2-codechat-bison": {"input_cost": 0.00025, "output_cost": 0.0005, "per_call_cost": 0},
+        "openrouter/google/palm-2-chat-bison-32k": {"input_cost": 0.00025, "output_cost": 0.0005, "per_call_cost": 0},
+        "openrouter/google/palm-2-codechat-bison-32k": {"input_cost": 0.00025, "output_cost": 0.0005, "per_call_cost": 0},
+        "openrouter/google/gemini-pro": {"input_cost": 0.000125, "output_cost": 0.000375, "per_call_cost": 0},
+        "openrouter/google/gemini-pro-vision": {"input_cost": 0.000125, "output_cost": 0.000375, "per_call_cost": 0},
+        "openrouter/google/gemini-pro-1.5": {"input_cost": 0.0025, "output_cost": 0.0075, "per_call_cost": 0},
+        "openrouter/anthropic/claude-3-opus": {"input_cost": 0.015, "output_cost": 0.075, "per_call_cost": 0},
+        "openrouter/anthropic/claude-3-sonnet": {"input_cost": 0.003, "output_cost": 0.015, "per_call_cost": 0},
+        "openrouter/anthropic/claude-3-haiku": {"input_cost": 0.00025, "output_cost": 0.00125, "per_call_cost": 0},
+        "openrouter/anthropic/claude-3-opus:beta": {"input_cost": 0.015, "output_cost": 0.075, "per_call_cost": 0},
+        "openrouter/anthropic/claude-3-sonnet:beta": {"input_cost": 0.003, "output_cost": 0.015, "per_call_cost": 0},
+        "openrouter/anthropic/claude-3-haiku:beta": {"input_cost": 0.00025, "output_cost": 0.00125, "per_call_cost": 0},
+        "openrouter/meta-llama/llama-2-70b-chat": {"input_cost": 0.0007, "output_cost": 0.0009, "per_call_cost": 0},
+        "openrouter/nousresearch/nous-capybara-34b": {"input_cost": 0.0009, "output_cost": 0.0009, "per_call_cost": 0},
+        "openrouter/jondurbin/airoboros-l2-70b": {"input_cost": 0.0007, "output_cost": 0.0009, "per_call_cost": 0},
+        "openrouter/jondurbin/bagel-34b": {"input_cost": 0.00575, "output_cost": 0.00575, "per_call_cost": 0},
+        "openrouter/austism/chronos-hermes-13b": {"input_cost": 0.00022, "output_cost": 0.00022, "per_call_cost": 0},
+        "openrouter/mistralai/mistral-7b-instruct": {"input_cost": 0.00013, "output_cost": 0.00013, "per_call_cost": 0},
+        "openrouter/gryphe/mythomax-l2-13b": {"input_cost": 0.0002, "output_cost": 0.0002, "per_call_cost": 0},
+        "openrouter/openchat/openchat-7b": {"input_cost": 0.00013, "output_cost": 0.00013, "per_call_cost": 0},
+        "openrouter/lizpreciatior/lzlv-70b-fp16-hf": {"input_cost": 0.0007, "output_cost": 0.0008, "per_call_cost": 0},
+        "openrouter/mistralai/mixtral-8x7b-instruct": {"input_cost": 0.00027, "output_cost": 0.00027, "per_call_cost": 0},
+        "openrouter/cognitivecomputations/dolphin-mixtral-8x7b": {"input_cost": 0.0005, "output_cost": 0.0005, "per_call_cost": 0},
+        "openrouter/neversleep/noromaid-mixtral-8x7b-instruct": {"input_cost": 0.008, "output_cost": 0.008, "per_call_cost": 0},        
     }
     # Find the best match for the model name using fuzzy string matching
     best_match = process.extractOne(model_name.lower(), pricing_data.keys())
@@ -2912,6 +3030,41 @@ async def submit_inference_request_to_openai_api(inference_request):
     else:
         logger.warning(f"Unsupported inference type for OpenAI model: {inference_request.model_inference_type_string}")
         return None, None
+    
+async def submit_inference_request_to_openrouter(inference_request):
+    logger.info("Now accessing OpenRouter...")
+    if inference_request.model_inference_type_string == "text_completion":
+        model_parameters = json.loads(inference_request.model_parameters_json)
+        messages = [{"role": "user", "content": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")}]
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": inference_request.requested_model_canonical_string,
+                    "messages": messages,
+                    "max_tokens": model_parameters.get("number_of_tokens_to_generate", 1000),
+                    "temperature": model_parameters.get("temperature", 0.7),
+                }
+            )
+            if response.status_code == 200:
+                output_results = response.json()["choices"][0]["message"]["content"]
+                result = magika.identify_bytes(output_results.encode("utf-8")) 
+                detected_data_type = result.output.ct_label
+                output_results_file_type_strings = {
+                    "output_text": detected_data_type,
+                    "output_files": ["NA"]
+                }
+                return output_results, output_results_file_type_strings
+            else:
+                logger.error(f"Error generating text from OpenRouter: {response.text}")
+                return None, None
+    else:
+        logger.warning(f"Unsupported inference type for OpenRouter model: {inference_request.model_inference_type_string}")
+        return None, None
 
 async def submit_inference_request_to_mistral_api(inference_request):
     # Integrate with the Mistral API to perform the inference task
@@ -3179,6 +3332,8 @@ async def execute_inference_request(inference_request_id: str) -> None:
             output_results, output_results_file_type_strings = await submit_inference_request_to_groq_api(inference_request)
         elif "claude" in inference_request.requested_model_canonical_string.lower():
             output_results, output_results_file_type_strings = await submit_inference_request_to_claude_api(inference_request)
+        elif inference_request.requested_model_canonical_string.startswith("openrouter/"):
+            output_results, output_results_file_type_strings = await submit_inference_request_to_openrouter(inference_request)
         else:
             output_results, output_results_file_type_strings = await submit_inference_request_to_swiss_army_llama(inference_request)
 
@@ -3583,29 +3738,29 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
         if actual_hash != expected_hash:
             validation_errors.append(f"SHA3-256 hash in field {hash_field_name} does not match the computed hash of the response fields")
     # Validate pastelid signature fields
-    last_signature_field_name = None
-    last_hash_field_name = None
+    signature_field_names = []
+    hash_field_name = None
     for field_name in model_instance.__fields__:
         if "_pastelid" in field_name:
             first_pastelid = field_name
             break
     for field_name in model_instance.__fields__:
         if "_signature_on_" in field_name:
-            last_signature_field_name = field_name
+            signature_field_names.append(field_name)
         elif "sha3_256_hash_of_" in field_name and field_name.endswith("_fields"):
-            last_hash_field_name = field_name
-    if last_signature_field_name and last_hash_field_name:
-        signature_field_name = last_signature_field_name
-        hash_field_name = last_hash_field_name
+            hash_field_name = field_name
+    if signature_field_names and hash_field_name:
         if hasattr(model_instance, first_pastelid):
             pastelid = getattr(model_instance, first_pastelid)
             message_to_verify = getattr(model_instance, hash_field_name)
-            signature = getattr(model_instance, signature_field_name)
-            verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
-            if verification_result != 'OK':
-                validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
+            for signature_field_name in signature_field_names:
+                signature = getattr(model_instance, signature_field_name)
+                verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
+                if verification_result != 'OK':
+                    validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
         else:
-            validation_errors.append(f"Corresponding pastelid field {first_pastelid} not found for signature field {signature_field_name}")
+            validation_errors.append(f"Corresponding pastelid field {first_pastelid} not found for signature fields {signature_field_names}")
+    return validation_errors
 
 async def validate_inference_request_message_data_func(model_instance: SQLModel):
     validation_errors = await validate_credit_pack_ticket_message_data_func(model_instance)
@@ -3691,6 +3846,9 @@ if use_encrypt_new_secrets:
     
     encrypted_stability_key = encrypt_sensitive_data("abc123", encryption_key)
     print(f"Encrypted stability key: {encrypted_stability_key}")    
+    
+    encrypted_openrouter_key = encrypt_sensitive_data("abc123", encryption_key)
+    print(f"Encrypted openrouter key: {encrypted_openrouter_key}")
     
 use_test_market_price_data = 0
 if use_test_market_price_data:
