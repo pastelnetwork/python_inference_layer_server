@@ -283,15 +283,15 @@ async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_f
     response_fields = {}
     last_hash_field_name = None
     last_signature_field_name = None
-    # Find the last hash field and last signature field
+    # Find the last hash field and the last signature field
     for field_name in model_instance.__fields__.keys():
         if field_name.startswith("sha3_256_hash_of"):
             last_hash_field_name = field_name
-        elif "_pastelid_signature_on_" in field_name:
+        elif "_signature_on_" in field_name:
             last_signature_field_name = field_name
-    # Iterate over the model fields and exclude the last hash, last signature, 'id', and '_sa_instance_state' fields
+    # Iterate over the model fields and exclude the last hash, last signature, 'id', and fields containing '_sa_instance_state'
     for field_name, field_value in model_instance.__dict__.items():
-        if field_name == last_hash_field_name or field_name == last_signature_field_name or field_name == 'id' or field_name == '_sa_instance_state':
+        if field_name in [last_hash_field_name, last_signature_field_name, 'id'] or '_sa_instance_state' in field_name:
             continue
         if field_value is not None:
             if isinstance(field_value, (datetime, date)):
@@ -391,6 +391,7 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
                 validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
         else:
             validation_errors.append(f"Corresponding pastelid field {first_pastelid} not found for signature field {signature_field_name}")
+    return validation_errors
 
 async def calculate_xor_distance(pastelid1: str, pastelid2: str) -> int:
     hash1 = hashlib.sha3_256(pastelid1.encode()).hexdigest()
@@ -2148,8 +2149,11 @@ async def main():
             credit_usage_tracking_psl_address,
             burn_address,
         )
-        logger.info(f"Credit pack ticket stored on the blockchain with transaction ID: {credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid}")
-        logger.info(f"Credit pack details: {credit_pack_purchase_request_confirmation_response}")
+        if credit_pack_purchase_request_confirmation_response:
+            logger.info(f"Credit pack ticket stored on the blockchain with transaction ID: {credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid}")
+            logger.info(f"Credit pack details: {credit_pack_purchase_request_confirmation_response}")
+        else:
+            logger.error("Credit pack ticket storage failed!")
 
     if use_test_inference_request_functionality:
         if use_test_llm_text_completion:

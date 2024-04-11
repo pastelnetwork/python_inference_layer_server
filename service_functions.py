@@ -3677,15 +3677,15 @@ async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_f
     response_fields = {}
     last_hash_field_name = None
     last_signature_field_name = None
-    # Find the last hash field and last signature field
+    # Find the last hash field and the last signature field
     for field_name in model_instance.__fields__.keys():
         if field_name.startswith("sha3_256_hash_of"):
             last_hash_field_name = field_name
-        elif "_pastelid_signature_on_" in field_name:
+        elif "_signature_on_" in field_name:
             last_signature_field_name = field_name
-    # Iterate over the model fields and exclude the last hash, last signature, 'id', and '_sa_instance_state' fields
+    # Iterate over the model fields and exclude the last hash, last signature, 'id', and fields containing '_sa_instance_state'
     for field_name, field_value in model_instance.__dict__.items():
-        if field_name == last_hash_field_name or field_name == last_signature_field_name or field_name == 'id' or field_name == '_sa_instance_state':
+        if field_name in [last_hash_field_name, last_signature_field_name, 'id'] or '_sa_instance_state' in field_name:
             continue
         if field_value is not None:
             if isinstance(field_value, (datetime, date)):
@@ -3729,37 +3729,65 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
     # Validate hash fields
     expected_hash = await compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance)
     hash_field_name = None
+    last_hash_field_name = None
     for field_name in model_instance.__fields__:
-        if "sha3_256_hash_of_" in field_name and field_name.endswith("_fields"):
-            hash_field_name = field_name
-            break
-    if hash_field_name:
-        actual_hash = getattr(model_instance, hash_field_name)
+        if field_name.startswith("sha3_256_hash_of") and field_name.endswith("_fields"):
+            last_hash_field_name = field_name
+    if last_hash_field_name:
+        actual_hash = getattr(model_instance, last_hash_field_name)
         if actual_hash != expected_hash:
-            validation_errors.append(f"SHA3-256 hash in field {hash_field_name} does not match the computed hash of the response fields")
+            validation_errors.append(f"SHA3-256 hash in field {last_hash_field_name} does not match the computed hash of the response fields")
     # Validate pastelid signature fields
-    signature_field_names = []
-    hash_field_name = None
-    for field_name in model_instance.__fields__:
-        if "_pastelid" in field_name:
-            first_pastelid = field_name
-            break
-    for field_name in model_instance.__fields__:
-        if "_signature_on_" in field_name:
-            signature_field_names.append(field_name)
-        elif "sha3_256_hash_of_" in field_name and field_name.endswith("_fields"):
-            hash_field_name = field_name
-    if signature_field_names and hash_field_name:
-        if hasattr(model_instance, first_pastelid):
-            pastelid = getattr(model_instance, first_pastelid)
-            message_to_verify = getattr(model_instance, hash_field_name)
-            for signature_field_name in signature_field_names:
+    if isinstance(model_instance, db_code.CreditPackPurchasePriceAgreementRequestResponse):
+        signature_field_names = []
+        hash_field_name = None
+        for field_name in model_instance.__fields__:
+            if "_pastelid" in field_name:
+                first_pastelid = field_name
+                break
+        for field_name in model_instance.__fields__:
+            if "_signature_on_" in field_name:
+                signature_field_names.append(field_name)
+            elif "sha3_256_hash_of_" in field_name and field_name.endswith("_fields"):
+                hash_field_name = field_name
+        if signature_field_names and hash_field_name:
+            if hasattr(model_instance, first_pastelid):
+                pastelid = getattr(model_instance, first_pastelid)
+                for signature_field_name in signature_field_names:
+                    if signature_field_name.endswith("_hash"):
+                        message_to_verify = getattr(model_instance, hash_field_name)
+                    else:
+                        message_to_verify = getattr(model_instance, signature_field_name.replace("_signature_on_", ""))
+                    signature = getattr(model_instance, signature_field_name)
+                    verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
+                    if verification_result != 'OK':
+                        validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
+            else:
+                validation_errors.append(f"Corresponding pastelid field {first_pastelid} not found for signature fields {signature_field_names}")
+    else:
+        last_signature_field_name = None
+        last_hash_field_name = None
+        for field_name in model_instance.__fields__:
+            if "_pastelid" in field_name:
+                first_pastelid = field_name
+                break
+        for field_name in model_instance.__fields__:
+            if "_signature_on_" in field_name:
+                last_signature_field_name = field_name
+            elif "sha3_256_hash_of_" in field_name and field_name.endswith("_fields"):
+                last_hash_field_name = field_name
+        if last_signature_field_name and last_hash_field_name:
+            signature_field_name = last_signature_field_name
+            hash_field_name = last_hash_field_name
+            if hasattr(model_instance, first_pastelid):
+                pastelid = getattr(model_instance, first_pastelid)
+                message_to_verify = getattr(model_instance, hash_field_name)
                 signature = getattr(model_instance, signature_field_name)
                 verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
                 if verification_result != 'OK':
                     validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
-        else:
-            validation_errors.append(f"Corresponding pastelid field {first_pastelid} not found for signature fields {signature_field_names}")
+            else:
+                validation_errors.append(f"Corresponding pastelid field {first_pastelid} not found for signature field {signature_field_name}")
     return validation_errors
 
 async def validate_inference_request_message_data_func(model_instance: SQLModel):
