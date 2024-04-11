@@ -1093,7 +1093,7 @@ async def get_user_messages_for_pastelid(pastelid: str) -> List[db_code.UserMess
 async def get_credit_pack_purchase_request(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> db_code.CreditPackPurchaseRequest:
     try:
         async with db_code.Session() as db_session:
-            result = db_session.exec(
+            result = await db_session.exec(
                 select(db_code.CreditPackPurchaseRequest).where(db_code.CreditPackPurchaseRequest.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
             )
             return result.one_or_none()
@@ -1105,7 +1105,7 @@ async def save_credit_pack_purchase_request(credit_pack_purchase_request: db_cod
     try:
         async with db_code.Session() as db_session:
             db_session.add(credit_pack_purchase_request)
-            db_session.commit()
+            await db_session.commit()
     except Exception as e:
         logger.error(f"Error saving credit pack purchase request: {str(e)}")
         raise
@@ -1113,7 +1113,7 @@ async def save_credit_pack_purchase_request(credit_pack_purchase_request: db_cod
 async def get_credit_pack_purchase_request_response(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> db_code.CreditPackPurchaseRequestResponse:
     try:
         async with db_code.Session() as db_session:
-            result = db_session.exec(
+            result = await db_session.exec(
                 select(db_code.CreditPackPurchaseRequestResponse).where(db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == sha3_256_hash_of_credit_pack_purchase_request_response_fields)
             )
             return result.one_or_none()
@@ -1125,7 +1125,7 @@ async def save_credit_pack_purchase_request_response(credit_pack_purchase_reques
     try:
         async with db_code.Session() as db_session:
             db_session.add(credit_pack_purchase_request_response)
-            db_session.commit()
+            await db_session.commit()
     except Exception as e:
         logger.error(f"Error saving credit pack purchase request response: {str(e)}")
         raise
@@ -1133,7 +1133,7 @@ async def save_credit_pack_purchase_request_response(credit_pack_purchase_reques
 async def get_credit_pack_purchase_request_rejection(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> db_code.CreditPackPurchaseRequestRejection:
     try:
         async with db_code.Session() as db_session:
-            result = db_session.exec(
+            result = await db_session.exec(
                 select(db_code.CreditPackPurchaseRequestRejection).where(db_code.CreditPackPurchaseRequestRejection.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
             )
             return result.one_or_none()
@@ -1145,7 +1145,7 @@ async def save_credit_pack_purchase_request_rejection(credit_pack_purchase_reque
     try:
         async with db_code.Session() as db_session:
             db_session.add(credit_pack_purchase_request_rejection)
-            db_session.commit()
+            await db_session.commit()
     except Exception as e:
         logger.error(f"Error saving credit pack purchase request rejection: {str(e)}")
         raise
@@ -1153,7 +1153,7 @@ async def save_credit_pack_purchase_request_rejection(credit_pack_purchase_reque
 async def get_credit_pack_purchase_request_response_termination(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> db_code.CreditPackPurchaseRequestResponseTermination:
     try:
         async with db_code.Session() as db_session:
-            result = db_session.exec(
+            result = await db_session.exec(
                 select(db_code.CreditPackPurchaseRequestResponseTermination).where(db_code.CreditPackPurchaseRequestResponseTermination.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
             )
             return result.one_or_none()
@@ -1165,7 +1165,7 @@ async def save_credit_pack_purchase_request_response_termination(credit_pack_pur
     try:
         async with db_code.Session() as db_session:
             db_session.add(credit_pack_purchase_request_response_termination)
-            db_session.commit()
+            await db_session.commit()
     except Exception as e:
         logger.error(f"Error saving credit pack purchase request response termination: {str(e)}")
         raise
@@ -1173,7 +1173,7 @@ async def save_credit_pack_purchase_request_response_termination(credit_pack_pur
 async def get_credit_pack_purchase_request_confirmation(sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str) -> db_code.CreditPackPurchaseRequestConfirmation:
     try:
         async with db_code.Session() as db_session:
-            result = db_session.exec(
+            result = await db_session.exec(
                 select(db_code.CreditPackPurchaseRequestConfirmation).where(db_code.CreditPackPurchaseRequestConfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields == sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
             )
             return result.one_or_none()
@@ -1185,7 +1185,7 @@ async def save_credit_pack_purchase_request_confirmation(credit_pack_purchase_re
     try:
         async with db_code.Session() as db_session:
             db_session.add(credit_pack_purchase_request_confirmation)
-            db_session.commit()
+            await db_session.commit()
     except Exception as e:
         logger.error(f"Error saving credit pack purchase request confirmation: {str(e)}")
         raise
@@ -1193,7 +1193,7 @@ async def save_credit_pack_purchase_request_confirmation(credit_pack_purchase_re
 async def get_credit_pack_purchase_request_confirmation_response(sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields: str) -> db_code.CreditPackPurchaseRequestConfirmationResponse:
     try:
         async with db_code.Session() as db_session:
-            result = db_session.exec(
+            result = await db_session.exec(
                 select(db_code.CreditPackPurchaseRequestConfirmationResponse).where(db_code.CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields == sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields)
             )
             return result.one_or_none()
@@ -1205,7 +1205,7 @@ async def save_credit_pack_purchase_request_confirmation_response(credit_pack_pu
     try:
         async with db_code.Session() as db_session:
             db_session.add(credit_pack_purchase_request_confirmation_response)
-            db_session.commit()
+            await db_session.commit()
     except Exception as e:
         logger.error(f"Error saving credit pack purchase request confirmation response: {str(e)}")
         raise
@@ -1214,7 +1214,7 @@ async def save_credit_pack_purchase_request_final_response(response: db_code.Cre
     try:
         async with db_code.Session() as db:
             db.add(response)
-            db.commit()
+            await db.commit()
     except Exception as e:
         logger.error(f"Error saving credit pack purchase request final response: {str(e)}")
         raise
@@ -1223,7 +1223,7 @@ async def save_credit_pack_storage_completion_announcement(response: db_code.Cre
     try:
         async with db_code.Session() as db:
             db.add(response)
-            db.commit()
+            await db.commit()
     except Exception as e:
         logger.error(f"Error saving credit pack storage completion announcement: {str(e)}")
         raise
@@ -1232,7 +1232,7 @@ async def save_credit_pack_purchase_completion_announcement(confirmation: db_cod
     try:
         async with db_code.Session() as db:
             db.add(confirmation)
-            db.commit()
+            await db.commit()
         logger.info(f"Storing credit pack purchase completion announcement: {confirmation.json()}")
     except Exception as e:
         logger.error(f"Error storing credit pack purchase completion announcement: {str(e)}")
@@ -1242,28 +1242,31 @@ async def save_credit_pack_storage_retry_completion_announcement(response: db_co
     try:
         async with db_code.Session() as db:
             db.add(response)
-            db.commit()
+            await db.commit()
     except Exception as e:
         logger.error(f"Error saving credit pack storage retry completion announcement: {str(e)}")
         raise
             
 async def check_credit_pack_purchase_request_status(credit_pack_purchase_request: db_code.CreditPackPurchaseRequest) -> str:
     async with db_code.Session() as db:
-        response = db.exec(
+        response = await db.exec(
             select(db_code.CreditPackPurchaseRequestResponse).where(db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_fields == credit_pack_purchase_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
-        ).one_or_none()
+        )
+        response = response.one_or_none()
         if response is None:
             return "pending"
         else:
-            confirmation = db.exec(
+            confirmation = await db.exec(
                 select(db_code.CreditPackPurchaseRequestConfirmation).where(db_code.CreditPackPurchaseRequestConfirmation.sha3_256_hash_of_credit_pack_purchase_request_response_fields == response.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
-            ).one_or_none()
+            )
+            confirmation = confirmation.one_or_none()
             if confirmation is None:
                 return "approved"
             else:
-                confirmation_response = db.exec(
+                confirmation_response = await db.exec(
                     select(db_code.CreditPackPurchaseRequestConfirmationResponse).where(db_code.CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields == confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
-                ).one_or_none()
+                )
+                confirmation_response = confirmation_response.one_or_none()
                 if confirmation_response is None:
                     return "confirmed"
                 else:
@@ -1358,10 +1361,10 @@ async def retrieve_credit_pack_ticket_from_blockchain(credit_pack_ticket_txid: s
 
 async def check_original_supernode_storage_confirmation(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> bool:
     async with db_code.Session() as db:
-        result = db.exec(
+        result = await db.exec(
             select(db_code.CreditPackPurchaseRequestConfirmationResponse).where(db_code.CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == sha3_256_hash_of_credit_pack_purchase_request_response_fields)
-        ).one_or_none()
-        return result is not None
+        )
+        return result.one_or_none() is not None
 
 async def process_credit_purchase_initial_request(credit_pack_purchase_request: db_code.CreditPackPurchaseRequest) -> db_code.CreditPackPurchaseRequestPreliminaryPriceQuote:
     try:
@@ -2758,17 +2761,19 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
     try:
         # Retrieve the inference API usage request from the database
         async with db_code.Session() as db:
-            inference_request = db.exec(
+            inference_request = await db.exec(
                 select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_request_id)
-            ).one_or_none()
+            )
+            inference_request = inference_request.one_or_none()
         if inference_request is None:
             logger.warning(f"Invalid inference request ID: {inference_request_id}")
             return False
         # Retrieve the inference API usage request response from the database
         async with db_code.Session() as db:
-            inference_response = db.exec(
+            inference_response = await db.exec(
                 select(db_code.InferenceAPIUsageResponse).where(db_code.InferenceAPIUsageResponse.inference_request_id == inference_request_id)
-            ).one_or_none()
+            )
+            inference_response = inference_response.one_or_none()
         # Ensure burn address is tracked by local wallet:
         burn_address_already_imported = await check_if_address_is_already_imported_in_local_wallet(burn_address)
         if not burn_address_already_imported:
@@ -2786,8 +2791,8 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
             inference_request.status = "confirmed"
             async with db_code.Session() as db:
                 db.add(inference_request)
-                db.commit()
-                db.refresh(inference_request)
+                await db.commit()
+                await db.refresh(inference_request)
             # Trigger the inference request processing
             asyncio.create_task(execute_inference_request(inference_request_id))
             return True
@@ -2821,8 +2826,8 @@ async def save_inference_output_results(inference_request_id: str, inference_res
         # Save the inference output result to the database
         async with db_code.Session() as db:
             db.add(inference_output_result)
-            db.commit()
-            db.refresh(inference_output_result)
+            await db.commit()
+            await db.refresh(inference_output_result)
     except Exception as e:
         logger.error(f"Error saving inference output results: {str(e)}")
         raise
