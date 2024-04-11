@@ -337,6 +337,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields: str
     credit_pack_purchase_request_response_fields_json: str = Field(sa_column=Column(JSON))
     agree_with_preliminary_price_quote: bool
+    preliminary_quoted_price_per_credit_in_psl: float
     preliminary_price_quote_response_timestamp_utc_iso_string: str
     preliminary_price_quote_response_pastel_block_height: int
     preliminary_price_quote_response_message_version_string: str
@@ -350,6 +351,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel):
                 "sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields": "0x5678...",
                 "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
                 "agree_with_preliminary_price_quote": True,
+                "preliminary_quoted_price_per_credit_in_psl": 0.1,
                 "preliminary_price_quote_response_timestamp_utc_iso_string": "2023-06-01T12:10:00Z",
                 "preliminary_price_quote_response_pastel_block_height": 123457,
                 "preliminary_price_quote_response_message_version_string": "1.0",
@@ -388,6 +390,7 @@ class CreditPackPurchasePriceAgreementRequestResponse(SQLModel):
     sha3_256_hash_of_price_agreement_request_fields: str
     credit_pack_purchase_request_response_fields_json: str
     agree_with_proposed_price: bool
+    proposed_psl_price_per_credit: float
     proposed_price_agreement_response_timestamp_utc_iso_string: str
     proposed_price_agreement_response_pastel_block_height: int
     proposed_price_agreement_response_message_version_string: str
@@ -401,6 +404,7 @@ class CreditPackPurchasePriceAgreementRequestResponse(SQLModel):
                 "sha3_256_hash_of_price_agreement_request_fields": "0x1234...",
                 "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
                 "agree_with_proposed_price": True,
+                "proposed_psl_price_per_credit": 0.1,
                 "proposed_price_agreement_response_timestamp_utc_iso_string": "2023-06-01T12:25:00Z",
                 "proposed_price_agreement_response_pastel_block_height": 123458,
                 "proposed_price_agreement_response_message_version_string": "1.0",
