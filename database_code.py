@@ -418,7 +418,7 @@ class CreditPackPurchasePriceAgreementRequestResponse(SQLModel):
 class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
-    credit_pack_purchase_request_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_response_fields_json: str = Field(sa_column=Column(JSON))
     psl_cost_per_credit: float
     proposed_total_cost_of_credit_pack_in_psl: float
     credit_usage_tracking_psl_address: str = Field(index=True)
@@ -427,15 +427,16 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     credit_purchase_request_response_message_version_string: str
     responding_supernode_pastelid: str = Field(index=True)
     list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms: str = Field(sa_column=Column(JSON))
+    list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash: str = Field(sa_column=Column(JSON))
+    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json: str = Field(sa_column=Column(JSON))
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(unique=True, index=True)
     responding_supernode_signature_on_credit_pack_purchase_request_response_hash: str
-    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash: str = Field(sa_column=Column(JSON))
-    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json: str = Field(sa_column=Column(JSON))
+
     class Config:
         json_schema_extra = {
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
-                "credit_pack_purchase_request_json": '{"requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", ...}',
+                "credit_pack_purchase_request_response_fields_json": '{"requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", ...}',
                 "psl_cost_per_credit": 0.1,
                 "proposed_total_cost_of_credit_pack_in_psl": 100,
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
@@ -444,10 +445,10 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
                 "credit_purchase_request_response_message_version_string": "1.0",
                 "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP"],
+                "list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash": ["0x1234...", "0x5678..."],
+                "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json": ["0xabcd...", "0xef01..."],
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x9abc...",
-                "responding_supernode_signature_on_credit_pack_purchase_request_response_hash": "0xdef0...",
-                "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash": ["0x1234...", "0x5678..."],
-                "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json": ["0xabcd...", "0xef01..."]
+                "responding_supernode_signature_on_credit_pack_purchase_request_response_hash": "0xdef0..."
             }
         }
 
