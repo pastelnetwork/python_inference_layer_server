@@ -307,6 +307,7 @@ class CreditPackPurchaseRequestRejection(SQLModel):
         
 class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    credit_usage_tracking_psl_address: str
     credit_pack_purchase_request_response_fields_json: str = Field(sa_column=Column(JSON))
     preliminary_quoted_price_per_credit_in_psl: float
     preliminary_total_cost_of_credit_pack_in_psl: float
@@ -320,6 +321,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel):
         json_schema_extra = {
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
                 "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
                 "preliminary_quoted_price_per_credit_in_psl": 0.1,
                 "preliminary_total_cost_of_credit_pack_in_psl": 100,
@@ -337,6 +339,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields: str
     credit_pack_purchase_request_response_fields_json: str = Field(sa_column=Column(JSON))
     agree_with_preliminary_price_quote: bool
+    credit_usage_tracking_psl_address: str
     preliminary_quoted_price_per_credit_in_psl: float
     preliminary_price_quote_response_timestamp_utc_iso_string: str
     preliminary_price_quote_response_pastel_block_height: int
@@ -351,6 +354,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel):
                 "sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields": "0x5678...",
                 "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
                 "agree_with_preliminary_price_quote": True,
+                "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
                 "preliminary_quoted_price_per_credit_in_psl": 0.1,
                 "preliminary_price_quote_response_timestamp_utc_iso_string": "2023-06-01T12:10:00Z",
                 "preliminary_price_quote_response_pastel_block_height": 123457,
@@ -365,6 +369,7 @@ class CreditPackPurchasePriceAgreementRequest(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
     supernode_requesting_price_agreement_pastelid: str
     credit_pack_purchase_request_response_fields_json: str
+    credit_usage_tracking_psl_address: str
     proposed_psl_price_per_credit: float
     price_agreement_request_timestamp_utc_iso_string: str
     price_agreement_request_pastel_block_height: int
@@ -377,6 +382,7 @@ class CreditPackPurchasePriceAgreementRequest(SQLModel):
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x1234...",
                 "supernode_requesting_price_agreement_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
                 "proposed_psl_price_per_credit": 0.1,
                 "price_agreement_request_timestamp_utc_iso_string": "2023-06-01T12:20:00Z",
                 "price_agreement_request_pastel_block_height": 123457,
@@ -390,6 +396,7 @@ class CreditPackPurchasePriceAgreementRequestResponse(SQLModel):
     sha3_256_hash_of_price_agreement_request_fields: str
     credit_pack_purchase_request_response_fields_json: str
     agree_with_proposed_price: bool
+    credit_usage_tracking_psl_address: str
     proposed_psl_price_per_credit: float
     proposed_price_agreement_response_timestamp_utc_iso_string: str
     proposed_price_agreement_response_pastel_block_height: int
@@ -404,6 +411,7 @@ class CreditPackPurchasePriceAgreementRequestResponse(SQLModel):
                 "sha3_256_hash_of_price_agreement_request_fields": "0x1234...",
                 "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
                 "agree_with_proposed_price": True,
+                "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
                 "proposed_psl_price_per_credit": 0.1,
                 "proposed_price_agreement_response_timestamp_utc_iso_string": "2023-06-01T12:25:00Z",
                 "proposed_price_agreement_response_pastel_block_height": 123458,
@@ -414,6 +422,31 @@ class CreditPackPurchasePriceAgreementRequestResponse(SQLModel):
                 "responding_supernode_signature_on_price_agreement_request_response_hash": "0xdef0...",
             }
         }
+        
+class CreditPackPurchaseRequestResponseTermination(SQLModel):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+    credit_pack_purchase_request_response_fields_json: str = Field(sa_column=Column(JSON))
+    termination_reason_string: str
+    termination_timestamp_utc_iso_string: str
+    termination_pastel_block_height: int
+    credit_purchase_request_termination_message_version_string: str
+    responding_supernode_pastelid: str
+    sha3_256_hash_of_credit_pack_purchase_request_termination_fields: str
+    responding_supernode_signature_on_credit_pack_purchase_request_termination_hash: str
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "termination_reason_string": "Insufficient agreeing supernodes",
+                "termination_timestamp_utc_iso_string": "2023-06-01T12:30:00Z",
+                "termination_pastel_block_height": 123459,
+                "credit_purchase_request_termination_message_version_string": "1.0",
+                "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "sha3_256_hash_of_credit_pack_purchase_request_termination_fields": "0xabcd...",
+                "responding_supernode_signature_on_credit_pack_purchase_request_termination_hash": "0xdef0..."
+            }
+        }        
         
 class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
@@ -548,32 +581,7 @@ class CreditPackPurchaseRequestStatus(SQLModel):
                 "responding_supernode_signature_on_credit_pack_purchase_request_status_hash": "0xef01..."
             }
         }
-        
-class CreditPackPurchaseRequestResponseTermination(SQLModel):
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str
-    credit_pack_purchase_request_json: str = Field(sa_column=Column(JSON))
-    termination_reason_string: str
-    termination_timestamp_utc_iso_string: str
-    termination_pastel_block_height: int
-    credit_purchase_request_termination_message_version_string: str
-    responding_supernode_pastelid: str
-    sha3_256_hash_of_credit_pack_purchase_request_termination_fields: str
-    responding_supernode_signature_on_credit_pack_purchase_request_termination_hash: str
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
-                "credit_pack_purchase_request_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
-                "termination_reason_string": "Insufficient agreeing supernodes",
-                "termination_timestamp_utc_iso_string": "2023-06-01T12:30:00Z",
-                "termination_pastel_block_height": 123459,
-                "credit_purchase_request_termination_message_version_string": "1.0",
-                "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
-                "sha3_256_hash_of_credit_pack_purchase_request_termination_fields": "0xabcd...",
-                "responding_supernode_signature_on_credit_pack_purchase_request_termination_hash": "0xdef0..."
-            }
-        }
-        
+
 class CreditPackStorageRetryRequest(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
     credit_pack_purchase_request_response_json: str = Field(sa_column=Column(JSON))
