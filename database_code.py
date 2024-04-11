@@ -489,7 +489,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
-    credit_pack_purchase_request_response_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_response_fields_json: str = Field(sa_column=Column(JSON))
     requesting_end_user_pastelid: str = Field(index=True)
     txid_of_credit_purchase_burn_transaction: str = Field(index=True)
     credit_purchase_request_confirmation_utc_iso_string: str
@@ -502,7 +502,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x5678...",
-                "credit_pack_purchase_request_response_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
                 "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "txid_of_credit_purchase_burn_transaction": "0xabcd...",
                 "credit_purchase_request_confirmation_utc_iso_string": "2023-06-01T12:30:00Z",
@@ -584,7 +584,7 @@ class CreditPackPurchaseRequestStatus(SQLModel):
 
 class CreditPackStorageRetryRequest(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
-    credit_pack_purchase_request_response_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_response_fields_json: str = Field(sa_column=Column(JSON))
     requesting_end_user_pastelid: str
     closest_agreeing_supernode_to_retry_storage_pastelid: str
     credit_pack_storage_retry_request_timestamp_utc_iso_string: str
@@ -596,7 +596,7 @@ class CreditPackStorageRetryRequest(SQLModel):
         json_schema_extra = {
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x1234...",
-                "credit_pack_purchase_request_response_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
                 "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "closest_agreeing_supernode_to_retry_storage_pastelid": "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP",
                 "credit_pack_storage_retry_request_timestamp_utc_iso_string": "2023-06-01T12:50:00Z",

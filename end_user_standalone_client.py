@@ -476,6 +476,18 @@ async def estimated_market_price_of_inference_credits_in_psl_terms() -> float:
         logger.error(f"Error calculating estimated market price of inference credits: {str(e)}")
         raise
 
+def transform_credit_pack_purchase_request_response(result: dict) -> dict:
+    transformed_result = result.copy()
+    fields_to_convert = [
+        "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms",
+        "list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash",
+        "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json"
+    ]
+    for field in fields_to_convert:
+        if field in transformed_result:
+            transformed_result[field] = json.dumps(transformed_result[field])
+    return transformed_result
+
 async def send_to_address_func(address, amount, comment="", comment_to="", subtract_fee_from_amount=False):
     """
     Send an amount to a given Pastel address.
@@ -1009,7 +1021,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
-    credit_pack_purchase_request_response_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_response_fields_json: str = Field(sa_column=Column(JSON))
     requesting_end_user_pastelid: str = Field(index=True)
     txid_of_credit_purchase_burn_transaction: str = Field(index=True)
     credit_purchase_request_confirmation_utc_iso_string: str
@@ -1022,7 +1034,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x5678...",
-                "credit_pack_purchase_request_response_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
                 "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "txid_of_credit_purchase_burn_transaction": "0xabcd...",
                 "credit_purchase_request_confirmation_utc_iso_string": "2023-06-01T12:30:00Z",
@@ -1104,7 +1116,7 @@ class CreditPackPurchaseRequestStatus(SQLModel):
 
 class CreditPackStorageRetryRequest(SQLModel):
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
-    credit_pack_purchase_request_response_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_response_fields_json: str = Field(sa_column=Column(JSON))
     requesting_end_user_pastelid: str
     closest_agreeing_supernode_to_retry_storage_pastelid: str
     credit_pack_storage_retry_request_timestamp_utc_iso_string: str
@@ -1116,7 +1128,7 @@ class CreditPackStorageRetryRequest(SQLModel):
         json_schema_extra = {
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x1234...",
-                "credit_pack_purchase_request_response_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_response_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
                 "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "closest_agreeing_supernode_to_retry_storage_pastelid": "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP",
                 "credit_pack_storage_retry_request_timestamp_utc_iso_string": "2023-06-01T12:50:00Z",
@@ -1461,7 +1473,9 @@ class PastelMessagingClient:
             if "termination_reason_string" in result:
                 return CreditPackPurchaseRequestResponseTermination.model_validate(result)
             else:
-                return CreditPackPurchaseRequestResponse.model_validate(result)
+                transformed_result = transform_credit_pack_purchase_request_response(result)
+                return CreditPackPurchaseRequestResponse.model_validate(transformed_result)
+
 
     async def check_status_of_credit_purchase_request(self, supernode_url: str, credit_pack_purchase_request_hash: str) -> Union[CreditPackPurchaseRequestResponse, CreditPackPurchaseRequestResponseTermination]:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
@@ -1952,15 +1966,13 @@ async def handle_credit_pack_ticket_end_to_end(
         logger.error(f"Credit pack purchase request terminated: {signed_credit_pack_ticket_or_rejection.termination_reason_string}")
         return None
     signed_credit_pack_ticket = signed_credit_pack_ticket_or_rejection
-    # Calculate the total cost of the credit pack
-    total_psl_cost = number_of_credits * signed_credit_pack_ticket.psl_cost_per_credit
     # Send the required PSL from the credit usage tracking address to the burn address
-    burn_transaction_txid = await send_to_address_func(burn_address, total_psl_cost, "Burn transaction for credit pack ticket")
+    burn_transaction_txid = await send_to_address_func(burn_address, signed_credit_pack_ticket.proposed_total_cost_of_credit_pack_in_psl, "Burn transaction for credit pack ticket")
     # Prepare the credit pack purchase request confirmation
     credit_pack_purchase_request_confirmation = CreditPackPurchaseRequestConfirmation(
         sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
         sha3_256_hash_of_credit_pack_purchase_request_response_fields=signed_credit_pack_ticket.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
-        credit_pack_purchase_request_response_json=signed_credit_pack_ticket.credit_pack_purchase_request_json,
+        credit_pack_purchase_request_response_fields_json=signed_credit_pack_ticket.credit_pack_purchase_request_response_fields_json,
         requesting_end_user_pastelid=MY_LOCAL_PASTELID,
         txid_of_credit_purchase_burn_transaction=burn_transaction_txid,
         credit_purchase_request_confirmation_utc_iso_string=datetime.now(dt.UTC).isoformat(),
@@ -1983,9 +1995,10 @@ async def handle_credit_pack_ticket_end_to_end(
         logger.error(f"Credit pack purchase request terminated: {credit_pack_purchase_request_status.termination_reason_string}")
         # Retry the storage with the closest agreeing supernode
         closest_agreeing_supernode_pastelid = await get_closest_supernode_pastelid_from_list(MY_LOCAL_PASTELID, signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
+    # requesting_end_user_pastelid_signature_on_credit_pack_storage_retry_request_hash: str        
         credit_pack_storage_retry_request = CreditPackStorageRetryRequest(
             sha3_256_hash_of_credit_pack_purchase_request_response_fields=signed_credit_pack_ticket.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
-            credit_pack_purchase_request_response_json=signed_credit_pack_ticket.credit_pack_purchase_request_json,
+            credit_pack_purchase_request_response_fields_json=signed_credit_pack_ticket.credit_pack_purchase_request_response_fields_json,
             requesting_end_user_pastelid=MY_LOCAL_PASTELID,
             closest_agreeing_supernode_to_retry_storage_pastelid=closest_agreeing_supernode_pastelid,
             credit_pack_storage_retry_request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
