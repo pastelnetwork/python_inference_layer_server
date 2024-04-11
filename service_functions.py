@@ -1680,12 +1680,14 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
                 list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json.append(
                     response.responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json
                 )
+        credit_request_response_dict = json.loads(preliminary_price_quote_response.credit_pack_purchase_request_response_fields_json)
+        requested_initial_credits_in_credit_pack = credit_request_response_dict['requested_initial_credits_in_credit_pack']
         # Create the credit pack purchase request response
         credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(
             sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
             credit_pack_purchase_request_response_fields_json=preliminary_price_quote_response.credit_pack_purchase_request_response_fields_json,
             psl_cost_per_credit=preliminary_price_quote_response.preliminary_quoted_price_per_credit_in_psl,
-            proposed_total_cost_of_credit_pack_in_psl=preliminary_price_quote_response.preliminary_total_cost_of_credit_pack_in_psl,
+            proposed_total_cost_of_credit_pack_in_psl=requested_initial_credits_in_credit_pack*preliminary_price_quote_response.preliminary_quoted_price_per_credit_in_psl,
             credit_usage_tracking_psl_address=preliminary_price_quote_response.credit_usage_tracking_psl_address,
             request_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             request_response_pastel_block_height=await get_current_pastel_block_height_func(),
@@ -1736,7 +1738,7 @@ async def get_credit_purchase_request_status(request: db_code.CreditPackRequestS
 async def process_credit_pack_purchase_request_final_response_announcement(response: db_code.CreditPackPurchaseRequestResponse) -> None:
     try:
         # Validate the response fields
-        if not response.sha3_256_hash_of_credit_pack_purchase_request_fields or not response.credit_pack_purchase_request_json:
+        if not response.sha3_256_hash_of_credit_pack_purchase_request_fields or not response.credit_pack_purchase_request_response_fields_json:
             raise ValueError("Invalid final response announcement")
         # Save the final response to the db
         await save_credit_pack_purchase_request_final_response(response)
