@@ -394,10 +394,10 @@ class CreditPackPurchasePriceAgreementRequestResponse(SQLModel):
     proposed_price_agreement_response_timestamp_utc_iso_string: str
     proposed_price_agreement_response_pastel_block_height: int
     proposed_price_agreement_response_message_version_string: str
+    responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json: str
     responding_supernode_pastelid: str
     sha3_256_hash_of_price_agreement_request_response_fields: str
     responding_supernode_signature_on_price_agreement_request_response_hash: str
-    responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json: str
     class Config:
         json_schema_extra = {
             "example": {
@@ -408,10 +408,10 @@ class CreditPackPurchasePriceAgreementRequestResponse(SQLModel):
                 "proposed_price_agreement_response_timestamp_utc_iso_string": "2023-06-01T12:25:00Z",
                 "proposed_price_agreement_response_pastel_block_height": 123458,
                 "proposed_price_agreement_response_message_version_string": "1.0",
+                "responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json": "0x1234...",
                 "responding_supernode_pastelid": "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP",
                 "sha3_256_hash_of_price_agreement_request_response_fields": "0xabcd...",
                 "responding_supernode_signature_on_price_agreement_request_response_hash": "0xdef0...",
-                "responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json": "0x1234..."
             }
         }
         

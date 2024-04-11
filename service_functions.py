@@ -1688,15 +1688,10 @@ async def process_credit_pack_price_agreement_request(request: db_code.CreditPac
             proposed_price_agreement_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             proposed_price_agreement_response_pastel_block_height=await get_current_pastel_block_height_func(),
             proposed_price_agreement_response_message_version_string="1.0",
+            responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json=await sign_message_with_pastelid_func(MY_PASTELID, request.credit_pack_purchase_request_response_fields_json, LOCAL_PASTEL_ID_PASSPHRASE),
             responding_supernode_pastelid=MY_PASTELID,
             sha3_256_hash_of_price_agreement_request_response_fields="",
-            responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json="",
             responding_supernode_signature_on_price_agreement_request_response_hash=""
-        )
-        response.responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json = await sign_message_with_pastelid_func(
-            MY_PASTELID,
-            request.credit_pack_purchase_request_response_fields_json,
-            LOCAL_PASTEL_ID_PASSPHRASE
         )
         # Generate the hash and signature fields
         response.sha3_256_hash_of_price_agreement_request_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(response)
@@ -1705,7 +1700,6 @@ async def process_credit_pack_price_agreement_request(request: db_code.CreditPac
             response.sha3_256_hash_of_price_agreement_request_response_fields,
             LOCAL_PASTEL_ID_PASSPHRASE
         )
-
         # Validate the response
         validation_errors = await validate_credit_pack_ticket_message_data_func(response)
         if validation_errors:
