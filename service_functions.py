@@ -3676,16 +3676,21 @@ def get_sha256_hash_of_input_data_func(input_data_or_string):
 async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance: SQLModel) -> str:
     response_fields = {}
     last_hash_field_name = None
-    last_signature_field_name = None
-    # Find the last hash field and the last signature field
+    last_signature_field_names = []
+    # Find the last hash field and all signature fields
     for field_name in model_instance.__fields__.keys():
         if field_name.startswith("sha3_256_hash_of"):
             last_hash_field_name = field_name
         elif "_signature_on_" in field_name:
-            last_signature_field_name = field_name
-    # Iterate over the model fields and exclude the last hash, last signature, 'id', and fields containing '_sa_instance_state'
+            last_signature_field_names.append(field_name)
+    # Determine which fields to exclude based on the model type
+    if isinstance(model_instance, db_code.CreditPackPurchasePriceAgreementRequestResponse):
+        fields_to_exclude = [last_hash_field_name, 'id'] + last_signature_field_names
+    else:
+        fields_to_exclude = [last_hash_field_name, last_signature_field_names[-1], 'id']
+    # Iterate over the model fields and exclude the specified fields and those containing '_sa_instance_state'
     for field_name, field_value in model_instance.__dict__.items():
-        if field_name in [last_hash_field_name, last_signature_field_name, 'id'] or '_sa_instance_state' in field_name:
+        if field_name in fields_to_exclude or '_sa_instance_state' in field_name:
             continue
         if field_value is not None:
             if isinstance(field_value, (datetime, date)):
