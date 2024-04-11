@@ -1690,7 +1690,13 @@ async def process_credit_pack_price_agreement_request(request: db_code.CreditPac
             proposed_price_agreement_response_message_version_string="1.0",
             responding_supernode_pastelid=MY_PASTELID,
             sha3_256_hash_of_price_agreement_request_response_fields="",
+            responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json="",
             responding_supernode_signature_on_price_agreement_request_response_hash=""
+        )
+        response.responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json = await sign_message_with_pastelid_func(
+            MY_PASTELID,
+            request.credit_pack_purchase_request_response_fields_json,
+            LOCAL_PASTEL_ID_PASSPHRASE
         )
         # Generate the hash and signature fields
         response.sha3_256_hash_of_price_agreement_request_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(response)
@@ -1699,11 +1705,7 @@ async def process_credit_pack_price_agreement_request(request: db_code.CreditPac
             response.sha3_256_hash_of_price_agreement_request_response_fields,
             LOCAL_PASTEL_ID_PASSPHRASE
         )
-        response.responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json = await sign_message_with_pastelid_func(
-            MY_PASTELID,
-            request.credit_pack_purchase_request_response_fields_json,
-            LOCAL_PASTEL_ID_PASSPHRASE
-        )
+
         # Validate the response
         validation_errors = await validate_credit_pack_ticket_message_data_func(response)
         if validation_errors:
@@ -3759,10 +3761,12 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
             if hasattr(model_instance, first_pastelid):
                 pastelid = getattr(model_instance, first_pastelid)
                 for signature_field_name in signature_field_names:
-                    if signature_field_name.endswith("_hash"):
-                        message_to_verify = getattr(model_instance, hash_field_name)
+                    if signature_field_name == "responding_supernode_signature_on_price_agreement_request_response_hash":
+                        message_to_verify = getattr(model_instance, "sha3_256_hash_of_price_agreement_request_response_fields")
+                    elif signature_field_name == "responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json":
+                        message_to_verify = getattr(model_instance, "credit_pack_purchase_request_response_fields_json")
                     else:
-                        message_to_verify = getattr(model_instance, signature_field_name.replace("_signature_on_", ""))
+                        continue
                     signature = getattr(model_instance, signature_field_name)
                     verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
                     if verification_result != 'OK':
