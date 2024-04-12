@@ -144,14 +144,16 @@ class BlockchainUTXOStorage:
     
     async def select_txins(self, value):
         unspent = await self.get_unspent_transactions()
-        heap = [(-tx['amount'], tx) for tx in unspent]
+        def compare_txins(tx):
+            return -tx['amount'], tx['confirmations']
+        heap = [(compare_txins(tx), tx) for tx in unspent]
         heapq.heapify(heap)
         selected_txins = []
         total_amount = 0
         while heap and total_amount < value:
-            neg_amount, tx = heapq.heappop(heap)
+            _, tx = heapq.heappop(heap)
             selected_txins.append(tx)
-            total_amount -= neg_amount
+            total_amount += tx['amount']
         if total_amount < value:
             return None
         else:

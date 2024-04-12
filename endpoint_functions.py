@@ -467,7 +467,7 @@ async def credit_purchase_preliminary_price_quote_response_endpoint(
         result = await service_functions.process_credit_purchase_preliminary_price_quote_response(preliminary_price_quote_response)
         if isinstance(result, db.CreditPackPurchaseRequestResponse):
             result_dict = result.model_dump()
-            logger.info(f"Processed credit purchase preliminary price quote response: {result_dict}")
+            service_functions.log_action_with_payload("Processed", "credit purchase preliminary price quote response", result_dict)
             return result
         elif isinstance(result, db.CreditPackPurchaseRequestResponseTermination):
             result_dict = result.model_dump()
@@ -499,7 +499,7 @@ async def credit_pack_price_agreement_request_endpoint(
         response = await service_functions.process_credit_pack_price_agreement_request(credit_pack_price_agreement_request)
         if isinstance(response, db.CreditPackPurchasePriceAgreementRequestResponse):
             response_dict = response.model_dump()
-            logger.info(f"Processed credit pack price agreement request: {response_dict}")
+            service_functions.log_action_with_payload("Processed", "credit pack price agreement request", response_dict)
             return response
         else:
             raise HTTPException(status_code=400, detail=response)
@@ -526,7 +526,7 @@ async def check_status_of_credit_purchase_request_endpoint(
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         status = await service_functions.get_credit_purchase_request_status(credit_pack_request_status_check)
         status_dict = status.model_dump()
-        logger.info(f"Checked status of credit purchase request: {status_dict}")
+        service_functions.log_action_with_payload("Checked status of", "credit purchase request", status_dict)
         return status
     except Exception as e:
         logger.error(f"Error checking status of credit purchase request: {str(e)}")
@@ -549,7 +549,7 @@ async def confirm_credit_purchase_request_endpoint(
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         response = await service_functions.process_credit_purchase_request_confirmation(confirmation)
         response_dict = response.model_dump()
-        logger.info(f"Processed credit purchase request confirmation: {response_dict}")
+        service_functions.log_action_with_payload("Processed", "credit purchase request confirmation", response_dict)
         return response
     except Exception as e:
         logger.error(f"Error processing credit purchase request confirmation: {str(e)}")
@@ -571,7 +571,7 @@ async def credit_pack_purchase_request_final_response_announcement_endpoint(
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         await service_functions.process_credit_pack_purchase_request_final_response_announcement(response)
-        logger.info("Processed credit pack purchase request final response announcement")
+        service_functions.log_action_with_payload("Processed", "credit pack purchase request final response announcement", response)
         return {"message": "Announcement processed successfully"}
     except Exception as e:
         logger.error(f"Error processing credit pack purchase request final response announcement: {str(e)}")
@@ -593,7 +593,7 @@ async def credit_pack_purchase_completion_announcement_endpoint(
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         await service_functions.process_credit_pack_purchase_completion_announcement(confirmation)
-        logger.info("Processed credit pack purchase completion announcement")
+        service_functions.log_action_with_payload("Processed", "credit pack purchase completion announcement", confirmation)
         return {"message": "Announcement processed successfully"}
     except Exception as e:
         logger.error(f"Error processing credit pack purchase completion announcement: {str(e)}")
@@ -615,7 +615,7 @@ async def credit_pack_storage_completion_announcement_endpoint(
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         await service_functions.process_credit_pack_storage_completion_announcement(response)
-        logger.info("Processed credit pack storage completion announcement")
+        service_functions.log_action_with_payload("Processed", "credit pack storage completion announcement", response)
         return {"message": "Announcement processed successfully"}
     except Exception as e:
         logger.error(f"Error processing credit pack storage completion announcement: {str(e)}")
@@ -638,7 +638,7 @@ async def credit_pack_storage_retry_request_endpoint(
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         response = await service_functions.process_credit_pack_storage_retry_request(request)
         response_dict = response.model_dump()
-        logger.info(f"Processed credit pack storage retry request: {response_dict}")
+        service_functions.log_action_with_payload("Processed", "credit pack storage retry request", response_dict)
         return response
     except Exception as e:
         logger.error(f"Error processing credit pack storage retry request: {str(e)}")
@@ -660,7 +660,7 @@ async def credit_pack_storage_retry_completion_announcement_endpoint(
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         await service_functions.process_credit_pack_storage_retry_completion_announcement(response)
-        logger.info("Processed credit pack storage retry completion announcement")
+        service_functions.log_action_with_payload("Processed", "credit pack storage retry completion announcement", json.dumps(response))
         return {"message": "Announcement processed successfully"}
     except Exception as e:
         logger.error(f"Error processing credit pack storage retry completion announcement: {str(e)}")

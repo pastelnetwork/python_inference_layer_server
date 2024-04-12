@@ -178,6 +178,39 @@ def parse_timestamp(timestamp_str):
         # Fall back to parsing without fractional seconds
         return pd.to_datetime(timestamp_str, format='%Y-%m-%dT%H:%M:%S')
 
+def parse_and_format(value):
+    try:
+        if isinstance(value, str): # Unescape the JSON string if it's a string
+            unescaped_value = json.loads(json.dumps(value))
+            parsed_value = json.loads(unescaped_value)
+        else:
+            parsed_value = value
+        return json.dumps(parsed_value, indent=4)
+    except (json.JSONDecodeError, TypeError):
+        return value
+
+def pretty_json_func(data):
+    if isinstance(data, dict):
+        formatted_data = {}
+        for key, value in data.items():
+            if key.endswith("_json"):
+                if isinstance(value, dict):
+                    formatted_data[key] = parse_and_format(value)
+                else:
+                    formatted_data[key] = parse_and_format(value)
+            elif isinstance(value, dict):
+                formatted_data[key] = pretty_json_func(value)
+            else:
+                formatted_data[key] = value
+        return json.dumps(formatted_data, indent=4)
+    elif isinstance(data, str):
+        return parse_and_format(data)
+    else:
+        return data
+    
+def log_action_with_payload(action_string, payload_name, json_payload):
+    logger.info(f"Now {action_string} {payload_name} with payload:\n{pretty_json_func(json_payload)}")
+
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
         lines = f.readlines()
@@ -879,7 +912,7 @@ async def monitor_new_messages():
                             existing_message = result.one_or_none()
                             if existing_message:
                                 continue
-                            logger.info(f"New message received: {message['message_body']}")
+                            log_action_with_payload("Received new", "message", result)
                             last_processed_timestamp = message['timestamp']
                             sending_sn_pastelid = message['sending_sn_pastelid']
                             receiving_sn_pastelid = message['receiving_sn_pastelid']
@@ -1269,7 +1302,6 @@ async def save_credit_pack_purchase_completion_announcement(confirmation: db_cod
         async with db_code.Session() as db:
             db.add(confirmation)
             await db.commit()
-        logger.info(f"Storing credit pack purchase completion announcement: {confirmation.json()}")
     except Exception as e:
         logger.error(f"Error storing credit pack purchase completion announcement: {str(e)}")
         raise
@@ -1368,6 +1400,7 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
         max_block_height = request_response_pastel_block_height + MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET
         max_retries = 30
         initial_retry_delay_in_seconds = 30
+        total_cost_in_psl = round(total_cost_in_psl,5)
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(
             burn_address,
             credit_usage_tracking_psl_address, 
@@ -1382,17 +1415,10 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
         logger.error(f"Error checking burn transaction: {str(e)}")
         raise
 
-async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse) -> str:
+async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json_formatted: str) -> str:
     try:
         storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, BASE_TRANSACTION_AMOUNT, FEE_PER_KB)
-        credit_pack_purchase_request_response_json = credit_pack_purchase_request_response.model_dump()
-        signatures_json = json.dumps({
-            "responding_supernode_signature_on_credit_pack_purchase_request_response_hash": credit_pack_purchase_request_response.responding_supernode_signature_on_credit_pack_purchase_request_response_hash,
-            "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash": credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash,
-            "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json": credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json
-        })
-        combined_json = json.dumps({"ticket_data": credit_pack_purchase_request_response_json, "signature_pack": signatures_json})
-        credit_pack_ticket_txid = await storage.store_data(combined_json)
+        credit_pack_ticket_txid = await storage.store_data(credit_pack_purchase_request_response_json_formatted)
         return credit_pack_ticket_txid
     except Exception as e:
         logger.error(f"Error storing credit pack ticket: {str(e)}")
@@ -1431,7 +1457,7 @@ async def process_credit_purchase_initial_request(credit_pack_purchase_request: 
             return rejection_message
         # Determine the preliminary price quote
         preliminary_quoted_price_per_credit_in_psl = await calculate_preliminary_psl_price_per_credit()
-        preliminary_total_cost_of_credit_pack_in_psl = preliminary_quoted_price_per_credit_in_psl * credit_pack_purchase_request.requested_initial_credits_in_credit_pack
+        preliminary_total_cost_of_credit_pack_in_psl = round(preliminary_quoted_price_per_credit_in_psl * credit_pack_purchase_request.requested_initial_credits_in_credit_pack, 5)
         # Create the response without the hash and signature fields
         credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestPreliminaryPriceQuote(
             sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_purchase_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
@@ -1853,6 +1879,20 @@ async def get_block_height_for_credit_pack_purchase_request_confirmation(sha3_25
     except Exception as e:
         logger.error(f"Error retrieving block height for CreditPackPurchaseRequestConfirmation: {str(e)}")
         raise
+    
+async def get_block_height_from_block_hash(pastel_block_hash: str):
+    global rpc_connection
+    if not pastel_block_hash:
+        raise ValueError("Invalid block hash provided.")
+    try:
+        block_details = await rpc_connection.getblock(pastel_block_hash)
+        block_height = block_details.get('height')
+        if block_height is not None:
+            return block_height
+        else:
+            raise ValueError("Block height could not be retrieved.")
+    except Exception as e:
+        raise Exception(f"Error retrieving block height: {str(e)}")
 
 async def get_closest_agreeing_supernode_pastelid(end_user_pastelid: str, agreeing_supernode_pastelids: List[str]) -> str:
     try:
@@ -1944,11 +1984,13 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
         if matching_transaction_found or exceeding_transaction_found:
             # Store the credit pack ticket on the blockchain
             credit_pack_purchase_request_response_json = credit_pack_purchase_request_response.model_dump()
-            credit_pack_purchase_request_response_json_formatted = json.dumps(json.loads(credit_pack_purchase_request_response_json), indent=2)
+            credit_pack_purchase_request_response_json_formatted = json.dumps(credit_pack_purchase_request_response_json, indent=2)
             credit_pack_ticket_bytes_before_compression = sys.getsizeof(credit_pack_purchase_request_response_json_formatted)
-            compressed_credit_pack_ticket, _ = compress_data_with_zstd_func(credit_pack_purchase_request_response_json_formatted)
+            compressed_credit_pack_ticket, _ = await compress_data_with_zstd_func(credit_pack_purchase_request_response_json_formatted)
             credit_pack_ticket_bytes_after_compression = sys.getsizeof(compressed_credit_pack_ticket)
-            logger.info(f"Required burn transaction confirmed with {num_confirmations} confirmations; now attempting to write the credit pack ticket to the blockchain (a total of {credit_pack_ticket_bytes_before_compression} bytes before compression and {credit_pack_ticket_bytes_after_compression} bytes after compression)...")
+            compression_ratio = credit_pack_ticket_bytes_before_compression / credit_pack_ticket_bytes_after_compression
+            logger.info(f"Achieved a compression ratio of {compression_ratio:.2f} on credit pack ticket data!")
+            logger.info(f"Required burn transaction confirmed with {num_confirmations} confirmations; now attempting to write the credit pack ticket to the blockchain (a total of {credit_pack_ticket_bytes_before_compression:,} bytes before compression and {credit_pack_ticket_bytes_after_compression:,} bytes after compression)...")
             logger.info(f"Writing the credit pack ticket to the blockchain:\n {credit_pack_purchase_request_response_json_formatted}")
             pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json_formatted)
             # Create the confirmation response without the hash and signature fields
@@ -2005,6 +2047,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
         # Validate the response
         confirmation_response_validation_errors = await validate_credit_pack_ticket_message_data_func(confirmation_response)
         if confirmation_response_validation_errors:
+            logger.error(f"Invalid credit pack purchase completion announcement: {', '.join(confirmation_response_validation_errors)}")
             raise ValueError(f"Invalid credit purchase request confirmation response: {', '.join(validation_errors)}")
         await save_credit_pack_purchase_request_confirmation_response(confirmation_response)
         return confirmation_response
@@ -2762,7 +2805,7 @@ async def process_inference_api_usage_request(inference_api_usage_request: db_co
         logger.error("Invalid inference API usage request received!")
         raise ValueError(f"Error! Received invalid inference API usage request: {inference_api_usage_request_dict}")
     else:
-        logger.info(f"Received inference API usage request: {inference_api_usage_request_dict}")
+        log_action_with_payload("Received", "inference API usage request", inference_api_usage_request_dict)
     # Save the inference API usage request
     saved_request = await save_inference_api_usage_request(inference_api_usage_request)
     credit_pack_identifier = inference_api_usage_request.credit_pack_identifier
@@ -2834,10 +2877,14 @@ async def check_burn_address_for_tracking_transaction(
                         # Retrieve the transaction details using gettransaction RPC method
                         tx_info = await rpc_connection.gettransaction(txid)
                         if tx_info:
-                            transaction_block_height = tx_info.get("blockheight", None)
                             num_confirmations = tx_info.get("confirmations", 0)
+                            transaction_block_hash = tx_info.get("blockhash", None)
+                            if transaction_block_hash:
+                                transaction_block_height = await get_block_height_from_block_hash(transaction_block_hash)
+                            else:
+                                transaction_block_height = 0
                             if num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION and transaction_block_height <= max_block_height:
-                                logger.info("Matching confirmed transaction found with {num_confirmations} confirmation blocks, great than or equal to the required confirmation blocks of {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION}!")
+                                logger.info(f"Matching confirmed transaction found with {num_confirmations} confirmation blocks, greater than or equal to the required confirmation blocks of {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION}!")
                                 return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
                             else:
                                 logger.info(f"Matching unconfirmed transaction found! Waiting for it to be mined in a block with at least {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION} confirmation blocks! (Currently it has only {num_confirmations} confirmation blocks)")
@@ -2846,9 +2893,13 @@ async def check_burn_address_for_tracking_transaction(
                         # Retrieve the transaction details using gettransaction RPC method
                         tx_info = await rpc_connection.gettransaction(txid)
                         if tx_info:
-                            transaction_block_height = tx_info.get("blockheight", None)
                             num_confirmations = tx_info.get("confirmations", 0)
-                            if num_confirmations >= 3 and transaction_block_height <= max_block_height:
+                            transaction_block_hash = tx_info.get("blockhash", None)
+                            if transaction_block_hash:
+                                transaction_block_height = await get_block_height_from_block_hash(transaction_block_hash)
+                            else:
+                                transaction_block_height = 0                                                            
+                            if num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION and transaction_block_height <= max_block_height:
                                 logger.info(f"Matching confirmed transaction was not found, but we did find a confirmed (with {num_confirmations} confirmation blocks) burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
                                 return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address
                             else:
