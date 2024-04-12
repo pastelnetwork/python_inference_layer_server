@@ -332,72 +332,65 @@ class BlockchainUTXOStorage:
         change_address = await self.rpc_connection.getnewaddress()
         txouts.append((change, self.op_dup + self.op_hash160 + self.pushdata(self.addr2bytes(change_address)) + self.op_equalverify + self.op_checksig))
         return change
+    
+    async def prepare_txins_and_change(self):
+        txins, change = await self.select_txins(0)
+        if txins is None or change is None:
+            logger.error("Insufficient funds to store the data")
+            return None, None
+        return txins, Decimal(change)
+
+    async def prepare_txouts_and_change(self, txins, change, combined_data, txouts):
+        if txins is None or change is None:
+            return None
+        fd = io.BytesIO(combined_data)
+        while True:
+            scriptPubKey = self.checkmultisig_scriptPubKey_dump(fd)
+            if scriptPubKey is None:
+                break
+            value = self.base_transaction_amount
+            txouts.append((value, scriptPubKey))
+            change -= value
+        return await self.add_output_transactions(change, txouts)
+
+    async def process_chunk(self, chunk, uncompressed_data_hash, compressed_data_hash):
+        txins, change = await self.prepare_txins_and_change()
+        if txins is None or change is None:
+            return None
+        txouts = []
+        combined_data = len(chunk).to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash + chunk
+        change = await self.prepare_txouts_and_change(txins, change, combined_data, txouts)
+        return await self.create_and_send_transaction(txins, txouts)
 
     async def store_data_chunks(self, chunks, uncompressed_data_hash, compressed_data_hash):
-        async def store_chunk(chunk):
-            (txins, change) = await self.select_txins(0)
-            if txins is None or change is None:
-                logger.error("Insufficient funds to store the data")
-                return None
-            change = Decimal(change)
-            txouts = []
-            combined_data = len(chunk).to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash + chunk
-            fd = io.BytesIO(combined_data)
-            while True:
-                scriptPubKey = self.checkmultisig_scriptPubKey_dump(fd)
-                if scriptPubKey is None:
-                    break
-                value = self.base_transaction_amount
-                txouts.append((value, scriptPubKey))
-                change -= value
-            change = await self.add_output_transactions(change, txouts)
-            result = await self.create_and_send_transaction(txins, txouts)
-            if result is None:
-                return None
-            blockchain_transaction_id, fee = result
-            return blockchain_transaction_id, fee
-        tasks = [store_chunk(chunk) for chunk in chunks]
+        tasks = [self.process_chunk(chunk, uncompressed_data_hash, compressed_data_hash) for chunk in chunks]
         results = await asyncio.gather(*tasks)
-        transaction_ids = [result[0] for result in results if result is not None]
-        total_fee = sum(result[1] for result in results if result is not None)
+        transaction_ids = [result[0] for result in results if result]
+        total_fee = sum(result[1] for result in results if result)
         if None in results:
             return None
         return transaction_ids, total_fee
 
     async def store_first_chunk(self, first_chunk, transaction_ids):
-        (txins, change) = await self.select_txins(0)
+        txins, change = await self.prepare_txins_and_change()
         if txins is None or change is None:
-            logger.error("Insufficient funds to store the data")
             return None
-        change = Decimal(change)
         txouts = []
         op_return_data = '|'.join(transaction_ids).encode()
         script_pubkey = self.op_return + self.pushdata(op_return_data) + self.pushdata(first_chunk)
         txouts.append((0, script_pubkey))
-        change = await self.add_output_transactions(change, txouts)
-        result = await self.create_and_send_transaction(txins, txouts)
-        if result is None:
-            return None
-        first_txid, fee = result
-        return first_txid, fee
+        change = await self.prepare_txouts_and_change(txins, change, b'', txouts)
+        return await self.create_and_send_tx(txins, txouts)
 
     async def store_single_chunk(self, chunk, uncompressed_data_hash, compressed_data_hash):
-        (txins, change) = await self.select_txins(0)
+        txins, change = await self.prepare_txins_and_change()
         if txins is None or change is None:
-            logger.error("Insufficient funds to store the data")
             return None
-        change = Decimal(change)
         txouts = []
         combined_data = len(chunk).to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash + chunk
-        script_pubkey = self.op_return + self.pushdata(combined_data)
-        txouts.append((0, script_pubkey))
-        change = await self.add_output_transactions(change, txouts)
-        result = await self.create_and_send_transaction(txins, txouts)
-        if result is None:
-            return None
-        first_txid, fee = result
-        return first_txid, fee
-    
+        change = await self.prepare_txouts_and_change(txins, change, combined_data, txouts)
+        return await self.create_and_send_tx(txins, txouts)
+
     async def store_data(self, input_data):
         compressed_data = self.compress_data(input_data)
         uncompressed_data_hash = self.get_raw_sha256_hash(input_data)
@@ -416,7 +409,7 @@ class BlockchainUTXOStorage:
                 return None
             total_fee += first_chunk_fee
             logger.info(f"Data stored successfully in the blockchain. First transaction ID: {first_txid}. Total fee: {total_fee} PSL")
-            return first_txid    
+            return first_txid
                 
     async def retrieve_data_chunk(self, txid):
         try: 
