@@ -12,7 +12,7 @@ import heapq
 from decimal import Decimal
 from binascii import hexlify
 import zstandard as zstd
-import httpx
+from httpx import AsyncClient, Limits, Timeout
 from logger_config import setup_logger
 logger = setup_logger()
 
@@ -43,6 +43,7 @@ def EncodeDecimal(o):
         return float(round(o, 8))
     raise TypeError(repr(o) + " is not JSON serializable")
     
+
 class AsyncAuthServiceProxy:
     max_concurrent_requests = 5000
     _semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
@@ -50,6 +51,7 @@ class AsyncAuthServiceProxy:
         self.service_url = service_url
         self.service_name = service_name
         self.url = urlparse.urlparse(service_url)        
+        self.client = AsyncClient(timeout=Timeout(request_timeout), limits=Limits(max_connections=200, max_keepalive_connections=10))
         self.id_count = 0
         user = self.url.username
         password = self.url.password
@@ -137,7 +139,6 @@ class BlockchainUTXOStorage:
         self.op_return = b'\x6a'
         self.rpc_connection_string = f'http://{self.rpc_user}:{self.rpc_password}@127.0.0.1:{self.rpc_port}'
         self.rpc_connection = AsyncAuthServiceProxy(self.rpc_connection_string)
-
 
     def get_sha256_hash(self, input_data):
         if isinstance(input_data, str):
