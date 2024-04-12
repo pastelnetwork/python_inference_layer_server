@@ -1967,7 +1967,7 @@ async def handle_credit_pack_ticket_end_to_end(
         return None
     signed_credit_pack_ticket = signed_credit_pack_ticket_or_rejection
     # Send the required PSL from the credit usage tracking address to the burn address
-    burn_transaction_txid = await send_to_address_func(burn_address, signed_credit_pack_ticket.proposed_total_cost_of_credit_pack_in_psl, "Burn transaction for credit pack ticket")
+    burn_transaction_txid = await send_to_address_func(burn_address, round(signed_credit_pack_ticket.proposed_total_cost_of_credit_pack_in_psl, 5), "Burn transaction for credit pack ticket")
     # Prepare the credit pack purchase request confirmation
     credit_pack_purchase_request_confirmation = CreditPackPurchaseRequestConfirmation(
         sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
@@ -2163,7 +2163,7 @@ async def main():
 
     if use_test_credit_pack_ticket_functionality:
         # Test credit pack ticket functionality
-        number_of_credits = 1000
+        number_of_credits = 100
         credit_usage_tracking_psl_address = LOCAL_CREDIT_TRACKING_PSL_ADDRESS
         credit_pack_purchase_request_confirmation_response = await handle_credit_pack_ticket_end_to_end(
             number_of_credits,

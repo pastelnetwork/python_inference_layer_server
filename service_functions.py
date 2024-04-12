@@ -1370,6 +1370,7 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
         initial_retry_delay_in_seconds = 180
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(
             burn_address,
+            credit_usage_tracking_psl_address, 
             total_cost_in_psl,
             txid,
             max_block_height,
