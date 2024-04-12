@@ -84,23 +84,23 @@ class AsyncAuthServiceProxy:
             for i in range(self.reconnect_amount):
                 try:
                     if i > 0:
-                        logger.info(f"Reconnect try #{i+1}")
+                        logger.warning(f"Reconnect try #{i+1}")
                         sleep_time = self.reconnect_timeout * (2 ** i)
                         logger.info(f"Waiting for {sleep_time} seconds before retrying.")
                         await asyncio.sleep(sleep_time)
-                    async with httpx.AsyncClient() as client:
-                        response = await client.post(self.service_url.replace("http://", "https://"), headers=headers, data=postdata)
+                    response = await self.client.post(
+                        self.service_url, headers=headers, data=postdata)
                     break
                 except Exception as e:
-                    logger.info(f"Error occurred in __call__: {e}")
+                    logger.error(f"Error occurred in __call__: {e}")
                     err_msg = f"Failed to connect to {self.url.hostname}:{self.url.port}"
                     rtm = self.reconnect_timeout
                     if rtm:
                         err_msg += f". Waiting {rtm} seconds."
-                    logger.error(err_msg)
+                    logger.exception(err_msg)
             else:
                 logger.error("Reconnect tries exceeded.")
-                raise Exception("Failed to connect to the server")
+                return
             response_json = response.json()
             if response_json['error'] is not None:
                 raise JSONRPCException(response_json['error'])
@@ -135,7 +135,7 @@ class BlockchainUTXOStorage:
         self.op_hash160 = b'\xa9'
         self.op_equalverify = b'\x88'
         self.op_return = b'\x6a'
-        self.rpc_connection_string = f'https://{self.rpc_user}:{self.rpc_password}@127.0.0.1:{self.rpc_port}'
+        self.rpc_connection_string = f'http://{self.rpc_user}:{self.rpc_password}@127.0.0.1:{self.rpc_port}'
         self.rpc_connection = AsyncAuthServiceProxy(self.rpc_connection_string)
 
 
