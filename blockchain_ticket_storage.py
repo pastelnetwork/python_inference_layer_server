@@ -253,85 +253,136 @@ class BlockchainUTXOStorage:
     def decompress_data(self, compressed_data):
         return zstd.decompress(compressed_data)
 
-    async def store_data(self, input_data):
-        try:
-            compressed_data = self.compress_data(input_data)
-            uncompressed_data_hash = self.get_raw_sha256_hash(input_data)
-            compressed_data_hash = self.get_raw_sha256_hash(compressed_data)
+async def store_data(self, input_data, chunk_size=50000):
+    try:
+        compressed_data = self.compress_data(input_data)
+        uncompressed_data_hash = self.get_raw_sha256_hash(input_data)
+        compressed_data_hash = self.get_raw_sha256_hash(compressed_data)
+        chunks = [compressed_data[i:i+chunk_size] for i in range(0, len(compressed_data), chunk_size)] # Split the compressed data into chunks
+        num_chunks = len(chunks)
+        logger.info(f"Storing the ticket data in chunks with maximum size of {chunk_size} bytes; totaly compressed size is {len(compressed_data)} bytes, resulting in {num_chunks} chunks")
+        transaction_ids, other_chunks_fee = await self.store_data_chunks(chunks[1:], uncompressed_data_hash, compressed_data_hash)
+        first_txid, first_chunk_fee = await self.store_first_chunk(chunks[0], transaction_ids)
+        combined_total_fee = first_chunk_fee + other_chunks_fee
+        logger.info(f"Total Pastel transaction fee for storing the data: {combined_total_fee} PSL")
+        logger.info('First Transaction ID:', first_txid)
+        total_tx_size_in_kb = sum(len(self.packtx(txins, txouts)) for txins, txouts in zip(self.select_txins(0), self.create_txouts(chunks, transaction_ids))) / 1000
+        logger.info(f"Total transaction size of compressed ticket data as stored in the blockchain: {total_tx_size_in_kb:,} KB")
+        total_hex_transaction_length = sum(len(hexlify(self.packtx(txins, txouts)).decode('utf-8')) for txins, txouts in zip(self.select_txins(0), self.create_txouts(chunks, transaction_ids)))
+        logger.info(f"Total length of hex transactions in characters: {total_hex_transaction_length}")
+        return first_txid
+    except JSONRPCException as e:
+        logger.error(f"Error occurred while storing data: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error occurred: {e}")
+        return None
+
+    async def store_data_chunks(self, chunks, uncompressed_data_hash, compressed_data_hash):
+        transaction_ids = []
+        total_fee = Decimal(0)
+        for chunk in chunks:
             (txins, change) = await self.select_txins(0)
             if txins is None or change is None:
                 logger.error("Insufficient funds to store the data")
                 return None
+            change = Decimal(change)
             txouts = []
-            if len(compressed_data) <= 80:
-                # Use OP_RETURN if the compressed data is within the size limit
-                script_pubkey = self.op_return + self.pushdata(compressed_data)
-                txouts.append((0, script_pubkey))
-            else:
-                # Use the original approach if the compressed data exceeds the size limit
-                combined_data = len(compressed_data).to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash + compressed_data
-                fd = io.BytesIO(combined_data)
-                while True:
-                    scriptPubKey = self.checkmultisig_scriptPubKey_dump(fd)
-                    if scriptPubKey is None:
-                        break
-                    value = Decimal(1 / self.coin)
-                    txouts.append((value, scriptPubKey))
-                    change -= value
-            out_value = Decimal(self.base_transaction_amount)
+            # Use the original approach for subsequent transactions
+            combined_data = len(chunk).to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash + chunk
+            fd = io.BytesIO(combined_data)
+            while True:
+                scriptPubKey = self.checkmultisig_scriptPubKey_dump(fd)
+                if scriptPubKey is None:
+                    break
+                value = Decimal(1) / self.coin  # Convert to Decimal
+                txouts.append((value, scriptPubKey))
+                change -= value
+            out_value = Decimal(self.base_transaction_amount)  # Convert to Decimal
             change -= out_value
             receiving_address = await self.rpc_connection.getnewaddress()
             txouts.append((out_value, self.op_dup + self.op_hash160 + self.pushdata(self.addr2bytes(receiving_address)) + self.op_equalverify + self.op_checksig))
             change_address = await self.rpc_connection.getnewaddress()
             txouts.append([change, self.op_dup + self.op_hash160 + self.pushdata(self.addr2bytes(change_address)) + self.op_equalverify + self.op_checksig])
             tx = self.packtx(txins, txouts)
-            signed_tx = await self.rpc_connection.signrawtransaction(hexlify(tx).decode('utf-8'))
-            fee = Decimal(len(signed_tx['hex']) / 1000) * self.fee_per_kb
+            hex_transaction = hexlify(tx).decode('utf-8')
+            signed_tx = await self.rpc_connection.signrawtransaction(hex_transaction)
+            fee = Decimal(len(signed_tx['hex']) / 1000) * self.fee_per_kb  # Convert to Decimal
             change -= fee
             txouts[-1][0] = change
             final_tx = self.packtx(txins, txouts)
             signed_tx = await self.rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
             assert signed_tx['complete']
             hex_signed_transaction = signed_tx['hex']
-            logger.info('Sending data transaction to address:', receiving_address)
-            logger.info('Size: %d  Fee: %2.8f' % (len(hex_signed_transaction) / 2, fee), file=sys.stderr)
             send_raw_transaction_result = await self.rpc_connection.sendrawtransaction(hex_signed_transaction)
             blockchain_transaction_id = send_raw_transaction_result
-            logger.info('Transaction ID:', blockchain_transaction_id)
-            return blockchain_transaction_id
-        except JSONRPCException as e:
-            logger.error(f"Error occurred while storing data: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error occurred: {e}")
-            return None
+            transaction_ids.append(blockchain_transaction_id)
+            total_fee += fee
+        return transaction_ids, total_fee
 
-    async def retrieve_data(self, blockchain_transaction_id):
+    async def store_first_chunk(self, first_chunk, transaction_ids):
+        (txins, change) = await self.select_txins(0)
+        if txins is None or change is None:
+            logger.error("Insufficient funds to store the data")
+            return None
+        change = Decimal(change)
+        txouts = []
+        op_return_data = '|'.join(transaction_ids).encode()
+        script_pubkey = self.op_return + self.pushdata(op_return_data) + self.pushdata(first_chunk)
+        txouts.append((0, script_pubkey))
+        out_value = Decimal(self.base_transaction_amount)  # Convert to Decimal
+        change -= out_value
+        receiving_address = await self.rpc_connection.getnewaddress()
+        txouts.append((out_value, self.op_dup + self.op_hash160 + self.pushdata(self.addr2bytes(receiving_address)) + self.op_equalverify + self.op_checksig))
+        change_address = await self.rpc_connection.getnewaddress()
+        txouts.append([change, self.op_dup + self.op_hash160 + self.pushdata(self.addr2bytes(change_address)) + self.op_equalverify + self.op_checksig])
+        tx = self.packtx(txins, txouts)
+        hex_transaction = hexlify(tx).decode('utf-8')
+        signed_tx = await self.rpc_connection.signrawtransaction(hex_transaction)
+        fee = Decimal(len(signed_tx['hex']) / 1000) * self.fee_per_kb  # Convert to Decimal
+        change -= fee
+        txouts[-1][0] = change
+        final_tx = self.packtx(txins, txouts)
+        signed_tx = await self.rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
+        assert signed_tx['complete']
+        hex_signed_transaction = signed_tx['hex']
+        send_raw_transaction_result = await self.rpc_connection.sendrawtransaction(hex_signed_transaction)
+        first_txid = send_raw_transaction_result
+        return first_txid, fee
+
+    async def retrieve_data(self, first_txid):
         try:
-            raw = await self.rpc_connection.getrawtransaction(blockchain_transaction_id, True)
-            outputs = raw['vout']
-            compressed_data = b''
-            # Check if the transaction uses OP_RETURN
-            has_op_return = any('scriptPubKey' in output and 'type' in output['scriptPubKey'] and output['scriptPubKey']['type'] == 'nulldata' for output in outputs)
-            if has_op_return:
-                # Retrieve data from OP_RETURN outputs
-                for output in outputs:
-                    if 'scriptPubKey' in output and 'type' in output['scriptPubKey'] and output['scriptPubKey']['type'] == 'nulldata':
-                        script_asm = output['scriptPubKey']['asm']
-                        _, data_hex = script_asm.split(' ', 1)
-                        compressed_data += bytes.fromhex(data_hex)
-            else:
-                # Retrieve data using the original approach
-                encoded_hex_data = ''
+            # Retrieve the first transaction
+            first_tx = await self.rpc_connection.getrawtransaction(first_txid, True)
+            outputs = first_tx['vout']
+            # Extract the subsequent transaction IDs from the OP_RETURN output
+            op_return_data = None
+            for output in outputs:
+                if 'scriptPubKey' in output and 'type' in output['scriptPubKey'] and output['scriptPubKey']['type'] == 'nulldata':
+                    script_hex = output['scriptPubKey']['hex']
+                    op_return_data = bytes.fromhex(script_hex[4:]).decode()
+                    break
+            if op_return_data is None:
+                raise ValueError("No OP_RETURN output found in the first transaction")
+            subsequent_txids = op_return_data.split('|')
+            # Retrieve the data from the first transaction
+            first_chunk_data = None
+            for output in outputs:
+                if 'scriptPubKey' in output and 'type' in output['scriptPubKey'] and output['scriptPubKey']['type'] == 'nulldata':
+                    script_hex = output['scriptPubKey']['hex']
+                    first_chunk_data = bytes.fromhex(script_hex[len(op_return_data)+6:])
+                    break
+            if first_chunk_data is None:
+                raise ValueError("No data found in the first transaction")
+            # Retrieve the data from the subsequent transactions
+            compressed_data = first_chunk_data
+            for txid in subsequent_txids:
+                tx = await self.rpc_connection.getrawtransaction(txid, True)
+                outputs = tx['vout']
                 for output in outputs[1:-2]:
-                    cur = 6
-                    encoded_hex_data += output['scriptPubKey']['hex'][cur:cur+130]
-                    cur += 132
-                    encoded_hex_data += output['scriptPubKey']['hex'][cur:cur+130]
-                    cur += 132
-                    encoded_hex_data += output['scriptPubKey']['hex'][cur:cur+130]
-                encoded_hex_data += outputs[-2]['scriptPubKey']['hex'][6:-4]
-                compressed_data = binascii.a2b_hex(encoded_hex_data)
+                    script_hex = output['scriptPubKey']['hex']
+                    compressed_data += bytes.fromhex(script_hex[6:])
+                compressed_data += bytes.fromhex(outputs[-2]['scriptPubKey']['hex'][6:-4])
             if len(compressed_data) < 34:
                 raise ValueError("Insufficient data retrieved from the blockchain")
             reconstructed_length_of_compressed_data = int.from_bytes(compressed_data[:2], 'big')
@@ -354,7 +405,7 @@ class BlockchainUTXOStorage:
         except Exception as e:
             logger.error(f"Unexpected error occurred: {e}")
             return None
-        
+    
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
         lines = f.readlines()

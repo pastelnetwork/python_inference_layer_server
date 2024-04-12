@@ -1414,7 +1414,7 @@ class PastelMessagingClient:
     async def calculate_price_difference_percentage(self, quoted_price: float, estimated_price: float) -> float:
         if estimated_price == 0:
             raise ValueError("Estimated price cannot be zero.")
-        difference_percentage = abs(quoted_price - estimated_price) / estimated_price * 100
+        difference_percentage = abs(quoted_price - estimated_price) / estimated_price
         return difference_percentage
 
     async def confirm_preliminary_price_quote(
