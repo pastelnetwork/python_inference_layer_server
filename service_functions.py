@@ -1366,8 +1366,8 @@ async def determine_agreement_with_proposed_price(proposed_psl_price_per_credit:
 async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: str, total_cost_in_psl: float, request_response_pastel_block_height: int) -> Tuple[bool, int]:
     try:
         max_block_height = request_response_pastel_block_height + MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET
-        max_retries = 20
-        initial_retry_delay_in_seconds = 180
+        max_retries = 30
+        initial_retry_delay_in_seconds = 30
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(
             burn_address,
             credit_usage_tracking_psl_address, 
@@ -2853,7 +2853,7 @@ async def check_burn_address_for_tracking_transaction(
                             logger.info("Matching confirmed transaction found!")
                             return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
                         else:
-                            logger.info("Matching unconfirmed transaction found!")
+                            logger.info("Matching unconfirmed transaction found! Waiting for it to be mined in a block with at least {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION} confirmation blocks!")
                             return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
                     elif total_amount_to_burn_address >= expected_amount:
                         transaction_block_height = decoded_tx_data.get("blockheight", None)
@@ -2869,6 +2869,7 @@ async def check_burn_address_for_tracking_transaction(
                 else:
                     logger.warning(f"Transaction {txid} does not send funds to the specified burn address")
             # If the transaction is not found or does not match the criteria, wait before retrying
+            logger.info(f"WAITING {retry_delay} seconds before checking transaction {txid} status again...")
             await asyncio.sleep(retry_delay)
             try_count += 1
             retry_delay *= 1.15  # Optional: increase delay between retries

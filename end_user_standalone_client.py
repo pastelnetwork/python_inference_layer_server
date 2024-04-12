@@ -1513,7 +1513,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_purchase_request_confirmation.model_dump()
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*20)) as client: # Need to be patient with the timeout here since it requires the transaction to be mined/confirmed
             response = await client.post(
                 f"{supernode_url}/confirm_credit_purchase_request",
                 json={
