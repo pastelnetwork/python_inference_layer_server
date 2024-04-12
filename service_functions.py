@@ -1422,16 +1422,43 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
         logger.info("Now attempting to write the ticket data to the blockchain...")
         storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, BASE_TRANSACTION_AMOUNT, FEE_PER_KB)
         credit_pack_ticket_txid = await storage.store_data(credit_pack_purchase_request_response_json)
-        logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data... now verifying that we can reconstruct the original file written exactly...")
-        reconstructed_file_data = await storage.retrieve_data(credit_pack_ticket_txid)
-        decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
-        if decoded_reconstructed_file_data == credit_pack_purchase_request_response_json:
-            logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
+        logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data... now waiting for the transaction to be confirmed...")
+        max_retries = 20
+        retry_delay = 10
+        try_count = 0
+        num_confirmations = 0
+        while try_count < max_retries and num_confirmations == 0:
+            # Retrieve the transaction details using gettransaction RPC method
+            tx_info = await rpc_connection.gettransaction(credit_pack_ticket_txid)
+            if tx_info:
+                num_confirmations = tx_info.get("confirmations", 0)
+                if num_confirmations > 0:
+                    logger.info(f"Transaction {credit_pack_ticket_txid} has been confirmed with {num_confirmations} confirmations.")
+                    break
+                else:
+                    logger.info(f"Transaction {credit_pack_ticket_txid} is not yet confirmed. Waiting for {retry_delay} seconds before checking again.")
+                    await asyncio.sleep(retry_delay)
+                    try_count += 1
+                    retry_delay *= 1.15  # Optional: increase delay between retries
+            else:
+                logger.warning(f"Transaction {credit_pack_ticket_txid} not found. Waiting for {retry_delay} seconds before checking again.")
+                await asyncio.sleep(retry_delay)
+                try_count += 1
+                retry_delay *= 1.15  # Optional: increase delay between retries
+        if num_confirmations > 0:
+            logger.info("Now verifying that we can reconstruct the original file written exactly...")
+            reconstructed_file_data = await storage.retrieve_data(credit_pack_ticket_txid)
+            decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
+            if decoded_reconstructed_file_data == credit_pack_purchase_request_response_json:
+                logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
+            else:
+                logger.error("Failed to verify that the stored blockchain ticket data can be reconstructed exactly!")
+                storage_validation_error_string = "Failed to verify that the stored blockchain ticket data can be reconstructed exactly! Difference: " + str(set(decoded_reconstructed_file_data).symmetric_difference(set(credit_pack_purchase_request_response_json)))
+                logger.error(storage_validation_error_string)
+                raise ValueError(storage_validation_error_string)
         else:
-            logger.error("Failed to verify that the stored blockchain ticket data can be reconstructed exactly!")
-            storage_validation_error_string = "Failed to verify that the stored blockchain ticket data can be reconstructed exactly! Difference: " + str(set(decoded_reconstructed_file_data).symmetric_difference(set(credit_pack_purchase_request_response_json)))
-            logger.error(storage_validation_error_string)
-            raise ValueError(storage_validation_error_string)
+            logger.error(f"Transaction {credit_pack_ticket_txid} was not confirmed after {max_retries} attempts.")
+            raise TimeoutError(f"Transaction {credit_pack_ticket_txid} was not confirmed after {max_retries} attempts.")
         return credit_pack_ticket_txid
     except Exception as e:
         logger.error(f"Error storing credit pack ticket: {str(e)}")
