@@ -549,7 +549,7 @@ async def confirm_credit_purchase_request_endpoint(
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         response = await service_functions.process_credit_purchase_request_confirmation(confirmation)
         response_dict = response.model_dump()
-        service_functions.log_action_with_payload("Processed", "credit purchase request confirmation", response_dict)
+        service_functions.log_action_with_payload("Processed", "credit purchase request confirmation", response)
         return response
     except Exception as e:
         logger.error(f"Error processing credit purchase request confirmation: {str(e)}")

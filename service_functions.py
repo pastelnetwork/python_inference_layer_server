@@ -190,6 +190,8 @@ def parse_and_format(value):
         return value
 
 def pretty_json_func(data):
+    if isinstance(data, SQLModel):
+        data = data.model_dump()
     if isinstance(data, dict):
         formatted_data = {}
         for key, value in data.items():
@@ -1415,10 +1417,21 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
         logger.error(f"Error checking burn transaction: {str(e)}")
         raise
 
-async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json_formatted: str) -> str:
+async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json: str) -> str:
     try:
+        logger.info("Now attempting to write the ticket data to the blockchain...")
         storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, BASE_TRANSACTION_AMOUNT, FEE_PER_KB)
-        credit_pack_ticket_txid = await storage.store_data(credit_pack_purchase_request_response_json_formatted)
+        credit_pack_ticket_txid = await storage.store_data(credit_pack_purchase_request_response_json)
+        logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data... now verifying that we can reconstruct the original file written exactly...")
+        reconstructed_file_data = await storage.retrieve_data(credit_pack_ticket_txid)
+        decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
+        if decoded_reconstructed_file_data == credit_pack_purchase_request_response_json:
+            logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
+        else:
+            logger.error("Failed to verify that the stored blockchain ticket data can be reconstructed exactly!")
+            storage_validation_error_string = "Failed to verify that the stored blockchain ticket data can be reconstructed exactly! Difference: " + str(set(decoded_reconstructed_file_data).symmetric_difference(set(credit_pack_purchase_request_response_json)))
+            logger.error(storage_validation_error_string)
+            raise ValueError(storage_validation_error_string)
         return credit_pack_ticket_txid
     except Exception as e:
         logger.error(f"Error storing credit pack ticket: {str(e)}")
@@ -1428,13 +1441,7 @@ async def retrieve_credit_pack_ticket_from_blockchain(credit_pack_ticket_txid: s
     try:
         storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, BASE_TRANSACTION_AMOUNT, FEE_PER_KB)
         retrieved_data = await storage.retrieve_data(credit_pack_ticket_txid)
-        combined_json = json.loads(retrieved_data.decode('utf-8'))
-        ticket_data_json = combined_json["ticket_data"]
-        signature_pack_json = combined_json["signature_pack"]
-        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(ticket_data_json)
-        credit_pack_purchase_request_response.responding_supernode_signature_on_credit_pack_purchase_request_response_hash = signature_pack_json["responding_supernode_signature_on_credit_pack_purchase_request_response_hash"]
-        credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash = signature_pack_json["list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_hash"]
-        credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json = signature_pack_json["list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json"]
+        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(retrieved_data)
         return credit_pack_purchase_request_response
     except Exception as e:
         logger.error(f"Error retrieving credit pack ticket: {str(e)}")
@@ -1983,16 +1990,15 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             current_block_height = await get_current_pastel_block_height_func()
         if matching_transaction_found or exceeding_transaction_found:
             # Store the credit pack ticket on the blockchain
-            credit_pack_purchase_request_response_json = credit_pack_purchase_request_response.model_dump()
-            credit_pack_purchase_request_response_json_formatted = json.dumps(credit_pack_purchase_request_response_json, indent=2)
-            credit_pack_ticket_bytes_before_compression = sys.getsizeof(credit_pack_purchase_request_response_json_formatted)
-            compressed_credit_pack_ticket, _ = await compress_data_with_zstd_func(credit_pack_purchase_request_response_json_formatted)
+            credit_pack_purchase_request_response_json = json.dumps(credit_pack_purchase_request_response.model_dump())
+            credit_pack_ticket_bytes_before_compression = sys.getsizeof(credit_pack_purchase_request_response_json)
+            compressed_credit_pack_ticket, _ = await compress_data_with_zstd_func(credit_pack_purchase_request_response_json)
             credit_pack_ticket_bytes_after_compression = sys.getsizeof(compressed_credit_pack_ticket)
             compression_ratio = credit_pack_ticket_bytes_before_compression / credit_pack_ticket_bytes_after_compression
             logger.info(f"Achieved a compression ratio of {compression_ratio:.2f} on credit pack ticket data!")
             logger.info(f"Required burn transaction confirmed with {num_confirmations} confirmations; now attempting to write the credit pack ticket to the blockchain (a total of {credit_pack_ticket_bytes_before_compression:,} bytes before compression and {credit_pack_ticket_bytes_after_compression:,} bytes after compression)...")
-            logger.info(f"Writing the credit pack ticket to the blockchain:\n {credit_pack_purchase_request_response_json_formatted}")
-            pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json_formatted)
+            log_action_with_payload("Writing", "the credit pack ticket to the blockchain", credit_pack_purchase_request_response_json)
+            pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json)
             # Create the confirmation response without the hash and signature fields
             confirmation_response = db_code.CreditPackPurchaseRequestConfirmationResponse(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields,
