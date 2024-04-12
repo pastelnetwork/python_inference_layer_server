@@ -1237,7 +1237,7 @@ async def save_credit_pack_purchase_price_agreement_request_response(credit_pack
         logger.error(f"Error saving credit pack purchase price agreement request response: {str(e)}")
         raise    
     
-async def save_credit_pack_purchase_request_status_check(credit_pack_purchase_request_status_check: db_code.CreditPackPurchaseRequestStatusCheck) -> None:
+async def save_credit_pack_purchase_request_status_check(credit_pack_purchase_request_status_check: db_code.CreditPackPurchaseRequestStatus) -> None:
     try:
         async with db_code.Session() as db_session:
             db_session.add(credit_pack_purchase_request_status_check)
