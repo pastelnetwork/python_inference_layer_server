@@ -1921,6 +1921,8 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
         exceeding_transaction_found = False
         num_confirmations = 0
         current_block_height = await get_current_pastel_block_height_func()
+        initial_transaction_check_sleep_time_in_seconds = 30 
+        current_transaction_check_sleep_time_in_seconds = initial_transaction_check_sleep_time_in_seconds
         while current_block_height <= credit_pack_purchase_request_response.request_response_pastel_block_height + MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET:
             matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_transaction(
                 confirmation.txid_of_credit_purchase_burn_transaction,
@@ -1932,9 +1934,12 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 if num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION:
                     break
                 else:
-                    await asyncio.sleep(30)  # Wait for 30 seconds before checking again
+                    logger.info(f"Waiting for {current_transaction_check_sleep_time_in_seconds} seconds to check again if burn transaction is confirmed...")
+                    await asyncio.sleep(current_transaction_check_sleep_time_in_seconds) 
             else:
-                await asyncio.sleep(30)  # Wait for 30 seconds before checking again
+                logger.info(f"Waiting for {current_transaction_check_sleep_time_in_seconds} seconds to check again if burn transaction is confirmed...")
+                await asyncio.sleep(current_transaction_check_sleep_time_in_seconds)
+            current_transaction_check_sleep_time_in_seconds = round(current_transaction_check_sleep_time_in_seconds*1.05, 2)
             current_block_height = await get_current_pastel_block_height_func()
         if matching_transaction_found or exceeding_transaction_found:
             # Store the credit pack ticket on the blockchain
@@ -2809,28 +2814,7 @@ async def check_burn_address_for_tracking_transaction(
     max_retries: int = 10,
     initial_retry_delay: int = 25
 ) -> Tuple[bool, int, int]:
-    """
-    Repeatedly checks the burn address for a transaction with the correct identifier, amount,
-    and originating address before a specified block height using the get_and_decode_raw_transaction function
-    and also checks the mempool using the getrawmempool RPC method.
-
-    Args:
-        burn_address (str): The burn address to check for the transaction.
-        tracking_address (str): The address expected to have sent the transaction.
-        expected_amount (float): The minimum amount of PSL expected in the transaction.
-        txid (str): The transaction identifier to look for.
-        max_block_height (int): The maximum block height to include the confirmation transaction.
-        max_retries (int, optional): Maximum number of retries for checking the transaction. Defaults to 10.
-        initial_retry_delay (int, optional): Delay between retries in seconds. Defaults to 25. Increases by 15% each retry.
-
-    Returns:
-        Tuple[bool, int, int]: A tuple containing:
-            - bool: True if a matching transaction is found, False otherwise.
-            - bool: True if value exceeding transaction is found, False otherwise.
-            - int: The block height of the transaction, or None if not found.
-            - int: The number of confirmations for the transaction, or None if not found.
-            - float: The total amount that was sent to the burn address
-    """
+    global rpc_connection
     try_count = 0
     retry_delay = initial_retry_delay
     total_amount_to_burn_address = 0.0
@@ -2847,23 +2831,29 @@ async def check_burn_address_for_tracking_transaction(
                         if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address
                     )
                     if total_amount_to_burn_address == expected_amount:
-                        transaction_block_height = decoded_tx_data.get("blockheight", None)
-                        num_confirmations = decoded_tx_data.get("confirmations", 0)
-                        if num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION and transaction_block_height <= max_block_height:
-                            logger.info("Matching confirmed transaction found!")
-                            return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
-                        else:
-                            logger.info("Matching unconfirmed transaction found! Waiting for it to be mined in a block with at least {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION} confirmation blocks!")
-                            return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
+                        # Retrieve the transaction details using gettransaction RPC method
+                        tx_info = await rpc_connection.gettransaction(txid)
+                        if tx_info:
+                            transaction_block_height = tx_info.get("blockheight", None)
+                            num_confirmations = tx_info.get("confirmations", 0)
+                            if num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION and transaction_block_height <= max_block_height:
+                                logger.info("Matching confirmed transaction found with {num_confirmations} confirmation blocks, great than or equal to the required confirmation blocks of {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION}!")
+                                return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
+                            else:
+                                logger.info(f"Matching unconfirmed transaction found! Waiting for it to be mined in a block with at least {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION} confirmation blocks! (Currently it has only {num_confirmations} confirmation blocks)")
+                                return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
                     elif total_amount_to_burn_address >= expected_amount:
-                        transaction_block_height = decoded_tx_data.get("blockheight", None)
-                        num_confirmations = decoded_tx_data.get("confirmations", 0)
-                        if num_confirmations >= 3 and transaction_block_height <= max_block_height:
-                            logger.info(f"Matching confirmed transaction was not found, but we did find a confirmed (with {num_confirmations} confirmation blocks) burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
-                            return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address
-                        else:
-                            logger.info(f"Matching unconfirmed transaction was not found, but we did find an unconfirmed burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
-                            return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address                        
+                        # Retrieve the transaction details using gettransaction RPC method
+                        tx_info = await rpc_connection.gettransaction(txid)
+                        if tx_info:
+                            transaction_block_height = tx_info.get("blockheight", None)
+                            num_confirmations = tx_info.get("confirmations", 0)
+                            if num_confirmations >= 3 and transaction_block_height <= max_block_height:
+                                logger.info(f"Matching confirmed transaction was not found, but we did find a confirmed (with {num_confirmations} confirmation blocks) burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
+                                return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address
+                            else:
+                                logger.info(f"Matching unconfirmed transaction was not found, but we did find an unconfirmed burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
+                                return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address                        
                     else:
                         logger.warning(f"Transaction {txid} found, but the amount sent to the burn address ({total_amount_to_burn_address}) is less than the expected amount ({expected_amount})")
                 else:
