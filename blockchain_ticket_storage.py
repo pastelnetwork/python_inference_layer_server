@@ -15,6 +15,10 @@ from logger_config import setup_logger
 logger = setup_logger()
 
 unspent_transactions_cache = None
+max_storage_tasks_in_parallel = 20
+max_retrieval_tasks_in_parallel = 20
+storage_task_semaphore = asyncio.BoundedSemaphore(max_storage_tasks_in_parallel)
+retrieval_task_semaphore = asyncio.BoundedSemaphore(max_retrieval_tasks_in_parallel)  # Adjust the number as needed
 
 def unhexstr(str):
     return binascii.unhexlify(str.encode('utf8'))
@@ -259,40 +263,46 @@ async def create_and_send_transaction(txins, txouts):
             
 async def store_data_chunk(chunk):
     global rpc_connection
-    txins, change = await prepare_txins_and_change()
-    if txins is None or change is None:
-        logger.error("Insufficient funds to store the data")
+    # Use semaphore to limit the number of concurrent `store_data_chunk` executions
+    async with storage_task_semaphore:
+        txins, change = await prepare_txins_and_change()
+        if txins is None or change is None:
+            logger.error("Insufficient funds to store the data")
+            return None
+        op_return = b'\x6a'
+        txouts = [(0, op_return + pushdata(chunk))]
+        change = await add_output_transactions(change, txouts)
+        result = await create_and_send_transaction(txins, txouts)
+        if result:
+            transaction_id, fee = result
+            return transaction_id
         return None
-    op_return = b'\x6a'
-    txouts = [(0, op_return + pushdata(chunk))]
-    change = await add_output_transactions(change, txouts)
-    result = await create_and_send_transaction(txins, txouts)
-    if result:
-        transaction_id, fee = result
-        return transaction_id
-    return None
 
 async def store_data_chunks(chunks):
+    # Use `asyncio.create_task` to initiate tasks
     tasks = [asyncio.create_task(store_data_chunk(chunk)) for chunk in chunks]
     chunk_storage_txids = await asyncio.gather(*tasks)
     return chunk_storage_txids
 
 async def store_indexing_txid(txid_chunk, head_indexing_txid=None):
-    txins, change = await prepare_txins_and_change()
-    if txins is None or change is None:
-        logger.error("Insufficient funds to store the indexing TXID")
+    global storage_task_semaphore
+    # Use semaphore to limit the number of concurrent `store_indexing_txid` executions
+    async with storage_task_semaphore:
+        txins, change = await prepare_txins_and_change()
+        if txins is None or change is None:
+            logger.error("Insufficient funds to store the indexing TXID")
+            return None
+        op_return = b'\x6a'
+        txouts = [(0, op_return + pushdata(txid_chunk))]
+        if head_indexing_txid:
+            txouts.append((0, op_return + pushdata(head_indexing_txid.encode())))
+        change = await add_output_transactions(change, txouts)
+        result = await create_and_send_transaction(txins, txouts)
+        if result:
+            transaction_id, fee = result
+            return transaction_id
         return None
-    op_return = b'\x6a'
-    txouts = [(0, op_return + pushdata(txid_chunk))]
-    if head_indexing_txid:
-        txouts.append((0, op_return + pushdata(head_indexing_txid.encode())))
-    change = await add_output_transactions(change, txouts)
-    result = await create_and_send_transaction(txins, txouts)
-    if result:
-        transaction_id, fee = result
-        return transaction_id
-    return None
-    
+
 async def store_indexing_txids(indexing_txids):
     head_indexing_txid = None
     tasks = []
@@ -302,6 +312,7 @@ async def store_indexing_txids(indexing_txids):
         next_indexing_txid = indexing_txids[i+1] if i+1 < len(indexing_txids) else None
         metadata = struct.pack('>HH', len(indexing_txids), i)  # Pack total chunks and current index as metadata
         txid_chunk += metadata
+        # Each call to store_indexing_txid is managed as a separate task
         task = asyncio.create_task(store_indexing_txid(txid_chunk, next_indexing_txid))
         if not first_task:
             first_task = task
@@ -339,7 +350,7 @@ async def store_data_in_blockchain(input_data):
     return head_indexing_txid
 
 async def retrieve_data_from_blockchain(head_indexing_txid):
-    global rpc_connection
+    global rpc_connection, retrieval_task_semaphore
     indexing_txids = []
     current_txid = head_indexing_txid
     while True:
@@ -358,8 +369,12 @@ async def retrieve_data_from_blockchain(head_indexing_txid):
                     break
         if not found_next_txid:
             break
-    chunk_storage_txids = indexing_txids
-    tasks = [asyncio.create_task(retrieve_chunk(txid)) for txid in chunk_storage_txids]
+    # Create tasks for each chunk retrieval within a semaphore context
+    tasks = []
+    for txid in indexing_txids:
+        task = asyncio.create_task(retrieve_chunk(txid))
+        tasks.append(task)
+    # Gather results from all tasks
     data_chunks = await asyncio.gather(*tasks, return_exceptions=True)
     for chunk in data_chunks:
         if isinstance(chunk, Exception):
@@ -380,14 +395,15 @@ async def retrieve_data_from_blockchain(head_indexing_txid):
     return decompressed_data
 
 async def retrieve_chunk(txid):
-    global rpc_connection
-    raw_transaction = await rpc_connection.getrawtransaction(txid)
-    decoded_transaction = await rpc_connection.decoderawtransaction(raw_transaction)
-    for output in decoded_transaction['vout']:
-        if 'OP_RETURN' in output['scriptPubKey']['asm']:
-            op_return_data = unhexstr(output['scriptPubKey']['hex'][4:])
-            if len(op_return_data) > 40:  # Data chunk
-                return op_return_data[66:]  # Skip hashes and length
+    global rpc_connection, retrieval_task_semaphore
+    async with retrieval_task_semaphore:
+        raw_transaction = await rpc_connection.getrawtransaction(txid)
+        decoded_transaction = await rpc_connection.decoderawtransaction(raw_transaction)
+        for output in decoded_transaction['vout']:
+            if 'OP_RETURN' in output['scriptPubKey']['asm']:
+                op_return_data = unhexstr(output['scriptPubKey']['hex'][4:])
+                if len(op_return_data) > 40:  # Data chunk
+                    return op_return_data[66:]  # Skip hashes and length
 
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
