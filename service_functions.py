@@ -167,7 +167,7 @@ MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION = config.get("MINIM
 MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES = config.get("MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES", default=10, cast=int)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE", default=0.51, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE", default=0.85, cast=float)
-
+SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK = 1
 challenge_store = {}
 
 def parse_timestamp(timestamp_str):
@@ -2003,7 +2003,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 credit_pack_purchase_request_response.request_response_pastel_block_height
             )
             if matching_transaction_found or exceeding_transaction_found:
-                if num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION:
+                if (num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK:
                     break
                 else:
                     logger.info(f"Waiting for {current_transaction_check_sleep_time_in_seconds} seconds to check again if burn transaction is confirmed...")
@@ -2914,7 +2914,7 @@ async def check_burn_address_for_tracking_transaction(
                                 transaction_block_height = await get_block_height_from_block_hash(transaction_block_hash)
                             else:
                                 transaction_block_height = 0
-                            if num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION and transaction_block_height <= max_block_height:
+                            if ((num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK) and transaction_block_height <= max_block_height:
                                 logger.info(f"Matching confirmed transaction found with {num_confirmations} confirmation blocks, greater than or equal to the required confirmation blocks of {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION}!")
                                 return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
                             else:
@@ -2930,7 +2930,7 @@ async def check_burn_address_for_tracking_transaction(
                                 transaction_block_height = await get_block_height_from_block_hash(transaction_block_hash)
                             else:
                                 transaction_block_height = 0                                                            
-                            if num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION and transaction_block_height <= max_block_height:
+                            if ((num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK) and transaction_block_height <= max_block_height:
                                 logger.info(f"Matching confirmed transaction was not found, but we did find a confirmed (with {num_confirmations} confirmation blocks) burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
                                 return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address
                             else:

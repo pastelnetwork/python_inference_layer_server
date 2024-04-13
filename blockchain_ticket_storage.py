@@ -5,10 +5,11 @@ import os
 import asyncio
 import base64
 import json
+import random
+import time
 import urllib.parse as urlparse
-import heapq
 from decimal import Decimal
-from binascii import hexlify
+from binascii import unhexlify, hexlify
 import zstandard as zstd
 from httpx import AsyncClient, Limits, Timeout
 from logger_config import setup_logger
@@ -17,12 +18,34 @@ logger = setup_logger()
 unspent_transactions_cache = None
 max_storage_tasks_in_parallel = 20
 max_retrieval_tasks_in_parallel = 20
+max_concurrent_requests = 5
 storage_task_semaphore = asyncio.BoundedSemaphore(max_storage_tasks_in_parallel)
 retrieval_task_semaphore = asyncio.BoundedSemaphore(max_retrieval_tasks_in_parallel)  # Adjust the number as needed
+transaction_semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
+use_parallel = 0
+fee_per_kb = Decimal(0.0001)
 
 def unhexstr(str):
     return binascii.unhexlify(str.encode('utf8'))
 
+class OpCodes:
+    OP_0 = 0x00
+    OP_PUSHDATA1 = 0x4c
+    OP_PUSHDATA2 = 0x4d
+    OP_PUSHDATA4 = 0x4e
+    OP_1NEGATE = 0x4f
+    OP_RESERVED = 0x50
+    OP_1 = 0x51
+    OP_DUP = 0x76
+    OP_HASH160 = 0xa9
+    OP_EQUAL = 0x87
+    OP_EQUALVERIFY = 0x88
+    OP_CHECKSIG = 0xac
+    OP_CHECKMULTISIG = 0xae
+    OP_RETURN = 0x6a
+    
+opcodes = OpCodes()
+    
 class JSONRPCException(Exception):
     def __init__(self, rpc_error):
         parent_args = []
@@ -46,24 +69,32 @@ def EncodeDecimal(o):
     if isinstance(o, Decimal):
         return float(round(o, 8))
     raise TypeError(repr(o) + " is not JSON serializable")
-    
 
 class AsyncAuthServiceProxy:
-    max_concurrent_requests = 5000
+    max_concurrent_requests = 1000
     _semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
-    def __init__(self, service_url, service_name=None, reconnect_timeout=25, reconnect_amount=2, request_timeout=20):
+    def __init__(self, service_url, service_name=None, reconnect_timeout=25, max_retries=3, request_timeout=120, fallback_url=None):
         self.service_url = service_url
         self.service_name = service_name
         self.url = urlparse.urlparse(service_url)        
-        self.client = AsyncClient(timeout=Timeout(request_timeout), limits=Limits(max_connections=200, max_keepalive_connections=10))
+        self.client = AsyncClient(timeout=Timeout(request_timeout), limits=Limits(max_connections=max_concurrent_requests, max_keepalive_connections=100))
         self.id_count = 0
         user = self.url.username
         password = self.url.password
         authpair = f"{user}:{password}".encode('utf-8')
         self.auth_header = b'Basic ' + base64.b64encode(authpair)
         self.reconnect_timeout = reconnect_timeout
-        self.reconnect_amount = reconnect_amount
+        self.max_retries = max_retries
         self.request_timeout = request_timeout
+        self.circuit_breaker_open = False
+        self.circuit_breaker_timeout = 60
+        self.circuit_breaker_failure_threshold = 5
+        self.circuit_breaker_failure_count = 0
+        self.fallback_url = fallback_url
+        self.max_backoff_time = 120
+        self.health_check_endpoint = "/health"
+        self.health_check_interval = 60
+        self.use_health_check = 0
 
     def __getattr__(self, name):
         if name.startswith('__') and name.endswith('__'):
@@ -73,7 +104,15 @@ class AsyncAuthServiceProxy:
         return AsyncAuthServiceProxy(self.service_url, name)
 
     async def __call__(self, *args):
-        async with self._semaphore: # Acquire a semaphore
+        async with self._semaphore:  # Acquire a semaphore
+            if self.circuit_breaker_open:
+                if self.circuit_breaker_timeout > 0:
+                    logger.warning("Circuit breaker is open. Waiting for timeout...")
+                    await asyncio.sleep(self.circuit_breaker_timeout)
+                    self.circuit_breaker_timeout = 0
+                else:
+                    logger.info("Testing circuit breaker with a request...")
+                    self.circuit_breaker_failure_count = 0
             self.id_count += 1
             postdata = json.dumps({
                 'version': '1.1',
@@ -87,25 +126,37 @@ class AsyncAuthServiceProxy:
                 'Authorization': self.auth_header,
                 'Content-type': 'application/json'
             }
-            for i in range(self.reconnect_amount):
+            start_time = time.time()
+            for i in range(self.max_retries):
                 try:
                     if i > 0:
-                        logger.warning(f"Reconnect try #{i+1}")
-                        sleep_time = self.reconnect_timeout * (2 ** i)
-                        logger.info(f"Waiting for {sleep_time} seconds before retrying.")
+                        logger.warning(f"Retry attempt #{i+1}")
+                        sleep_time = min(self.reconnect_timeout * (2 ** i) + random.uniform(0, self.reconnect_timeout), self.max_backoff_time)
+                        logger.info(f"Waiting for {sleep_time:.2f} seconds before retrying.")
                         await asyncio.sleep(sleep_time)
+                    if self.use_health_check:
+                        await self.health_check()
                     response = await self.client.post(
                         self.service_url, headers=headers, data=postdata)
+                    self.circuit_breaker_failure_count = 0
+                    self.circuit_breaker_open = False
+                    elapsed_time = time.time() - start_time
+                    self.adapt_circuit_breaker_timeout(elapsed_time)
                     break
                 except Exception as e:
                     logger.error(f"Error occurred in __call__: {e}")
-                    err_msg = f"Failed to connect to {self.url.hostname}:{self.url.port}"
-                    rtm = self.reconnect_timeout
-                    if rtm:
-                        err_msg += f". Waiting {rtm} seconds."
-                    logger.exception(err_msg)
+                    logger.exception("Full stack trace:")
+                    self.circuit_breaker_failure_count += 1
+                    if self.circuit_breaker_failure_count >= self.circuit_breaker_failure_threshold:
+                        logger.warning("Circuit breaker threshold reached. Opening circuit.")
+                        self.circuit_breaker_open = True
+                        self.circuit_breaker_timeout = 60
+                        if self.fallback_url:
+                            logger.info("Switching to fallback URL.")
+                            self.service_url = self.fallback_url
+                            self.url = urlparse.urlparse(self.service_url)
             else:
-                logger.error("Reconnect tries exceeded.")
+                logger.error("Max retries exceeded.")
                 return
             response_json = response.json()
             if response_json['error'] is not None:
@@ -115,6 +166,22 @@ class AsyncAuthServiceProxy:
                     'code': -343, 'message': 'missing JSON-RPC result'})
             else:
                 return response_json['result']
+
+    async def health_check(self):
+        try:
+            health_check_url = self.service_url + self.health_check_endpoint
+            response = await self.client.get(health_check_url)
+            if response.status_code != 200:
+                raise Exception("Health check failed.")
+        except Exception as e:
+            logger.warning(f"Health check failed: {e}")
+            raise
+
+    def adapt_circuit_breaker_timeout(self, elapsed_time):
+        if elapsed_time > self.circuit_breaker_timeout:
+            self.circuit_breaker_timeout = min(self.circuit_breaker_timeout * 1.5, 300)
+        elif elapsed_time < self.circuit_breaker_timeout / 2:
+            self.circuit_breaker_timeout = max(self.circuit_breaker_timeout * 0.8, 60)
 
 class TxWrapper:
     def __init__(self, tx):
@@ -128,9 +195,9 @@ class TxWrapper:
 
 async def get_unspent_transactions():
     global unspent_transactions_cache
+    global rpc_connection
     if unspent_transactions_cache is not None:
         return unspent_transactions_cache
-    global rpc_connection
     unspent_transactions_cache = await rpc_connection.listunspent()
     return unspent_transactions_cache
 
@@ -138,34 +205,36 @@ async def select_txins(value):
     global rpc_connection
     unspent = await get_unspent_transactions()
     spendable_unspent = [tx for tx in unspent if tx['spendable']]
-    if value == 0:
-        total_amount = sum(tx['amount'] for tx in spendable_unspent)
-        return spendable_unspent, total_amount
+    selected_txins = []
+    total_amount = 0
+    for tx in spendable_unspent:
+        selected_txins.append(tx)
+        total_amount += tx['amount']
+        if total_amount >= value:
+            break
+    if total_amount < value:
+        raise Exception("Insufficient funds")
     else:
-        heap = [TxWrapper(tx) for tx in spendable_unspent]
-        heapq.heapify(heap)
-        selected_txins = []
-        total_amount = 0
-        while heap and total_amount < value:
-            tx_wrapper = heapq.heappop(heap)
-            selected_txins.append(tx_wrapper.tx)
-            total_amount += tx_wrapper.tx['amount']
-        if total_amount < value:
-            raise Exception("Insufficient funds")
-        else:
-            return selected_txins, total_amount        
-        
-async def prepare_txins_and_change():
+        return selected_txins, total_amount
+    
+async def prepare_txins_and_change(value):
     global rpc_connection
-    txins, change = await select_txins(0)
-    if txins is None or change is None:
+    txins, total_amount = await select_txins(value)
+    if txins is None or total_amount is None:
         logger.error("Insufficient funds to store the data")
         return None, None
+    change = Decimal(total_amount) - Decimal(value)
     return txins, Decimal(change)
 
 def pushdata(data):
-    assert len(data) < 76  # OP_PUSHDATA1
-    return bytes([len(data)]) + data
+    if len(data) < 76:
+        return bytes([len(data)]) + data
+    elif len(data) < 256:
+        return bytes([76]) + bytes([len(data)]) + data
+    elif len(data) < 65536:
+        return bytes([77]) + struct.pack('<H', len(data)) + data
+    else:
+        return bytes([78]) + struct.pack('<I', len(data)) + data
 
 def get_sha256_hash(input_data):
     if isinstance(input_data, str):
@@ -177,11 +246,11 @@ def get_raw_sha256_hash(input_data):
         input_data = input_data.encode('utf-8')
     return hashlib.sha3_256(input_data).digest()
         
-async def add_output_transactions(change, txouts):
-    global rpc_connection
-    change_address = await rpc_connection.getnewaddress()
-    txouts.append((change, pushdata(get_raw_sha256_hash(change_address.encode())) + b'\x88\xac')) 
-    return change
+def build_p2pkh_output_script(pubkey_hash):
+    script = bytes([opcodes.OP_DUP, opcodes.OP_HASH160, len(pubkey_hash)])
+    script += pubkey_hash
+    script += bytes([opcodes.OP_EQUALVERIFY, opcodes.OP_CHECKSIG])
+    return script
 
 def varint(n):
     if n < 0xfd:
@@ -190,23 +259,35 @@ def varint(n):
         return b'\xfd' + struct.pack('<H', n)
     else:
         assert False
-        
-def packtxin(prevout, scriptSig, seq=0xffffffff):
+
+async def add_output_transactions(change, txouts):
+    global rpc_connection
+    change_address = await rpc_connection.getnewaddress()
+    pubkey_hash = get_raw_sha256_hash(change_address.encode())
+    script_pubkey = build_p2pkh_output_script(pubkey_hash)
+    txouts.append((change, script_pubkey))
+    return change
+
+
+def packtxin(prevout, scriptSig, seq):
     return prevout[0][::-1] + struct.pack('<L', prevout[1]) + varint(len(scriptSig)) + scriptSig + struct.pack('<L', seq)
 
 def packtxout(value, scriptPubKey):
     coin = 100000
     return struct.pack('<Q', int(value * coin)) + varint(len(scriptPubKey)) + scriptPubKey
 
-def packtx(txins, txouts, locktime=0, version=1):
+def packtx(txins, txouts, locktime=0, version=4, expiryheight=0):
+    sequence = 0xffffffff
     r = struct.pack('<L', version)  # Transaction version (4 bytes)
+    r += struct.pack('<L', 0x5efaaeef)  # Pastel version group ID (4 bytes)
     r += varint(len(txins))
     for txin in txins:
-        r += packtxin((unhexstr(txin['txid']), txin['vout']), b'', 0xffffffff)  # Updated sequence number to 4 bytes
+        r += packtxin((unhexlify(txin['txid'])[::-1], txin['vout']), b'', sequence)        
     r += varint(len(txouts))
     for (value, scriptPubKey) in txouts:
         r += packtxout(value, scriptPubKey)
     r += struct.pack('<L', locktime)  # Lock time (4 bytes)
+    r += struct.pack('<L', expiryheight)  # Expiry height (4 bytes)
     return r
 
 async def send_transaction(signed_tx):
@@ -231,180 +312,164 @@ def decompress_data(compressed_data):
 
 def calculate_transaction_fee(signed_tx):
     # Calculate the actual virtual size of the transaction
-    fee_per_kb = Decimal(0.0001)
     tx_size = len(signed_tx['hex']) / 2  # Convert bytes to virtual size
     fee = Decimal(tx_size) * fee_per_kb / 1000  # Calculate fee based on virtual size
-    return Decimal(fee)
+    return fee
 
-async def create_and_send_transaction(txins, txouts):
-    global rpc_connection
-    tx = packtx(txins, txouts)
+async def create_transaction(txins, txouts, expiry_height):
+    tx = packtx(txins, txouts, locktime=0, version=4, expiryheight=expiry_height)
     hex_transaction = hexlify(tx).decode('utf-8')
+    return hex_transaction
+
+async def create_and_send_transaction(txins, txouts, expiry_height=0, use_parallel=True):
+    global rpc_connection
+    hex_transaction = await create_transaction(txins, txouts, expiry_height)
     signed_tx = await rpc_connection.signrawtransaction(hex_transaction)
     if not signed_tx['complete']:
         logger.error("Failed to sign all transaction inputs")
         return None
     fee = calculate_transaction_fee(signed_tx)
     txouts[-1] = (txouts[-1][0] - fee, txouts[-1][1])  # Subtract fee from the change output
-    final_tx = packtx(txins, txouts)
-    signed_tx = await rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
+    hex_transaction = await create_transaction(txins, txouts, expiry_height)
+    signed_tx = await rpc_connection.signrawtransaction(hex_transaction)
     assert signed_tx['complete']
     hex_signed_transaction = signed_tx['hex']
     try:
         await rpc_connection.lockunspent(False, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
-        send_raw_transaction_result, _ = await asyncio.gather(
-            send_transaction(hex_signed_transaction),
-            rpc_connection.lockunspent(True, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
-        )
+        if use_parallel:
+            async with transaction_semaphore:
+                send_raw_transaction_result, _ = await asyncio.gather(
+                    send_transaction(hex_signed_transaction),
+                    rpc_connection.lockunspent(True, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
+                )
+        else:
+            send_raw_transaction_result = await send_transaction(hex_signed_transaction)
+            await rpc_connection.lockunspent(True, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
         return send_raw_transaction_result, fee
     except Exception as e:
         logger.error(f"Error occurred while sending transaction: {e}")
         raise
-            
-async def store_data_chunk(chunk):
+
+def calculate_chunks(data, max_chunk_size):
+    num_chunks = (len(data) + max_chunk_size - 1) // max_chunk_size
+    chunk_size = (len(data) + num_chunks - 1) // num_chunks
+    chunks = [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
+    return chunks
+
+async def store_data_chunks(chunks, expiry_height):
+    chunk_storage_txids = []
+    for i, chunk in enumerate(chunks):
+        index = i.to_bytes(2, 'big')  # 2-byte index
+        chunk_with_index = index + chunk
+        txid = await store_data_chunk(chunk_with_index, expiry_height)
+        chunk_storage_txids.append(txid)
+    return chunk_storage_txids
+
+async def store_data_chunk(chunk, expiry_height):
     global rpc_connection
-    # Use semaphore to limit the number of concurrent `store_data_chunk` executions
     async with storage_task_semaphore:
-        txins, change = await prepare_txins_and_change()
+        fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
+        script = bytes([opcodes.OP_1, len(fake_pubkey)]) + fake_pubkey + bytes([opcodes.OP_1, opcodes.OP_CHECKMULTISIG])
+        txouts = [(0, script + pushdata(chunk))]
+        estimated_fee = len(chunk) * fee_per_kb
+        txins, change = await prepare_txins_and_change(Decimal(estimated_fee))
         if txins is None or change is None:
             logger.error("Insufficient funds to store the data")
             return None
-        op_return = b'\x6a'
-        txouts = [(0, op_return + pushdata(chunk))]
         change = await add_output_transactions(change, txouts)
-        result = await create_and_send_transaction(txins, txouts)
+        result = await create_and_send_transaction(txins, txouts, expiry_height, use_parallel)
         if result:
             transaction_id, fee = result
             return transaction_id
         return None
 
-async def store_data_chunks(chunks):
-    # Use `asyncio.create_task` to initiate tasks
-    tasks = [asyncio.create_task(store_data_chunk(chunk)) for chunk in chunks]
-    chunk_storage_txids = await asyncio.gather(*tasks)
-    return chunk_storage_txids
-
-async def store_indexing_txid(txid_chunk, head_indexing_txid=None):
-    global storage_task_semaphore
-    # Use semaphore to limit the number of concurrent `store_indexing_txid` executions
+async def store_chunk_txids(chunk_txids, expiry_height):
+    global rpc_connection
     async with storage_task_semaphore:
-        txins, change = await prepare_txins_and_change()
+        fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
+        script = bytes([opcodes.OP_1, len(fake_pubkey)]) + fake_pubkey + bytes([opcodes.OP_1, opcodes.OP_CHECKMULTISIG])
+        txids_data = b''.join(txid.encode() for txid in chunk_txids)
+        txouts = [(0, script + pushdata(txids_data))]
+        estimated_fee = len(txids_data) * fee_per_kb
+        txins, change = await prepare_txins_and_change(Decimal(estimated_fee))
         if txins is None or change is None:
-            logger.error("Insufficient funds to store the indexing TXID")
+            logger.error("Insufficient funds to store the chunk TXIDs")
             return None
-        op_return = b'\x6a'
-        txouts = [(0, op_return + pushdata(txid_chunk))]
-        if head_indexing_txid:
-            txouts.append((0, op_return + pushdata(head_indexing_txid.encode())))
         change = await add_output_transactions(change, txouts)
-        result = await create_and_send_transaction(txins, txouts)
+        result = await create_and_send_transaction(txins, txouts, expiry_height, use_parallel)
         if result:
             transaction_id, fee = result
             return transaction_id
         return None
-
-async def store_indexing_txids(indexing_txids):
-    head_indexing_txid = None
-    tasks = []
-    first_task = None
-    for i in range(len(indexing_txids)):
-        txid_chunk = indexing_txids[i].encode()
-        next_indexing_txid = indexing_txids[i+1] if i+1 < len(indexing_txids) else None
-        metadata = struct.pack('>HH', len(indexing_txids), i)  # Pack total chunks and current index as metadata
-        txid_chunk += metadata
-        # Each call to store_indexing_txid is managed as a separate task
-        task = asyncio.create_task(store_indexing_txid(txid_chunk, next_indexing_txid))
-        if not first_task:
-            first_task = task
-        else:
-            tasks.append(task)
-    await asyncio.gather(*tasks)
-    head_indexing_txid = await first_task
-    return head_indexing_txid
 
 async def store_data_in_blockchain(input_data):
     compressed_data = compress_data(input_data)
     uncompressed_data_hash = get_raw_sha256_hash(input_data)
     compressed_data_hash = get_raw_sha256_hash(compressed_data)
     uncompressed_data_length = len(input_data)
-    op_return_max_size = 80  # Max size of OP_RETURN data in bytes
-    chunk_size = op_return_max_size - 66  # Subtract space for hashes and length
-    chunks = [
-        uncompressed_data_length.to_bytes(2, 'big') +
-        uncompressed_data_hash +
-        compressed_data_hash +
-        compressed_data[i:i+chunk_size]
-        for i in range(0, len(compressed_data), chunk_size)
-    ]
-    # Create a task for storing data chunks
-    chunk_storage_task = asyncio.create_task(store_data_chunks(chunks))
-    chunk_storage_txids = await chunk_storage_task
-    if None in chunk_storage_txids:
+    current_height = await rpc_connection.getblockcount()
+    expiry_height = current_height + 100  # Set the expiry height 100 blocks ahead    
+    max_chunk_size = 8000  # Maximum possible is around 9000 bytes
+    header = uncompressed_data_length.to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash
+    data_with_header = header + compressed_data
+    chunks = calculate_chunks(data_with_header, max_chunk_size)
+    logger.info(f"Total size of compressed data: {len(compressed_data)} bytes; Data will be stored in {len(chunks)} chunks")
+    chunk_txids = await store_data_chunks(chunks, expiry_height)
+    logger.info(f"Data chunks stored successfully in the blockchain. Chunk TXIDs: {chunk_txids}")
+    if None in chunk_txids:
         return None
-    # Create a task for storing indexing TXIDs
-    indexing_task = asyncio.create_task(store_indexing_txids(chunk_storage_txids))
-    head_indexing_txid = await indexing_task
-    if head_indexing_txid is None:
+    final_txid = await store_chunk_txids(chunk_txids)
+    if final_txid is None:
         return None
-    logger.info(f"Data stored successfully in the blockchain. Head indexing TXID: {head_indexing_txid}")
-    return head_indexing_txid
+    logger.info(f"Data stored successfully in the blockchain. Final TXID containing all chunk txids: {final_txid}")
+    return final_txid
 
-async def retrieve_data_from_blockchain(head_indexing_txid):
-    global rpc_connection, retrieval_task_semaphore
-    indexing_txids = []
-    current_txid = head_indexing_txid
-    while True:
-        raw_transaction = await rpc_connection.getrawtransaction(current_txid)
-        decoded_transaction = await rpc_connection.decoderawtransaction(raw_transaction)
-        found_next_txid = False
-        for output in decoded_transaction['vout']:
-            if 'OP_RETURN' in output['scriptPubKey']['asm']:
-                op_return_data = unhexstr(output['scriptPubKey']['hex'][4:])
-                if len(op_return_data) <= 40:  # Indexing TXID chunk
-                    total_chunks, current_index = struct.unpack('>HH', op_return_data[-4:])  # Unpack metadata
-                    indexing_txids.append(op_return_data[:-4].decode())  # Append TXID without metadata
-                else:  # Next indexing TXID
-                    current_txid = op_return_data.decode()
-                    found_next_txid = True
-                    break
-        if not found_next_txid:
-            break
-    # Create tasks for each chunk retrieval within a semaphore context
-    tasks = []
-    for txid in indexing_txids:
-        task = asyncio.create_task(retrieve_chunk(txid))
-        tasks.append(task)
-    # Gather results from all tasks
-    data_chunks = await asyncio.gather(*tasks, return_exceptions=True)
-    for chunk in data_chunks:
-        if isinstance(chunk, Exception):
-            logger.error(f"Error occurred while retrieving chunk: {chunk}")
-            return None    
-    combined_data = b''.join(data_chunks)
-    uncompressed_data_hash = combined_data[2:34]
-    compressed_data_hash = combined_data[34:66]
-    compressed_data = combined_data[66:]
-    if get_raw_sha256_hash(compressed_data) != compressed_data_hash:
-        logger.error("Compressed data hash verification failed")
-        return None
-    decompressed_data = decompress_data(compressed_data)
-    if get_raw_sha256_hash(decompressed_data) != uncompressed_data_hash:
-        logger.error("Uncompressed data hash verification failed")
-        return None
-    logger.info(f"Data retrieved successfully from the blockchain. Length: {len(decompressed_data)} bytes")
-    return decompressed_data
+async def retrieve_data_from_blockchain(txid):
+    global rpc_connection
+    raw_transaction = await rpc_connection.getrawtransaction(txid)
+    decoded_transaction = await rpc_connection.decoderawtransaction(raw_transaction)
+    for output in decoded_transaction['vout']:
+        script = unhexstr(output['scriptPubKey']['hex'])
+        if script[0] == opcodes.OP_1 and script[-1] == opcodes.OP_CHECKMULTISIG:
+            data = script[35:]  # Skip the fake multisig script
+            if len(data) > 64:  # Check if the data is a chunk or chunk TXIDs
+                try: # Try to decode the data as chunk TXIDs
+                    chunk_txids = [data[i:i+64].decode() for i in range(0, len(data), 64)]
+                    data_chunks = []
+                    for txid in chunk_txids:
+                        chunk = await retrieve_chunk(txid)
+                        data_chunks.append(chunk)
+                    sorted_chunks = sorted(data_chunks, key=lambda x: int.from_bytes(x[:2], 'big'))
+                    combined_data = b''.join(chunk[2:] for chunk in sorted_chunks)
+                except Exception as e:  # If decoding as chunk TXIDs fails, treat the data as a single chunk  # noqa: F841
+                    combined_data = data
+            else: # If the data is smaller than a TXID, treat it as a single chunk
+                combined_data = data
+            uncompressed_data_hash = combined_data[2:34]
+            compressed_data_hash = combined_data[34:66]
+            compressed_data = combined_data[66:]
+            if get_raw_sha256_hash(compressed_data) != compressed_data_hash:
+                logger.error("Compressed data hash verification failed")
+                return None
+            decompressed_data = decompress_data(compressed_data)
+            if get_raw_sha256_hash(decompressed_data) != uncompressed_data_hash:
+                logger.error("Uncompressed data hash verification failed")
+                return None
+            logger.info(f"Data retrieved successfully from the blockchain. Length: {len(decompressed_data)} bytes")
+            return decompressed_data
+    return None
 
 async def retrieve_chunk(txid):
-    global rpc_connection, retrieval_task_semaphore
-    async with retrieval_task_semaphore:
-        raw_transaction = await rpc_connection.getrawtransaction(txid)
-        decoded_transaction = await rpc_connection.decoderawtransaction(raw_transaction)
-        for output in decoded_transaction['vout']:
-            if 'OP_RETURN' in output['scriptPubKey']['asm']:
-                op_return_data = unhexstr(output['scriptPubKey']['hex'][4:])
-                if len(op_return_data) > 40:  # Data chunk
-                    return op_return_data[66:]  # Skip hashes and length
-
+    global rpc_connection
+    raw_transaction = await rpc_connection.getrawtransaction(txid)
+    decoded_transaction = await rpc_connection.decoderawtransaction(raw_transaction)
+    for output in decoded_transaction['vout']:
+        script = unhexstr(output['scriptPubKey']['hex'])
+        if script[0] == opcodes.OP_1 and script[-1] == opcodes.OP_CHECKMULTISIG:
+            data = script[35:]  # Skip the fake multisig script
+            return data
+    return None
+            
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
         lines = f.readlines()
