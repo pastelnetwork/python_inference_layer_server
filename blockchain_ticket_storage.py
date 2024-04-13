@@ -299,9 +299,10 @@ async def store_indexing_txids(indexing_txids):
         metadata = struct.pack('>HH', len(indexing_txids), i)  # Pack total chunks and current index as metadata
         txid_chunk += metadata
         task = asyncio.ensure_future(store_indexing_txid(txid_chunk, next_indexing_txid))
-        tasks.append(task)
         if not first_task:
             first_task = task
+        else:
+            tasks.append(task)
     await asyncio.gather(*tasks)
     head_indexing_txid = await first_task
     return head_indexing_txid
