@@ -23,7 +23,7 @@ import httpx
 from httpx import AsyncClient, Limits, Timeout
 import urllib.parse as urlparse
 from logger_config import setup_logger
-from blockchain_ticket_storage import BlockchainUTXOStorage
+from blockchain_ticket_storage import store_data_in_blockchain, retrieve_data_from_blockchain
 import zstandard as zstd
 from sqlalchemy.exc import OperationalError, InvalidRequestError
 from typing import List, Tuple, Dict, Union, Optional
@@ -1420,9 +1420,8 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
 async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json: str) -> str:
     try:
         logger.info("Now attempting to write the ticket data to the blockchain...")
-        storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, BASE_TRANSACTION_AMOUNT, FEE_PER_KB)
-        credit_pack_ticket_txid = await storage.store_data(credit_pack_purchase_request_response_json)
-        logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data... now waiting for the transaction to be confirmed...")
+        credit_pack_ticket_txid, total_bytes_used = await store_data_in_blockchain(credit_pack_purchase_request_response_json)
+        logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data; total bytes used to store the data was {total_bytes_used:,} now waiting for the transaction to be confirmed...")
         max_retries = 20
         retry_delay = 10
         try_count = 0
@@ -1447,7 +1446,7 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
                 retry_delay *= 1.15  # Optional: increase delay between retries
         if num_confirmations > 0:
             logger.info("Now verifying that we can reconstruct the original file written exactly...")
-            reconstructed_file_data = await storage.retrieve_data(credit_pack_ticket_txid)
+            reconstructed_file_data = await retrieve_data_from_blockchain(credit_pack_ticket_txid)
             decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
             if decoded_reconstructed_file_data == credit_pack_purchase_request_response_json:
                 logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
@@ -1466,8 +1465,7 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
 
 async def retrieve_credit_pack_ticket_from_blockchain(credit_pack_ticket_txid: str) -> db_code.CreditPackPurchaseRequestResponse:
     try:
-        storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, BASE_TRANSACTION_AMOUNT, FEE_PER_KB)
-        retrieved_data = await storage.retrieve_data(credit_pack_ticket_txid)
+        retrieved_data = await retrieve_data_from_blockchain(credit_pack_ticket_txid)
         credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(retrieved_data)
         return credit_pack_purchase_request_response
     except Exception as e:
