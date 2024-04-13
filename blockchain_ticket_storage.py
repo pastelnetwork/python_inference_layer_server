@@ -15,7 +15,6 @@ from httpx import AsyncClient, Limits, Timeout
 from logger_config import setup_logger
 logger = setup_logger()
 
-unspent_transactions_cache = None
 max_storage_tasks_in_parallel = 20
 max_retrieval_tasks_in_parallel = 20
 max_concurrent_requests = 5
@@ -24,6 +23,7 @@ retrieval_task_semaphore = asyncio.BoundedSemaphore(max_retrieval_tasks_in_paral
 transaction_semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
 use_parallel = 0
 fee_per_kb = Decimal(0.0001)
+locked_utxos = set()
 
 def unhexstr(str):
     return binascii.unhexlify(str.encode('utf8'))
@@ -183,32 +183,54 @@ class AsyncAuthServiceProxy:
         elif elapsed_time < self.circuit_breaker_timeout / 2:
             self.circuit_breaker_timeout = max(self.circuit_breaker_timeout * 0.8, 60)
 
-class TxWrapper:
-    def __init__(self, tx):
-        self.tx = tx
+def get_sha256_hash(input_data):
+    if isinstance(input_data, str):
+        input_data = input_data.encode('utf-8')
+    return hashlib.sha3_256(input_data).hexdigest()
+    
+def get_raw_sha256_hash(input_data):
+    if isinstance(input_data, str):
+        input_data = input_data.encode('utf-8')
+    return hashlib.sha3_256(input_data).digest()
         
-    def __lt__(self, other):
-        if self.tx['amount'] != other.tx['amount']:
-            return self.tx['amount'] > other.tx['amount']
-        else:
-            return self.tx['confirmations'] < other.tx['confirmations']
+def compress_data(input_data):
+    if isinstance(input_data, str):
+        input_data = input_data.encode('utf-8')
+    zstd_compression_level = 22
+    zstandard_compressor = zstd.ZstdCompressor(level=zstd_compression_level, write_content_size=True, write_checksum=True)
+    zstd_compressed_data = zstandard_compressor.compress(input_data)
+    return zstd_compressed_data
+
+def decompress_data(compressed_data):
+    return zstd.decompress(compressed_data)
 
 async def get_unspent_transactions():
-    global unspent_transactions_cache
     global rpc_connection
-    if unspent_transactions_cache is not None:
-        return unspent_transactions_cache
-    unspent_transactions_cache = await rpc_connection.listunspent()
-    return unspent_transactions_cache
+    unspent_transactions = await rpc_connection.listunspent()
+    return unspent_transactions
 
 async def select_txins(value):
     global rpc_connection
     unspent = await get_unspent_transactions()
-    spendable_unspent = [tx for tx in unspent if tx['spendable']]
+    # Filter out coinbase transactions, ensure they are spendable, and exclude locked UTXOs
+    non_coinbase_unspent = [tx for tx in unspent if not tx.get('coinbase', False) and tx['spendable'] and (tx['txid'], tx['vout']) not in locked_utxos]
+    # Sort the transactions by the amount in ascending order to use the smallest amounts first
+    non_coinbase_unspent.sort(key=lambda x: x['amount'])
     selected_txins = []
     total_amount = 0
-    for tx in spendable_unspent:
+    for tx in non_coinbase_unspent:
+        # Double-check if the input is still valid and unspent
+        try:
+            input_info = await rpc_connection.gettxout(tx['txid'], tx['vout'])
+            if input_info is None:
+                continue  # Skip this input if it's no longer valid or already spent
+        except JSONRPCException as e:
+            if e.code == -5:  # -5 indicates the input is invalid or already spent
+                continue  # Skip this input
+            else:
+                raise  # Re-raise other types of exceptions
         selected_txins.append(tx)
+        locked_utxos.add((tx['txid'], tx['vout']))  # Add the selected UTXO to the locked set
         total_amount += tx['amount']
         if total_amount >= value:
             break
@@ -217,6 +239,14 @@ async def select_txins(value):
     else:
         return selected_txins, total_amount
     
+async def lock_utxos(txins):
+    global rpc_connection
+    try:
+        await rpc_connection.lockunspent(False, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
+    except Exception as e:
+        logger.error(f"Error occurred while locking UTXOs: {e}")
+        raise
+        
 async def prepare_txins_and_change(value):
     global rpc_connection
     txins, total_amount = await select_txins(value)
@@ -224,6 +254,8 @@ async def prepare_txins_and_change(value):
         logger.error("Insufficient funds to store the data")
         return None, None
     change = Decimal(total_amount) - Decimal(value)
+    for txin in txins:
+        locked_utxos.add((txin['txid'], txin['vout']))  # Add the selected UTXO to the locked set
     return txins, Decimal(change)
 
 def pushdata(data):
@@ -236,16 +268,6 @@ def pushdata(data):
     else:
         return bytes([78]) + struct.pack('<I', len(data)) + data
 
-def get_sha256_hash(input_data):
-    if isinstance(input_data, str):
-        input_data = input_data.encode('utf-8')
-    return hashlib.sha3_256(input_data).hexdigest()
-    
-def get_raw_sha256_hash(input_data):
-    if isinstance(input_data, str):
-        input_data = input_data.encode('utf-8')
-    return hashlib.sha3_256(input_data).digest()
-        
 def build_p2pkh_output_script(pubkey_hash):
     script = bytes([opcodes.OP_DUP, opcodes.OP_HASH160, len(pubkey_hash)])
     script += pubkey_hash
@@ -268,26 +290,23 @@ async def add_output_transactions(change, txouts):
     txouts.append((change, script_pubkey))
     return change
 
-
 def packtxin(prevout, scriptSig, seq):
     return prevout[0][::-1] + struct.pack('<L', prevout[1]) + varint(len(scriptSig)) + scriptSig + struct.pack('<L', seq)
 
 def packtxout(value, scriptPubKey):
     coin = 100000
-    return struct.pack('<Q', int(value * coin)) + varint(len(scriptPubKey)) + scriptPubKey
+    return struct.pack('<q', int(value * coin)) + varint(len(scriptPubKey)) + scriptPubKey
 
-def packtx(txins, txouts, locktime=0, version=4, expiryheight=0):
-    sequence = 0xffffffff
-    r = struct.pack('<L', version)  # Transaction version (4 bytes)
-    r += struct.pack('<L', 0x5efaaeef)  # Pastel version group ID (4 bytes)
-    r += varint(len(txins))
+def packtx(txins, txouts, locktime=0, version=1):
+    # We only care about transparent utxos, so we can ignore all other fields related to shielded transactions
+    r = struct.pack('<I', version)  # Transaction version (4 bytes)
+    r += varint(len(txins))  # Number of inputs (varint)
     for txin in txins:
-        r += packtxin((unhexlify(txin['txid'])[::-1], txin['vout']), b'', sequence)        
-    r += varint(len(txouts))
+        r += packtxin((unhexlify(txin['txid'])[::-1], txin['vout']), b'', 0xffffffff)
+    r += varint(len(txouts))  # Number of outputs (varint)
     for (value, scriptPubKey) in txouts:
         r += packtxout(value, scriptPubKey)
-    r += struct.pack('<L', locktime)  # Lock time (4 bytes)
-    r += struct.pack('<L', expiryheight)  # Expiry height (4 bytes)
+    r += struct.pack('<I', locktime)  # Lock time (4 bytes)
     return r
 
 async def send_transaction(signed_tx):
@@ -299,38 +318,29 @@ async def send_transaction(signed_tx):
         logger.error(f"Error occurred while sending transaction: {e}")
         raise
 
-def compress_data(input_data):
-    if isinstance(input_data, str):
-        input_data = input_data.encode('utf-8')
-    zstd_compression_level = 22
-    zstandard_compressor = zstd.ZstdCompressor(level=zstd_compression_level, write_content_size=True, write_checksum=True)
-    zstd_compressed_data = zstandard_compressor.compress(input_data)
-    return zstd_compressed_data
-
-def decompress_data(compressed_data):
-    return zstd.decompress(compressed_data)
-
 def calculate_transaction_fee(signed_tx):
-    # Calculate the actual virtual size of the transaction
     tx_size = len(signed_tx['hex']) / 2  # Convert bytes to virtual size
     fee = Decimal(tx_size) * fee_per_kb / 1000  # Calculate fee based on virtual size
     return fee
 
-async def create_transaction(txins, txouts, expiry_height):
-    tx = packtx(txins, txouts, locktime=0, version=4, expiryheight=expiry_height)
+async def create_transaction(txins, txouts):
+    tx = packtx(txins, txouts)
     hex_transaction = hexlify(tx).decode('utf-8')
     return hex_transaction
 
-async def create_and_send_transaction(txins, txouts, expiry_height=0, use_parallel=True):
+async def create_and_send_transaction(txins, txouts, use_parallel=True):
     global rpc_connection
-    hex_transaction = await create_transaction(txins, txouts, expiry_height)
+    hex_transaction = await create_transaction(txins, txouts)
     signed_tx = await rpc_connection.signrawtransaction(hex_transaction)
+    if signed_tx['errors']:
+        logger.error(f"Error occurred while signing transaction: {signed_tx['errors']}")
+        return None
     if not signed_tx['complete']:
         logger.error("Failed to sign all transaction inputs")
         return None
     fee = calculate_transaction_fee(signed_tx)
     txouts[-1] = (txouts[-1][0] - fee, txouts[-1][1])  # Subtract fee from the change output
-    hex_transaction = await create_transaction(txins, txouts, expiry_height)
+    hex_transaction = await create_transaction(txins, txouts)
     signed_tx = await rpc_connection.signrawtransaction(hex_transaction)
     assert signed_tx['complete']
     hex_signed_transaction = signed_tx['hex']
@@ -345,10 +355,22 @@ async def create_and_send_transaction(txins, txouts, expiry_height=0, use_parall
         else:
             send_raw_transaction_result = await send_transaction(hex_signed_transaction)
             await rpc_connection.lockunspent(True, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
+        # Remove the locked UTXOs from the cache
+        for txin in txins:
+            locked_utxos.remove((txin["txid"], txin["vout"]))
         return send_raw_transaction_result, fee
+    except JSONRPCException as e:
+        if e.code == -25 or e.code == -26:  # -25 indicates missing inputs, -26 indicates insufficient funds
+            logger.error(f"Error occurred while sending transaction: {e}")
+            return None
+        else:
+            raise
     except Exception as e:
         logger.error(f"Error occurred while sending transaction: {e}")
         raise
+    finally:
+        # Ensure the UTXOs are unlocked even if an exception occurs
+        await rpc_connection.lockunspent(True, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
 
 def calculate_chunks(data, max_chunk_size):
     num_chunks = (len(data) + max_chunk_size - 1) // max_chunk_size
@@ -356,16 +378,7 @@ def calculate_chunks(data, max_chunk_size):
     chunks = [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
     return chunks
 
-async def store_data_chunks(chunks, expiry_height):
-    chunk_storage_txids = []
-    for i, chunk in enumerate(chunks):
-        index = i.to_bytes(2, 'big')  # 2-byte index
-        chunk_with_index = index + chunk
-        txid = await store_data_chunk(chunk_with_index, expiry_height)
-        chunk_storage_txids.append(txid)
-    return chunk_storage_txids
-
-async def store_data_chunk(chunk, expiry_height):
+async def store_data_chunk(chunk):
     global rpc_connection
     async with storage_task_semaphore:
         fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
@@ -377,13 +390,22 @@ async def store_data_chunk(chunk, expiry_height):
             logger.error("Insufficient funds to store the data")
             return None
         change = await add_output_transactions(change, txouts)
-        result = await create_and_send_transaction(txins, txouts, expiry_height, use_parallel)
+        result = await create_and_send_transaction(txins, txouts, use_parallel)
         if result:
             transaction_id, fee = result
             return transaction_id
         return None
 
-async def store_chunk_txids(chunk_txids, expiry_height):
+async def store_data_chunks(chunks):
+    chunk_storage_txids = []
+    for i, chunk in enumerate(chunks):
+        index = i.to_bytes(2, 'big')  # 2-byte index
+        chunk_with_index = index + chunk
+        txid = await store_data_chunk(chunk_with_index)
+        chunk_storage_txids.append(txid)
+    return chunk_storage_txids
+
+async def store_chunk_txids(chunk_txids):
     global rpc_connection
     async with storage_task_semaphore:
         fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
@@ -396,34 +418,51 @@ async def store_chunk_txids(chunk_txids, expiry_height):
             logger.error("Insufficient funds to store the chunk TXIDs")
             return None
         change = await add_output_transactions(change, txouts)
-        result = await create_and_send_transaction(txins, txouts, expiry_height, use_parallel)
+        result = await create_and_send_transaction(txins, txouts, use_parallel)
         if result:
             transaction_id, fee = result
             return transaction_id
         return None
 
 async def store_data_in_blockchain(input_data):
-    compressed_data = compress_data(input_data)
-    uncompressed_data_hash = get_raw_sha256_hash(input_data)
-    compressed_data_hash = get_raw_sha256_hash(compressed_data)
-    uncompressed_data_length = len(input_data)
-    current_height = await rpc_connection.getblockcount()
-    expiry_height = current_height + 100  # Set the expiry height 100 blocks ahead    
-    max_chunk_size = 8000  # Maximum possible is around 9000 bytes
-    header = uncompressed_data_length.to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash
-    data_with_header = header + compressed_data
-    chunks = calculate_chunks(data_with_header, max_chunk_size)
-    logger.info(f"Total size of compressed data: {len(compressed_data)} bytes; Data will be stored in {len(chunks)} chunks")
-    chunk_txids = await store_data_chunks(chunks, expiry_height)
-    logger.info(f"Data chunks stored successfully in the blockchain. Chunk TXIDs: {chunk_txids}")
-    if None in chunk_txids:
-        return None
-    final_txid = await store_chunk_txids(chunk_txids)
-    if final_txid is None:
-        return None
-    logger.info(f"Data stored successfully in the blockchain. Final TXID containing all chunk txids: {final_txid}")
-    return final_txid
-
+    global rpc_connection
+    try:    
+        await rpc_connection.lockunspent(True) # Unlock all previously locked UTXOs before starting a new transaction
+        compressed_data = compress_data(input_data)
+        uncompressed_data_hash = get_raw_sha256_hash(input_data)
+        compressed_data_hash = get_raw_sha256_hash(compressed_data)
+        uncompressed_data_length = len(input_data)
+        max_chunk_size = 8000  # Maximum possible is around 9000 bytes
+        header = uncompressed_data_length.to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash
+        data_with_header = header + compressed_data
+        chunks = calculate_chunks(data_with_header, max_chunk_size)
+        logger.info(f"Total size of compressed data: {len(compressed_data)} bytes; Data will be stored in {len(chunks)} chunks")
+        try:
+            chunk_txids = await store_data_chunks(chunks)
+            if chunk_txids is None:
+                logger.error("Error occurred while storing data chunks")
+                return None
+            else:
+                logger.info(f"Data chunks stored successfully in the blockchain. Chunk TXIDs: {chunk_txids}")
+                final_txid = await store_chunk_txids(chunk_txids)
+                if final_txid is None:
+                    return None
+                else:
+                    logger.info(f"Data stored successfully in the blockchain. Final TXID containing all chunk txids: {final_txid}")
+                    return final_txid
+        except Exception as e:
+            logger.error(f"Error occurred while storing data in the blockchain: {e}")
+            await rpc_connection.lockunspent(True)  # Unlock all locked UTXOs if an error occurs
+            raise        
+        finally: # Unlock all locked UTXOs to make them available for future transactions
+            await rpc_connection.lockunspent(True)
+    except Exception as e:
+        logger.error(f"Error occurred while storing data in the blockchain: {e}")
+        await rpc_connection.lockunspent(True)  # Unlock all locked UTXOs if an error occurs
+        raise
+    finally:
+        await rpc_connection.lockunspent(True)  # Unlock all locked UTXOs after the transaction is completed
+        
 async def retrieve_data_from_blockchain(txid):
     global rpc_connection
     raw_transaction = await rpc_connection.getrawtransaction(txid)
