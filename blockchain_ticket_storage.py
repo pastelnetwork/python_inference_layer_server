@@ -2,7 +2,6 @@ import binascii
 import struct
 import hashlib
 import os
-import io
 import asyncio
 import base64
 import json
@@ -121,6 +120,30 @@ class TxWrapper:
             return self.tx['amount'] > other.tx['amount']
         else:
             return self.tx['confirmations'] < other.tx['confirmations']
+
+@lru_cache(maxsize=128)
+async def get_unspent_transactions(rpc_connection):
+    return await rpc_connection.listunspent()
+
+async def select_txins(value, rpc_connection):
+    unspent = await get_unspent_transactions(rpc_connection)
+    spendable_unspent = [tx for tx in unspent if tx['spendable']]
+    if value == 0:
+        total_amount = sum(tx['amount'] for tx in spendable_unspent)
+        return spendable_unspent, total_amount
+    else:
+        heap = [TxWrapper(tx) for tx in spendable_unspent]
+        heapq.heapify(heap)
+        selected_txins = []
+        total_amount = 0
+        while heap and total_amount < value:
+            tx_wrapper = heapq.heappop(heap)
+            selected_txins.append(tx_wrapper.tx)
+            total_amount += tx_wrapper.tx['amount']
+        if total_amount < value:
+            raise Exception("Insufficient funds")
+        else:
+            return selected_txins, total_amount        
         
 class BlockchainUTXOStorage:
     def __init__(self, rpc_user: str, rpc_password: str, rpc_port: int, fee_per_kb: Decimal):
@@ -151,30 +174,6 @@ class BlockchainUTXOStorage:
         except Exception as e:
             logger.error(f"Error occurred while sending transaction: {e}")
             raise
-
-    @lru_cache(maxsize=128)
-    async def get_unspent_transactions(self):
-        return await self.rpc_connection.listunspent()
-
-    async def select_txins(self, value):
-        unspent = await self.get_unspent_transactions()
-        spendable_unspent = [tx for tx in unspent if tx['spendable']]
-        if value == 0:
-            total_amount = sum(tx['amount'] for tx in spendable_unspent)
-            return spendable_unspent, total_amount
-        else:
-            heap = [TxWrapper(tx) for tx in spendable_unspent]
-            heapq.heapify(heap)
-            selected_txins = []
-            total_amount = 0
-            while heap and total_amount < value:
-                tx_wrapper = heapq.heappop(heap)
-                selected_txins.append(tx_wrapper.tx)
-                total_amount += tx_wrapper.tx['amount']
-            if total_amount < value:
-                raise Exception("Insufficient funds")
-            else:
-                return selected_txins, total_amount
 
     def varint(self, n):
         if n < 0xfd:
@@ -231,7 +230,7 @@ class BlockchainUTXOStorage:
             return None
         if fee is None:
             fee = self.calculate_transaction_fee(signed_tx)
-        txouts[-1][0] -= fee
+        txouts[-1] = (txouts[-1][0] - fee, txouts[-1][1])  # Subtract fee from the change output
         final_tx = self.packtx(txins, txouts)
         signed_tx = await self.rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
         assert signed_tx['complete']
@@ -249,99 +248,117 @@ class BlockchainUTXOStorage:
 
     async def add_output_transactions(self, change, txouts):
         change_address = await self.rpc_connection.getnewaddress()
-        txouts.append((change, self.pushdata(self.get_raw_sha256_hash(change_address.encode())) + b'\x88\xac'))  # OP_EQUALVERIFY OP_CHECKSIG
+        txouts.append((change, self.pushdata(self.get_raw_sha256_hash(change_address.encode())) + b'\x88\xac'))
         return change
 
     async def prepare_txins_and_change(self):
-        txins, change = await self.select_txins(0)
+        txins, change = await select_txins(0, self.rpc_connection)
         if txins is None or change is None:
             logger.error("Insufficient funds to store the data")
             return None, None
         return txins, Decimal(change)
 
-    async def store_data_chunks(self, chunks, uncompressed_data_hash, compressed_data_hash):
-        async def store_chunk(chunk):
-            txins, change = await self.prepare_txins_and_change()
-            if txins is None or change is None:
-                return None
-            txouts = []
-            op_return_data = chunk
-            script_pubkey = self.op_return + self.pushdata(op_return_data)
-            txouts.append((0, script_pubkey))
-            change = await self.add_output_transactions(change, txouts)
-            return await self.create_and_send_transaction(txins, txouts)
-        tasks = [store_chunk(chunk) for chunk in chunks[1:]]
-        results = await asyncio.gather(*tasks)
-        transaction_ids = [result[0] for result in results if result]
-        total_fee = sum(result[1] for result in results if result)
-        sorted_txids = '|'.join(transaction_ids).encode()
-        first_chunk = len(chunks[0]).to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash + chunks[0]
-        remaining_space = self.op_return_max_size - len(first_chunk)
-        sorted_txids = sorted_txids[:remaining_space]
-        first_txid, first_chunk_fee = await store_chunk(first_chunk + sorted_txids)
-        if first_txid is None:
+    async def store_data_chunk(self, chunk):
+        txins, change = await self.prepare_txins_and_change()
+        if txins is None or change is None:
+            logger.error("Insufficient funds to store the data")
             return None
-        total_fee += first_chunk_fee
-        transaction_ids.insert(0, first_txid)
-        return transaction_ids, total_fee
+        txouts = [(0, self.op_return + self.pushdata(chunk))]
+        change = await self.add_output_transactions(change, txouts)
+        result = await self.create_and_send_transaction(txins, txouts)
+        if result:
+            transaction_id, fee = result
+            return transaction_id
+        return None
+
+    async def store_data_chunks(self, chunks):
+        tasks = [asyncio.ensure_future(self.store_data_chunk(chunk)) for chunk in chunks]
+        chunk_storage_txids = await asyncio.gather(*tasks)
+        return chunk_storage_txids
+
+    async def store_indexing_txids(self, indexing_txids):
+        head_indexing_txid = None
+        tasks = []
+        for i in range(len(indexing_txids)):
+            txid_chunk = indexing_txids[i].encode()
+            next_indexing_txid = indexing_txids[i+1] if i+1 < len(indexing_txids) else None
+            metadata = struct.pack('>HH', len(indexing_txids), i)  # Pack total chunks and current index as metadata
+            txid_chunk += metadata
+            task = asyncio.ensure_future(self.store_indexing_txid(txid_chunk, next_indexing_txid))
+            tasks.append(task)
+            if not head_indexing_txid:
+                head_indexing_txid = await task
+        await asyncio.gather(*tasks)
+        return head_indexing_txid
 
     async def store_data(self, input_data):
         compressed_data = self.compress_data(input_data)
         uncompressed_data_hash = self.get_raw_sha256_hash(input_data)
         compressed_data_hash = self.get_raw_sha256_hash(compressed_data)
-        chunk_size = self.op_return_max_size
-        chunks = [compressed_data[i:i + chunk_size] for i in range(0, len(compressed_data), chunk_size)]
-        transaction_ids, total_fee = await self.store_data_chunks(chunks, uncompressed_data_hash, compressed_data_hash)
-        if transaction_ids is None:
-            logger.error("Failed to store data chunks")
+        uncompressed_data_length = len(input_data)
+        chunk_size = self.op_return_max_size - 66  # Subtract space for hashes and length
+        chunks = [
+            uncompressed_data_length.to_bytes(2, 'big') +
+            uncompressed_data_hash +
+            compressed_data_hash +
+            compressed_data[i:i+chunk_size]
+            for i in range(0, len(compressed_data), chunk_size)
+        ]
+        chunk_storage_task = asyncio.ensure_future(self.store_data_chunks(chunks))
+        chunk_storage_txids = await chunk_storage_task
+        if None in chunk_storage_txids:
             return None
-        logger.info(f"Data stored successfully in the blockchain. Transaction IDs: {transaction_ids}. Total fee: {total_fee} PSL")
-        return transaction_ids[0]  # Return the TXID of the first chunk
+        indexing_task = asyncio.ensure_future(self.store_indexing_txids(chunk_storage_txids))
+        head_indexing_txid = await indexing_task
+        if head_indexing_txid is None:
+            return None
+        logger.info(f"Data stored successfully in the blockchain. Head indexing TXID: {head_indexing_txid}")
+        return head_indexing_txid
 
-    async def retrieve_data(self, start_txid):
-        try:
-            raw_transaction = await self.rpc_connection.getrawtransaction(start_txid)
+    async def retrieve_data(self, head_indexing_txid):
+        indexing_txids = []
+        current_txid = head_indexing_txid
+        while True:
+            raw_transaction = await self.rpc_connection.getrawtransaction(current_txid)
             decoded_transaction = await self.rpc_connection.decoderawtransaction(raw_transaction)
+            found_next_txid = False
             for output in decoded_transaction['vout']:
                 if 'OP_RETURN' in output['scriptPubKey']['asm']:
                     op_return_data = unhexstr(output['scriptPubKey']['hex'][4:])
-                    break
-            # Extract the sorted TXIDs from the first chunk
-            sorted_txids = op_return_data[-self.op_return_max_size:].rstrip(b'\x00').decode().split('|')
-            # Retrieve the data chunks in parallel using asyncio.gather()
-            async def retrieve_chunk(txid):
-                raw_transaction = await self.rpc_connection.getrawtransaction(txid)
-                decoded_transaction = await self.rpc_connection.decoderawtransaction(raw_transaction)
-                for output in decoded_transaction['vout']:
-                    if 'OP_RETURN' in output['scriptPubKey']['asm']:
-                        op_return_data = unhexstr(output['scriptPubKey']['hex'][4:])
-                        return op_return_data
-            tasks = [retrieve_chunk(txid) for txid in sorted_txids]
-            data_chunks = await asyncio.gather(*tasks)
-            # Combine the data chunks in the correct order
-            combined_data = op_return_data[:-self.op_return_max_size] + b''.join(data_chunks)
-            # Extract the uncompressed data hash, compressed data hash, and compressed data
-            uncompressed_data_length = int.from_bytes(combined_data[:2], 'big')
-            uncompressed_data_hash = combined_data[2:34]
-            compressed_data_hash = combined_data[34:66]
-            compressed_data = combined_data[66:]
-            # Verify the integrity of the compressed data
-            if self.get_raw_sha256_hash(compressed_data) != compressed_data_hash:
-                logger.error("Compressed data hash verification failed")
-                return None
-            decompressed_data = self.decompress_data(compressed_data)
-            # Verify the integrity of the decompressed data
-            if self.get_raw_sha256_hash(decompressed_data) != uncompressed_data_hash:
-                logger.error("Uncompressed data hash verification failed")
-                return None
-            logger.info(f"Data retrieved successfully from the blockchain. Length: {len(decompressed_data)} bytes, which matches the original data size ({uncompressed_data_length} bytes). SHA3-256 hash of the data ({self.get_sha256_hash(decompressed_data)}) also matches the original data hash.")
-            return decompressed_data
-        except JSONRPCException as e:
-            logger.error(f"Error occurred while retrieving data: {e}")
+                    if len(op_return_data) <= 40:  # Indexing TXID chunk
+                        total_chunks, current_index = struct.unpack('>HH', op_return_data[-4:])  # Unpack metadata
+                        indexing_txids.append(op_return_data[:-4].decode())  # Append TXID without metadata
+                    else:  # Next indexing TXID
+                        current_txid = op_return_data.decode()
+                        found_next_txid = True
+                        break
+            if not found_next_txid:
+                break
+        chunk_storage_txids = indexing_txids
+        tasks = [asyncio.ensure_future(self.retrieve_chunk(txid)) for txid in chunk_storage_txids]
+        data_chunks = await asyncio.gather(*tasks)
+        combined_data = b''.join(data_chunks)
+        uncompressed_data_hash = combined_data[2:34]
+        compressed_data_hash = combined_data[34:66]
+        compressed_data = combined_data[66:]
+        if self.get_raw_sha256_hash(compressed_data) != compressed_data_hash:
+            logger.error("Compressed data hash verification failed")
             return None
-        except Exception as e:
-            logger.error(f"Unexpected error occurred: {e}")
+        decompressed_data = self.decompress_data(compressed_data)
+        if self.get_raw_sha256_hash(decompressed_data) != uncompressed_data_hash:
+            logger.error("Uncompressed data hash verification failed")
             return None
+        logger.info(f"Data retrieved successfully from the blockchain. Length: {len(decompressed_data)} bytes")
+        return decompressed_data
+
+    async def retrieve_chunk(self, txid):
+        raw_transaction = await self.rpc_connection.getrawtransaction(txid)
+        decoded_transaction = await self.rpc_connection.decoderawtransaction(raw_transaction)
+        for output in decoded_transaction['vout']:
+            if 'OP_RETURN' in output['scriptPubKey']['asm']:
+                op_return_data = unhexstr(output['scriptPubKey']['hex'][4:])
+                if len(op_return_data) > 40:  # Data chunk
+                    return op_return_data[66:]  # Skip hashes and length
                 
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
@@ -374,12 +391,13 @@ if use_demonstrate_blockchain_data_storage:
     # Usage example:
     async def main():
         rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
-        base_transaction_amount = Decimal(0.000001)
         fee_per_kb = Decimal(0.0001)
-        storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, base_transaction_amount, fee_per_kb)
+        storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, fee_per_kb)
         input_data = 'Your data to store in the blockchain'
-        transaction_id = await storage.store_data(input_data)
-        retrieved_data = await storage.retrieve_data(transaction_id)
+        store_task = asyncio.ensure_future(storage.store_data(input_data))
+        transaction_id = await store_task
+        retrieve_task = asyncio.ensure_future(storage.retrieve_data(transaction_id))
+        retrieved_data = await retrieve_task
         logger.info('Retrieved data:', retrieved_data.decode('utf-8'))
 
     if __name__ == '__main__':
