@@ -209,28 +209,38 @@ async def get_unspent_transactions():
     unspent_transactions = await rpc_connection.listunspent()
     return unspent_transactions
 
-async def select_txins(value):
+async def select_txins(value, burn_address="44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7", number_of_utxos_to_review=10):
     global rpc_connection
     unspent = await get_unspent_transactions()
-    # Filter out coinbase transactions, ensure they are spendable, and exclude locked UTXOs
-    non_coinbase_unspent = [tx for tx in unspent if not tx.get('coinbase', False) and tx['spendable'] and (tx['txid'], tx['vout']) not in locked_utxos]
-    # Sort the transactions by the amount in ascending order to use the smallest amounts first
-    non_coinbase_unspent.sort(key=lambda x: x['amount'])
+    valid_unspent = []
+    reviewed_utxos = 0
+    for tx in unspent:
+        if not tx['spendable'] or tx['address'] == burn_address:
+            continue  # Skip UTXOs that are not spendable or belong to the burn address
+        # Check if the transaction is a coinbase transaction
+        try:
+            raw_transaction = await rpc_connection.getrawtransaction(tx['txid'], 1)
+            if len(raw_transaction['vin']) == 0:
+                continue  # Skip coinbase transactions
+        except JSONRPCException as e:
+            if e.code == -5:  # Invalid or non-wallet transaction id
+                continue  # Skip invalid or non-wallet transactions
+            else:
+                raise  # Re-raise other exceptions
+        # Check if the wallet has the private key for the UTXO's address
+        address_info = await rpc_connection.validateaddress(tx['address'])
+        if not address_info['ismine']:
+            continue  # Skip this UTXO if the wallet doesn't have the private key
+        valid_unspent.append(tx)
+        reviewed_utxos += 1
+        if reviewed_utxos >= number_of_utxos_to_review:
+            break  # Stop reviewing UTXOs if the limit is reached
+    # Sort the valid UTXOs by the amount in descending order to prioritize larger amounts
+    valid_unspent.sort(key=lambda x: x['amount'])
     selected_txins = []
     total_amount = 0
-    for tx in non_coinbase_unspent:
-        # Double-check if the input is still valid and unspent
-        try:
-            input_info = await rpc_connection.gettxout(tx['txid'], tx['vout'])
-            if input_info is None:
-                continue  # Skip this input if it's no longer valid or already spent
-        except JSONRPCException as e:
-            if e.code == -5:  # -5 indicates the input is invalid or already spent
-                continue  # Skip this input
-            else:
-                raise  # Re-raise other types of exceptions
+    for tx in valid_unspent:
         selected_txins.append(tx)
-        locked_utxos.add((tx['txid'], tx['vout']))  # Add the selected UTXO to the locked set
         total_amount += tx['amount']
         if total_amount >= value:
             break
@@ -239,14 +249,6 @@ async def select_txins(value):
     else:
         return selected_txins, total_amount
     
-async def lock_utxos(txins):
-    global rpc_connection
-    try:
-        await rpc_connection.lockunspent(False, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
-    except Exception as e:
-        logger.error(f"Error occurred while locking UTXOs: {e}")
-        raise
-        
 async def prepare_txins_and_change(value):
     global rpc_connection
     txins, total_amount = await select_txins(value)
@@ -254,8 +256,6 @@ async def prepare_txins_and_change(value):
         logger.error("Insufficient funds to store the data")
         return None, None
     change = Decimal(total_amount) - Decimal(value)
-    for txin in txins:
-        locked_utxos.add((txin['txid'], txin['vout']))  # Add the selected UTXO to the locked set
     return txins, Decimal(change)
 
 def pushdata(data):
@@ -432,7 +432,7 @@ async def store_data_in_blockchain(input_data):
         uncompressed_data_hash = get_raw_sha256_hash(input_data)
         compressed_data_hash = get_raw_sha256_hash(compressed_data)
         uncompressed_data_length = len(input_data)
-        max_chunk_size = 8000  # Maximum possible is around 9000 bytes
+        max_chunk_size = 3000  # Maximum possible is around 9000 bytes
         header = uncompressed_data_length.to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash
         data_with_header = header + compressed_data
         chunks = calculate_chunks(data_with_header, max_chunk_size)
