@@ -47,7 +47,7 @@ def EncodeDecimal(o):
 class AsyncAuthServiceProxy:
     max_concurrent_requests = 5000
     _semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
-    def __init__(self, service_url, service_name=None, reconnect_timeout=15, reconnect_amount=2, request_timeout=20):
+    def __init__(self, service_url, service_name=None, reconnect_timeout=25, reconnect_amount=2, request_timeout=20):
         self.service_url = service_url
         self.service_name = service_name
         self.url = urlparse.urlparse(service_url)        
@@ -123,7 +123,7 @@ class TxWrapper:
             return self.tx['confirmations'] < other.tx['confirmations']
         
 class BlockchainUTXOStorage:
-    def __init__(self, rpc_user: str, rpc_password: str, rpc_port: int, base_transaction_amount: Decimal, fee_per_kb: Decimal):
+    def __init__(self, rpc_user: str, rpc_password: str, rpc_port: int, base_transaction_amount: Decimal, fee_per_kb: Decimal, script_construction: str):
         self.rpc_user = rpc_user
         self.rpc_password = rpc_password
         self.rpc_port = rpc_port
@@ -137,8 +137,12 @@ class BlockchainUTXOStorage:
         self.op_hash160 = b'\xa9'
         self.op_equalverify = b'\x88'
         self.op_return = b'\x6a'
+        self.op_swap = b'\x7c'
+        self.op_add = b'\x93'
+        self.op_numequal = b'\x9c'
         self.rpc_connection_string = f'http://{self.rpc_user}:{self.rpc_password}@127.0.0.1:{self.rpc_port}'
         self.rpc_connection = AsyncAuthServiceProxy(self.rpc_connection_string)
+        self.script_construction = script_construction
 
     def get_sha256_hash(self, input_data):
         if isinstance(input_data, str):
@@ -216,8 +220,6 @@ class BlockchainUTXOStorage:
         return bytes([0x51 + n - 1])
 
     def addr2bytes(self, s):
-        if len(s) < 26 or len(s) > 35:
-            raise ValueError("Invalid address length")
         allowed_chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
         if any(c not in allowed_chars for c in s):
             raise ValueError("Invalid characters in address")
@@ -239,22 +241,36 @@ class BlockchainUTXOStorage:
         return unhexstr(h)[1:-4]
 
     def checkmultisig_scriptPubKey_dump(self, fd):
-        data = fd.read(65 * 3)
-        if not data:
-            return None
-        r = self.pushint(1)
-        n = 0
-        while data:
-            chunk = data[0:65]
-            data = data[65:]
-            if len(chunk) < 33:
-                chunk += b'\x00' * (33 - len(chunk))
-            elif len(chunk) < 65:
-                chunk += b'\x00' * (65 - len(chunk))
-            r += self.pushdata(chunk)
-            n += 1
-        r += self.pushint(n) + self.op_checkmultisig
-        return r
+        if self.script_construction == 'op_checkmultisig':
+            data = fd.read(65 * 3)
+            if not data:
+                return None
+            r = self.pushint(1)
+            n = 0
+            while data:
+                chunk = data[0:65]
+                data = data[65:]
+                if len(chunk) < 33:
+                    chunk += b'\x00' * (33 - len(chunk))
+                elif len(chunk) < 65:
+                    chunk += b'\x00' * (65 - len(chunk))
+                r += self.pushdata(chunk)
+                n += 1
+            r += self.pushint(n) + self.op_checkmultisig
+            return r
+        else:
+            data = fd.read(33)  # Read the first public key
+            if not data:
+                return None
+            script = b''
+            while data:
+                script += self.pushdata(data) + self.op_checksig
+                data = fd.read(33)  # Read the next public key
+                if data:
+                    script += self.op_swap
+            # Add the final OP_CHECKSIG, OP_ADD, and OP_NUMEQUAL
+            script += self.op_checksig + self.op_add + self.pushint(1) + self.op_numequal
+            return script
 
     def compress_data(self, input_data):
         if isinstance(input_data, str):
@@ -272,27 +288,38 @@ class BlockchainUTXOStorage:
         TX_OVERHEAD = 30  # Transaction overhead in bytes (version, locktime, masternode payment)
         INPUT_OVERHEAD = 180  # Input overhead in bytes (txid, vout, scriptSig, sequence)
         OUTPUT_OVERHEAD = 34  # Output overhead in bytes (value, scriptPubKey)
-        OP_RETURN_OVERHEAD = 8  # OP_RETURN output overhead in bytes (value, scriptPubKey)
-        FAKE_MULTISIG_OVERHEAD = 33  # Overhead for each fake multisig output (pubkey size)
-        # Legacy transactions have a hard cap on size at 100kb; to be safe, we don't exceed 50kb
-        MAX_TX_SIZE = 50000
+        PUBKEY_SIZE = 33  # Size of a compressed public key in bytes
+        MAX_SCRIPT_OPS = 201  # Maximum number of non-push operations in a script
+        MAX_STACK_ELEMENT_SIZE = 520  # Maximum size of a stack element in bytes (for P2SH)
+        MAX_TX_SIZE = 100000  # Maximum transaction size in bytes (100KB)
+        PCT_OF_MAX_TX_SIZE = 0.05  # Percentage of the maximum transaction size to use for data
+        # Calculate the maximum number of public keys based on the script construction
+        if self.script_construction == 'op_checkmultisig':
+            max_pubkeys = 20  # OP_CHECKMULTISIG allows up to 20 public keys
+        elif self.script_construction == 'op_checksig':
+            max_pubkeys = (MAX_SCRIPT_OPS - 2) // 2  # Alternate construction with OP_CHECKSIG
+        else:
+            max_pubkeys = (MAX_STACK_ELEMENT_SIZE // PUBKEY_SIZE) - 1  # P2SH with OP_CHECKMULTISIG
+        # Calculate the maximum script size based on the number of public keys
+        if self.script_construction == 'op_checkmultisig':
+            max_script_size = max_pubkeys * (PUBKEY_SIZE + 1) + 3  # OP_CHECKMULTISIG script size
+        else:
+            max_script_size = max_pubkeys * (PUBKEY_SIZE + 1) + 4  # Alternate construction script size
         # Calculate the maximum data size based on the transaction structure
         max_inputs = 1  # Assuming a single input transaction
+        max_outputs = 1  # Assuming a single output for the data
         # Calculate the available space for data in the transaction
-        available_space = MAX_TX_SIZE - TX_OVERHEAD - (max_inputs * INPUT_OVERHEAD) - OP_RETURN_OVERHEAD
-        # Calculate the number of fake multisig outputs that can fit in the available space
-        max_fake_multisig_outputs = (available_space - OUTPUT_OVERHEAD) // (FAKE_MULTISIG_OVERHEAD + OUTPUT_OVERHEAD)
-        # Calculate the total size of the fake multisig outputs
-        fake_multisig_data_size = max_fake_multisig_outputs * FAKE_MULTISIG_OVERHEAD
-        # Reserve space for the OP_RETURN output
-        op_return_data_size = available_space - (max_fake_multisig_outputs * OUTPUT_OVERHEAD) - len(self.op_return)
+        available_space = int(MAX_TX_SIZE * PCT_OF_MAX_TX_SIZE) - TX_OVERHEAD - (max_inputs * INPUT_OVERHEAD) - (max_outputs * OUTPUT_OVERHEAD) - max_script_size
+        # Calculate the expansion factor when converting data to the fake multisig script
+        expansion_factor = (PUBKEY_SIZE + 1) / PUBKEY_SIZE
+        # Calculate the maximum size of the original data that can be stored
+        max_data_size = int(available_space / expansion_factor)
         # Reserve space for the uncompressed data hash and compressed data hash
         hash_size = len(self.get_raw_sha256_hash(b''))
-        op_return_data_size -= 2 * hash_size
+        max_data_size -= 2 * hash_size
         # Reserve space for the data length prefix (2 bytes)
-        op_return_data_size -= 2
-        total_max_size = op_return_data_size + fake_multisig_data_size
-        return total_max_size
+        max_data_size -= 2
+        return max_data_size
     
     def calculate_transaction_fee(self, signed_tx):
         # Calculate the actual virtual size of the transaction
@@ -334,14 +361,7 @@ class BlockchainUTXOStorage:
         txouts.append((change, self.op_dup + self.op_hash160 + self.pushdata(self.addr2bytes(change_address)) + self.op_equalverify + self.op_checksig))
         return change
     
-    async def prepare_txins_and_change(self):
-        txins, change = await self.select_txins(0)
-        if txins is None or change is None:
-            logger.error("Insufficient funds to store the data")
-            return None, None
-        return txins, Decimal(change)
-
-    async def prepare_txouts_and_change(self, txins, change, combined_data, txouts):
+    async def prepare_txouts_and_change_op_checkmultisig(self, txins, change, combined_data, txouts):
         if txins is None or change is None:
             return None
         fd = io.BytesIO(combined_data)
@@ -354,13 +374,61 @@ class BlockchainUTXOStorage:
             change -= value
         return await self.add_output_transactions(change, txouts)
 
+    async def prepare_txouts_and_change_op_checksig(self, txins, change, combined_data, txouts):
+        if txins is None or change is None:
+            return None
+        fd = io.BytesIO(combined_data)
+        while True:
+            data = fd.read(33)  # Read the public key
+            if not data:
+                break
+            scriptPubKey = self.pushdata(data) + self.op_checksig + self.op_swap + self.op_checksig + self.op_add + self.pushint(1) + self.op_numequal
+            value = self.base_transaction_amount
+            txouts.append((value, scriptPubKey))
+            change -= value
+        return await self.add_output_transactions(change, txouts)
+
+    async def prepare_txouts_and_change_p2sh(self, txins, change, combined_data, txouts):
+        if txins is None or change is None:
+            return None
+        fd = io.BytesIO(combined_data)
+        while True:
+            data = fd.read(33)  # Read the public key
+            if not data:
+                break
+            scriptPubKey = self.op_hash160 + self.pushdata(self.get_raw_sha256_hash(data)) + self.op_equal
+            value = self.base_transaction_amount
+            txouts.append((value, scriptPubKey))
+            change -= value
+        return await self.add_output_transactions(change, txouts)
+
+    async def prepare_txouts_and_change(self, txins, change, combined_data, txouts):
+        if self.script_construction == 'op_checkmultisig':
+            return await self.prepare_txouts_and_change_op_checkmultisig(txins, change, combined_data, txouts)
+        elif self.script_construction == 'op_checksig':
+            return await self.prepare_txouts_and_change_op_checksig(txins, change, combined_data, txouts)
+        else:
+            return await self.prepare_txouts_and_change_p2sh(txins, change, combined_data, txouts)
+
+    async def prepare_txins_and_change(self):
+        txins, change = await self.select_txins(0)
+        if txins is None or change is None:
+            logger.error("Insufficient funds to store the data")
+            return None, None
+        return txins, Decimal(change)
+
     async def process_chunk(self, chunk, uncompressed_data_hash, compressed_data_hash):
         txins, change = await self.prepare_txins_and_change()
         if txins is None or change is None:
             return None
         txouts = []
         combined_data = len(chunk).to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash + chunk
-        change = await self.prepare_txouts_and_change(txins, change, combined_data, txouts)
+        if self.script_construction == 'op_checkmultisig':
+            change = await self.prepare_txouts_and_change_op_checkmultisig(txins, change, combined_data, txouts)
+        elif self.script_construction == 'op_checksig':
+            change = await self.prepare_txouts_and_change_op_checksig(txins, change, combined_data, txouts)
+        else:
+            change = await self.prepare_txouts_and_change_p2sh(txins, change, combined_data, txouts)
         return await self.create_and_send_transaction(txins, txouts)
 
     async def store_data_chunks(self, chunks, uncompressed_data_hash, compressed_data_hash):
@@ -380,8 +448,13 @@ class BlockchainUTXOStorage:
         op_return_data = '|'.join(transaction_ids).encode()
         script_pubkey = self.op_return + self.pushdata(op_return_data) + self.pushdata(first_chunk)
         txouts.append((0, script_pubkey))
-        change = await self.prepare_txouts_and_change(txins, change, b'', txouts)
-        return await self.create_and_send_tx(txins, txouts)
+        if self.script_construction == 'op_checkmultisig':
+            change = await self.prepare_txouts_and_change_op_checkmultisig(txins, change, b'', txouts)
+        elif self.script_construction == 'op_checksig':
+            change = await self.prepare_txouts_and_change_op_checksig(txins, change, b'', txouts)
+        else:
+            change = await self.prepare_txouts_and_change_p2sh(txins, change, b'', txouts)
+        return await self.create_and_send_transaction(txins, txouts)
 
     async def store_single_chunk(self, chunk, uncompressed_data_hash, compressed_data_hash):
         txins, change = await self.prepare_txins_and_change()
@@ -389,8 +462,13 @@ class BlockchainUTXOStorage:
             return None
         txouts = []
         combined_data = len(chunk).to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash + chunk
-        change = await self.prepare_txouts_and_change(txins, change, combined_data, txouts)
-        return await self.create_and_send_tx(txins, txouts)
+        if self.script_construction == 'op_checkmultisig':
+            change = await self.prepare_txouts_and_change_op_checkmultisig(txins, change, combined_data, txouts)
+        elif self.script_construction == 'op_checksig':
+            change = await self.prepare_txouts_and_change_op_checksig(txins, change, combined_data, txouts)
+        else:
+            change = await self.prepare_txouts_and_change_p2sh(txins, change, combined_data, txouts)
+        return await self.create_and_send_transaction(txins, txouts)
 
     async def store_data(self, input_data):
         compressed_data = self.compress_data(input_data)
@@ -404,26 +482,21 @@ class BlockchainUTXOStorage:
             chunks = [compressed_data[i:i + chunk_size] for i in range(0, len(compressed_data), chunk_size)]
             transaction_ids, total_fee = await self.store_data_chunks(chunks[1:], uncompressed_data_hash, compressed_data_hash)
             if transaction_ids is None:
+                logger.error("Failed to store data chunks")
                 return None
             first_txid, first_chunk_fee = await self.store_first_chunk(chunks[0], transaction_ids)
             if first_txid is None:
+                logger.error("Failed to store the first data chunk")
                 return None
             total_fee += first_chunk_fee
             logger.info(f"Data stored successfully in the blockchain. First transaction ID: {first_txid}. Total fee: {total_fee} PSL")
             return first_txid
-                
-    async def retrieve_data_chunk(self, txid):
-        try: 
-            try:
-                raw_transaction = await self.rpc_connection.getrawtransaction(txid)
-            except JSONRPCException as e:
-                if e.code == -5:  # -5 indicates "No information available about transaction"
-                    logger.error(f"Transaction {txid} not found")
-                    return None
-                else:
-                    raise            
-            decoded_transaction = await self.rpc_connection.decoderawtransaction(raw_transaction) # Decode the raw transaction
-            data_chunks = [] # Extract the data from the transaction outputs
+
+    async def retrieve_data_chunk_op_checkmultisig(self, txid):
+        try:
+            raw_transaction = await self.rpc_connection.getrawtransaction(txid)
+            decoded_transaction = await self.rpc_connection.decoderawtransaction(raw_transaction)
+            data_chunks = []
             for output in decoded_transaction['vout']:
                 if 'asm' in output['scriptPubKey']:
                     script_asm = output['scriptPubKey']['asm']
@@ -433,25 +506,90 @@ class BlockchainUTXOStorage:
             if not data_chunks:
                 logger.error(f"No data chunks found in transaction {txid}")
                 return None
-            combined_data = b''.join(data_chunks) # Combine the data chunks
+            combined_data = b''.join(data_chunks)
             return combined_data
         except JSONRPCException as e:
-            logger.error(f"Error occurred while retrieving data chunk: {e}")
-            return None
+            if e.code == -5:  # -5 indicates "No information available about transaction"
+                logger.error(f"Transaction {txid} not found")
+                return None
+            else:
+                logger.error(f"Error occurred while retrieving data chunk: {e}")
+                return None
         except Exception as e:
             logger.error(f"Unexpected error occurred: {e}")
             return None
-                            
+
+    async def retrieve_data_chunk_op_checksig(self, txid):
+        try:
+            raw_transaction = await self.rpc_connection.getrawtransaction(txid)
+            decoded_transaction = await self.rpc_connection.decoderawtransaction(raw_transaction)
+            data_chunks = []
+            for output in decoded_transaction['vout']:
+                if 'asm' in output['scriptPubKey']:
+                    script_asm = output['scriptPubKey']['asm']
+                    if 'OP_CHECKSIG' in script_asm and 'OP_SWAP' in script_asm and 'OP_ADD' in script_asm and 'OP_NUMEQUAL' in script_asm:
+                        script_hex = output['scriptPubKey']['hex']
+                        data_chunk = b''
+                        i = 2
+                        while i < len(script_hex) - 8:
+                            data_chunk += unhexstr(script_hex[i:i+2])
+                            i += 68
+                        data_chunks.append(data_chunk)
+            if not data_chunks:
+                logger.error(f"No data chunks found in transaction {txid}")
+                return None
+            combined_data = b''.join(data_chunks)
+            return combined_data
+        except JSONRPCException as e:
+            if e.code == -5:  # -5 indicates "No information available about transaction"
+                logger.error(f"Transaction {txid} not found")
+                return None
+            else:
+                logger.error(f"Error occurred while retrieving data chunk: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"Unexpected error occurred: {e}")
+            return None
+        
+    async def retrieve_data_chunk_p2sh(self, txid):
+        try:
+            raw_transaction = await self.rpc_connection.getrawtransaction(txid)
+            decoded_transaction = await self.rpc_connection.decoderawtransaction(raw_transaction)
+            data_chunks = []
+            for output in decoded_transaction['vout']:
+                if 'asm' in output['scriptPubKey']:
+                    script_asm = output['scriptPubKey']['asm']
+                    if 'OP_HASH160' in script_asm and 'OP_EQUAL' in script_asm:
+                        script_hex = output['scriptPubKey']['hex']
+                        data_chunk = unhexstr(script_hex[4:-2])
+                        data_chunks.append(data_chunk)
+            if not data_chunks:
+                logger.error(f"No data chunks found in transaction {txid}")
+                return None
+            combined_data = b''.join(data_chunks)
+            return combined_data
+        except JSONRPCException as e:
+            if e.code == -5:  # -5 indicates "No information available about transaction"
+                logger.error(f"Transaction {txid} not found")
+                return None
+            else:
+                logger.error(f"Error occurred while retrieving data chunk: {e}")
+                return None
+        except Exception as e:
+            logger.error(f"Unexpected error occurred: {e}")
+            return None
+
+    async def retrieve_data_chunk(self, txid):
+        if self.script_construction == 'op_checkmultisig':
+            return await self.retrieve_data_chunk_op_checkmultisig(txid)
+        elif self.script_construction == 'op_checksig':
+            return await self.retrieve_data_chunk_op_checksig(txid)
+        else:
+            return await self.retrieve_data_chunk_p2sh(txid)
+
     async def retrieve_data(self, txid):
         try:
-            try:
-                raw_transaction = await self.rpc_connection.getrawtransaction(txid)
-            except JSONRPCException as e:
-                if e.code == -5:  # -5 indicates "No information available about transaction"
-                    logger.error(f"Transaction {txid} not found")
-                    return None
-                else:
-                    raise
+            raw_transaction = await self.rpc_connection.getrawtransaction(txid)
             decoded_transaction = await self.rpc_connection.decoderawtransaction(raw_transaction)
             op_return_output = None
             for output in decoded_transaction['vout']:
@@ -479,15 +617,7 @@ class BlockchainUTXOStorage:
                 combined_data = b''.join(data_chunks)
             else:
                 # The data is stored in a single transaction
-                data_chunks = []
-                for output in decoded_transaction['vout']:
-                    if 'asm' in output['scriptPubKey'] and 'OP_CHECKMULTISIG' in output['scriptPubKey']['asm']:
-                        data_chunk = unhexstr(output['scriptPubKey']['hex'][2:-2])
-                        data_chunks.append(data_chunk)
-                if not data_chunks:
-                    combined_data = op_return_data
-                else:
-                    combined_data = b''.join(data_chunks)
+                combined_data = await self.retrieve_data_chunk(txid)
             # Extract the uncompressed data hash, compressed data hash, and compressed data
             uncompressed_data_length = int.from_bytes(combined_data[:2], 'big')
             uncompressed_data_hash = combined_data[2:34]
@@ -509,7 +639,7 @@ class BlockchainUTXOStorage:
             return None
         except Exception as e:
             logger.error(f"Unexpected error occurred: {e}")
-            return None
+            return None        
                 
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:

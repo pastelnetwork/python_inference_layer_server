@@ -1420,7 +1420,8 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
 async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json: str) -> str:
     try:
         logger.info("Now attempting to write the ticket data to the blockchain...")
-        storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, BASE_TRANSACTION_AMOUNT, FEE_PER_KB)
+        script_construction_method_string = "op_checksig" # "op_checkmultisig", "op_checksig", "p2sh"
+        storage = BlockchainUTXOStorage(rpc_user, rpc_password, rpc_port, BASE_TRANSACTION_AMOUNT, FEE_PER_KB, script_construction_method_string)
         credit_pack_ticket_txid = await storage.store_data(credit_pack_purchase_request_response_json)
         logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data... now waiting for the transaction to be confirmed...")
         max_retries = 20
