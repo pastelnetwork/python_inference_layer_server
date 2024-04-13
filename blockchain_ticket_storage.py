@@ -209,24 +209,14 @@ async def get_unspent_transactions():
     unspent_transactions = await rpc_connection.listunspent()
     return unspent_transactions
 
-async def select_txins(value, burn_address="44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7", number_of_utxos_to_review=10):
+async def select_txins(value, burn_address="44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7", number_of_utxos_to_review=100):
     global rpc_connection
     unspent = await get_unspent_transactions()
     valid_unspent = []
     reviewed_utxos = 0
     for tx in unspent:
-        if not tx['spendable'] or tx['address'] == burn_address:
-            continue  # Skip UTXOs that are not spendable or belong to the burn address
-        # Check if the transaction is a coinbase transaction
-        try:
-            raw_transaction = await rpc_connection.getrawtransaction(tx['txid'], 1)
-            if len(raw_transaction['vin']) == 0:
-                continue  # Skip coinbase transactions
-        except JSONRPCException as e:
-            if e.code == -5:  # Invalid or non-wallet transaction id
-                continue  # Skip invalid or non-wallet transactions
-            else:
-                raise  # Re-raise other exceptions
+        if not tx['spendable'] or tx['address'] == burn_address or tx['generated']:
+            continue  # Skip UTXOs that are not spendable or belong to the burn address or which are coinbase transactions
         # Check if the wallet has the private key for the UTXO's address
         address_info = await rpc_connection.validateaddress(tx['address'])
         if not address_info['ismine']:
@@ -236,7 +226,7 @@ async def select_txins(value, burn_address="44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7
         if reviewed_utxos >= number_of_utxos_to_review:
             break  # Stop reviewing UTXOs if the limit is reached
     # Sort the valid UTXOs by the amount in descending order to prioritize larger amounts
-    valid_unspent.sort(key=lambda x: x['amount'])
+    valid_unspent.sort(key=lambda x: x['confirmations'])
     selected_txins = []
     total_amount = 0
     for tx in valid_unspent:
@@ -345,19 +335,11 @@ async def create_and_send_transaction(txins, txouts, use_parallel=True):
     assert signed_tx['complete']
     hex_signed_transaction = signed_tx['hex']
     try:
-        await rpc_connection.lockunspent(False, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
         if use_parallel:
             async with transaction_semaphore:
-                send_raw_transaction_result, _ = await asyncio.gather(
-                    send_transaction(hex_signed_transaction),
-                    rpc_connection.lockunspent(True, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
-                )
+                send_raw_transaction_result = await send_transaction(hex_signed_transaction)
         else:
             send_raw_transaction_result = await send_transaction(hex_signed_transaction)
-            await rpc_connection.lockunspent(True, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
-        # Remove the locked UTXOs from the cache
-        for txin in txins:
-            locked_utxos.remove((txin["txid"], txin["vout"]))
         return send_raw_transaction_result, fee
     except JSONRPCException as e:
         if e.code == -25 or e.code == -26:  # -25 indicates missing inputs, -26 indicates insufficient funds
@@ -368,10 +350,6 @@ async def create_and_send_transaction(txins, txouts, use_parallel=True):
     except Exception as e:
         logger.error(f"Error occurred while sending transaction: {e}")
         raise
-    finally:
-        # Ensure the UTXOs are unlocked even if an exception occurs
-        await rpc_connection.lockunspent(True, [{"txid": txin["txid"], "vout": txin["vout"]} for txin in txins])
-
 def calculate_chunks(data, max_chunk_size):
     num_chunks = (len(data) + max_chunk_size - 1) // max_chunk_size
     chunk_size = (len(data) + num_chunks - 1) // num_chunks
@@ -452,16 +430,10 @@ async def store_data_in_blockchain(input_data):
                     return final_txid
         except Exception as e:
             logger.error(f"Error occurred while storing data in the blockchain: {e}")
-            await rpc_connection.lockunspent(True)  # Unlock all locked UTXOs if an error occurs
             raise        
-        finally: # Unlock all locked UTXOs to make them available for future transactions
-            await rpc_connection.lockunspent(True)
     except Exception as e:
         logger.error(f"Error occurred while storing data in the blockchain: {e}")
-        await rpc_connection.lockunspent(True)  # Unlock all locked UTXOs if an error occurs
         raise
-    finally:
-        await rpc_connection.lockunspent(True)  # Unlock all locked UTXOs after the transaction is completed
         
 async def retrieve_data_from_blockchain(txid):
     global rpc_connection
