@@ -123,13 +123,13 @@ class TxWrapper:
             return self.tx['confirmations'] < other.tx['confirmations']
         
 class BlockchainUTXOStorage:
-    def __init__(self, rpc_user, rpc_password, rpc_port, base_transaction_amount, fee_per_kb):
+    def __init__(self, rpc_user: str, rpc_password: str, rpc_port: int, base_transaction_amount: Decimal, fee_per_kb: Decimal):
         self.rpc_user = rpc_user
         self.rpc_password = rpc_password
         self.rpc_port = rpc_port
         self.base_transaction_amount = base_transaction_amount
         self.fee_per_kb = fee_per_kb
-        self.coin = 100000000       
+        self.coin = 100000       
         self.op_checksig = b'\xac'
         self.op_checkmultisig = b'\xae'
         self.op_pushdata1 = b'\x4c'
@@ -298,7 +298,7 @@ class BlockchainUTXOStorage:
         # Calculate the actual virtual size of the transaction
         tx_size = len(signed_tx['hex']) / 2  # Convert bytes to virtual size
         fee = Decimal(tx_size) * self.fee_per_kb / 1000  # Calculate fee based on virtual size
-        return fee    
+        return Decimal(fee)
     
     async def create_and_send_transaction(self, txins, txouts, fee=None):
         tx = self.packtx(txins, txouts)
