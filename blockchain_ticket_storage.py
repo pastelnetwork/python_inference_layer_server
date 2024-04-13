@@ -5,7 +5,6 @@ import os
 import asyncio
 import base64
 import json
-from functools import lru_cache
 import urllib.parse as urlparse
 import heapq
 from decimal import Decimal
@@ -14,6 +13,8 @@ import zstandard as zstd
 from httpx import AsyncClient, Limits, Timeout
 from logger_config import setup_logger
 logger = setup_logger()
+
+unspent_transactions_cache = None
 
 def unhexstr(str):
     return binascii.unhexlify(str.encode('utf8'))
@@ -121,10 +122,13 @@ class TxWrapper:
         else:
             return self.tx['confirmations'] < other.tx['confirmations']
 
-@lru_cache(maxsize=128)
 async def get_unspent_transactions():
+    global unspent_transactions_cache
+    if unspent_transactions_cache is not None:
+        return unspent_transactions_cache
     global rpc_connection
-    return await rpc_connection.listunspent()
+    unspent_transactions_cache = await rpc_connection.listunspent()
+    return unspent_transactions_cache
 
 async def select_txins(value):
     global rpc_connection
@@ -269,7 +273,7 @@ async def store_data_chunk(chunk):
     return None
 
 async def store_data_chunks(chunks):
-    tasks = [asyncio.ensure_future(store_data_chunk(chunk)) for chunk in chunks]
+    tasks = [asyncio.create_task(store_data_chunk(chunk)) for chunk in chunks]
     chunk_storage_txids = await asyncio.gather(*tasks)
     return chunk_storage_txids
 
@@ -298,7 +302,7 @@ async def store_indexing_txids(indexing_txids):
         next_indexing_txid = indexing_txids[i+1] if i+1 < len(indexing_txids) else None
         metadata = struct.pack('>HH', len(indexing_txids), i)  # Pack total chunks and current index as metadata
         txid_chunk += metadata
-        task = asyncio.ensure_future(store_indexing_txid(txid_chunk, next_indexing_txid))
+        task = asyncio.create_task(store_indexing_txid(txid_chunk, next_indexing_txid))
         if not first_task:
             first_task = task
         else:
@@ -321,11 +325,13 @@ async def store_data_in_blockchain(input_data):
         compressed_data[i:i+chunk_size]
         for i in range(0, len(compressed_data), chunk_size)
     ]
-    chunk_storage_task = asyncio.ensure_future(store_data_chunks(chunks))
+    # Create a task for storing data chunks
+    chunk_storage_task = asyncio.create_task(store_data_chunks(chunks))
     chunk_storage_txids = await chunk_storage_task
     if None in chunk_storage_txids:
         return None
-    indexing_task = asyncio.ensure_future(store_indexing_txids(chunk_storage_txids))
+    # Create a task for storing indexing TXIDs
+    indexing_task = asyncio.create_task(store_indexing_txids(chunk_storage_txids))
     head_indexing_txid = await indexing_task
     if head_indexing_txid is None:
         return None
@@ -353,7 +359,7 @@ async def retrieve_data_from_blockchain(head_indexing_txid):
         if not found_next_txid:
             break
     chunk_storage_txids = indexing_txids
-    tasks = [asyncio.ensure_future(retrieve_chunk(txid)) for txid in chunk_storage_txids]
+    tasks = [asyncio.create_task(retrieve_chunk(txid)) for txid in chunk_storage_txids]
     data_chunks = await asyncio.gather(*tasks, return_exceptions=True)
     for chunk in data_chunks:
         if isinstance(chunk, Exception):
