@@ -290,16 +290,29 @@ async def add_output_transactions(change, txouts):
     txouts.append((change, script_pubkey))
     return change
 
-def packtxin(prevout, scriptSig, seq):
-    return prevout[0][::-1] + struct.pack('<L', prevout[1]) + varint(len(scriptSig)) + scriptSig + struct.pack('<L', seq)
-
 def packtxout(value, scriptPubKey):
     coin = 100000
     return struct.pack('<q', int(value * coin)) + varint(len(scriptPubKey)) + scriptPubKey
 
-def packtx(txins, txouts, locktime=0, version=1):
-    # We only care about transparent utxos, so we can ignore all other fields related to shielded transactions
-    r = struct.pack('<I', version)  # Transaction version (4 bytes)
+def packtxin(prevout, scriptSig, nSequence):
+    r = b''
+    r += prevout[0]  # Previous transaction hash (little-endian)
+    r += struct.pack('<I', prevout[1])  # Previous output index (4 bytes)
+    r += varint(len(scriptSig))  # Script length (varint)
+    r += scriptSig  # Script signature
+    r += struct.pack('<I', nSequence)  # Sequence number (4 bytes)
+    return r
+
+def packtx(txins, txouts):
+    expiry_height = 0
+    locktime = 0
+    version = 4
+    overwintered = 1 << 31  # Set the "overwintered" flag
+    version = version | overwintered
+    version_group_id = 0x892f2085  # Sapling version group ID
+    consensus_branch_id = 0x5efaaeef  # Vermeer consensus branch ID
+    r = struct.pack('<I', version)  # Transaction version (4 bytes) with "overwintered" flag set
+    r += struct.pack('<I', version_group_id)  # Version group ID (4 bytes)
     r += varint(len(txins))  # Number of inputs (varint)
     for txin in txins:
         r += packtxin((unhexlify(txin['txid']), txin['vout']), b'', 0xffffffff)
@@ -307,8 +320,15 @@ def packtx(txins, txouts, locktime=0, version=1):
     for (value, scriptPubKey) in txouts:
         r += packtxout(value, scriptPubKey)
     r += struct.pack('<I', locktime)  # Lock time (4 bytes)
+    r += struct.pack('<I', expiry_height)  # Expiry height (4 bytes)
+    r += struct.pack('<I', consensus_branch_id)  # Consensus branch ID (4 bytes)
     return r
 
+async def create_transaction(txins, txouts):
+    tx = packtx(txins, txouts)
+    hex_transaction = hexlify(tx).decode('utf-8')
+    return hex_transaction
+    
 async def send_transaction(signed_tx):
     global rpc_connection
     try:
@@ -323,26 +343,17 @@ def calculate_transaction_fee(signed_tx):
     fee = Decimal(tx_size) * fee_per_kb / 1000  # Calculate fee based on virtual size
     return fee
 
-async def create_transaction(txins, txouts):
-    tx = packtx(txins, txouts)
-    hex_transaction = hexlify(tx).decode('utf-8')
-    return hex_transaction
-
 async def create_and_send_transaction(txins, txouts, use_parallel=True):
     global rpc_connection
     hex_transaction = await create_transaction(txins, txouts)
+    assert isinstance(hex_transaction, str)
     signed_tx = await rpc_connection.signrawtransaction(hex_transaction)
-    if signed_tx['errors']:
+    if 'errors' in signed_tx.keys():
         logger.error(f"Error occurred while signing transaction: {signed_tx['errors']}")
         return None
     if not signed_tx['complete']:
         logger.error("Failed to sign all transaction inputs")
         return None
-    fee = calculate_transaction_fee(signed_tx)
-    txouts[-1] = (txouts[-1][0] - fee, txouts[-1][1])  # Subtract fee from the change output
-    hex_transaction = await create_transaction(txins, txouts)
-    signed_tx = await rpc_connection.signrawtransaction(hex_transaction)
-    assert signed_tx['complete']
     hex_signed_transaction = signed_tx['hex']
     try:
         if use_parallel:
@@ -350,7 +361,7 @@ async def create_and_send_transaction(txins, txouts, use_parallel=True):
                 send_raw_transaction_result = await send_transaction(hex_signed_transaction)
         else:
             send_raw_transaction_result = await send_transaction(hex_signed_transaction)
-        return send_raw_transaction_result, fee
+        return send_raw_transaction_result
     except JSONRPCException as e:
         if e.code == -25 or e.code == -26:  # -25 indicates missing inputs, -26 indicates insufficient funds
             logger.error(f"Error occurred while sending transaction: {e}")
@@ -379,9 +390,8 @@ async def store_data_chunk(chunk):
             logger.error("Insufficient funds to store the data")
             return None
         change = await add_output_transactions(change, txouts)
-        result = await create_and_send_transaction(txins, txouts, use_parallel)
-        if result:
-            transaction_id, fee = result
+        transaction_id = await create_and_send_transaction(txins, txouts, use_parallel)
+        if transaction_id:
             return transaction_id
         return None
 
@@ -407,9 +417,8 @@ async def store_chunk_txids(chunk_txids):
             logger.error("Insufficient funds to store the chunk TXIDs")
             return None
         change = await add_output_transactions(change, txouts)
-        result = await create_and_send_transaction(txins, txouts, use_parallel)
-        if result:
-            transaction_id, fee = result
+        transaction_id = await create_and_send_transaction(txins, txouts, use_parallel)
+        if transaction_id:
             return transaction_id
         return None
 
