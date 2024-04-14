@@ -23,6 +23,7 @@ retrieval_task_semaphore = asyncio.BoundedSemaphore(max_retrieval_tasks_in_paral
 transaction_semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
 use_parallel = 0
 fee_per_kb = Decimal(0.0001)
+base_amount = Decimal(0.00001)
 locked_utxos = set()
 
 def unhexstr(str):
@@ -209,18 +210,15 @@ async def get_unspent_transactions():
     unspent_transactions = await rpc_connection.listunspent()
     return unspent_transactions
 
-async def select_txins(value, burn_address="44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7", number_of_utxos_to_review=100):
+async def select_txins(value, burn_address="44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7", number_of_utxos_to_review=10):
     global rpc_connection
     unspent = await get_unspent_transactions()
+    random.shuffle(unspent)
     valid_unspent = []
     reviewed_utxos = 0
     for tx in unspent:
-        if not tx['spendable'] or tx['address'] == burn_address or tx['generated']:
+        if not tx['spendable'] or tx['address'] == burn_address or tx['generated'] or tx['amount'] < value:
             continue  # Skip UTXOs that are not spendable or belong to the burn address or which are coinbase transactions
-        # Check if the wallet has the private key for the UTXO's address
-        address_info = await rpc_connection.validateaddress(tx['address'])
-        if not address_info['ismine']:
-            continue  # Skip this UTXO if the wallet doesn't have the private key
         valid_unspent.append(tx)
         reviewed_utxos += 1
         if reviewed_utxos >= number_of_utxos_to_review:
@@ -230,6 +228,14 @@ async def select_txins(value, burn_address="44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7
     selected_txins = []
     total_amount = 0
     for tx in valid_unspent:
+        # Check if the wallet has the private key for the UTXO's address
+        address_info = await rpc_connection.validateaddress(tx['address'])
+        if not address_info['ismine'] and not address_info['iswatchonly'] and not address_info['isvalid']:
+            continue  # Skip this UTXO if the wallet doesn't have the private key
+        # Check if the UTXO is still valid and unspent
+        txout = await rpc_connection.gettxout(tx['txid'], tx['vout'])
+        if txout is None:
+            continue  # Skip UTXOs that are not found or already spent        
         selected_txins.append(tx)
         total_amount += tx['amount']
         if total_amount >= value:
@@ -239,13 +245,17 @@ async def select_txins(value, burn_address="44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7
     else:
         return selected_txins, total_amount
     
-async def prepare_txins_and_change(value):
+async def prepare_txins_and_change(value, estimated_fee):
     global rpc_connection
-    txins, total_amount = await select_txins(value)
+    txins, total_amount = await select_txins(value + estimated_fee)
     if txins is None or total_amount is None:
         logger.error("Insufficient funds to store the data")
         return None, None
-    change = Decimal(total_amount) - Decimal(value)
+    logger.info(f"Selected UTXOs: {txins}; Estimated transaction fee: {estimated_fee}")
+    change = round(Decimal(total_amount) - Decimal(value) - Decimal(estimated_fee), 5)
+    if change < 0:
+        logger.error("Insufficient funds to cover the transaction fee")
+        return None, None
     return txins, Decimal(change)
 
 def pushdata(data):
@@ -292,7 +302,7 @@ def packtx(txins, txouts, locktime=0, version=1):
     r = struct.pack('<I', version)  # Transaction version (4 bytes)
     r += varint(len(txins))  # Number of inputs (varint)
     for txin in txins:
-        r += packtxin((unhexlify(txin['txid'])[::-1], txin['vout']), b'', 0xffffffff)
+        r += packtxin((unhexlify(txin['txid']), txin['vout']), b'', 0xffffffff)
     r += varint(len(txouts))  # Number of outputs (varint)
     for (value, scriptPubKey) in txouts:
         r += packtxout(value, scriptPubKey)
@@ -350,6 +360,7 @@ async def create_and_send_transaction(txins, txouts, use_parallel=True):
     except Exception as e:
         logger.error(f"Error occurred while sending transaction: {e}")
         raise
+    
 def calculate_chunks(data, max_chunk_size):
     num_chunks = (len(data) + max_chunk_size - 1) // max_chunk_size
     chunk_size = (len(data) + num_chunks - 1) // num_chunks
@@ -362,8 +373,8 @@ async def store_data_chunk(chunk):
         fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
         script = bytes([opcodes.OP_1, len(fake_pubkey)]) + fake_pubkey + bytes([opcodes.OP_1, opcodes.OP_CHECKMULTISIG])
         txouts = [(0, script + pushdata(chunk))]
-        estimated_fee = len(chunk) * fee_per_kb
-        txins, change = await prepare_txins_and_change(Decimal(estimated_fee))
+        estimated_fee = Decimal(round(len(txouts[-1]) * fee_per_kb, 5))
+        txins, change = await prepare_txins_and_change(base_amount, estimated_fee)
         if txins is None or change is None:
             logger.error("Insufficient funds to store the data")
             return None
@@ -389,9 +400,9 @@ async def store_chunk_txids(chunk_txids):
         fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
         script = bytes([opcodes.OP_1, len(fake_pubkey)]) + fake_pubkey + bytes([opcodes.OP_1, opcodes.OP_CHECKMULTISIG])
         txids_data = b''.join(txid.encode() for txid in chunk_txids)
-        txouts = [(0, script + pushdata(txids_data))]
-        estimated_fee = len(txids_data) * fee_per_kb
-        txins, change = await prepare_txins_and_change(Decimal(estimated_fee))
+        txouts = [(base_amount, script + pushdata(txids_data))]
+        estimated_fee = Decimal(round((len(txids_data) + len(txouts[-1]))* fee_per_kb, 5))
+        txins, change = await prepare_txins_and_change(base_amount, estimated_fee)
         if txins is None or change is None:
             logger.error("Insufficient funds to store the chunk TXIDs")
             return None
