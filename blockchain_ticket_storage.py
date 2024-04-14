@@ -24,28 +24,8 @@ transaction_semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
 use_parallel = 0
 fee_per_kb = Decimal(0.0001)
 base_amount = Decimal(0.00001)
+psl_to_patoshis_ratio = 100000
 locked_utxos = set()
-
-def unhexstr(str):
-    return binascii.unhexlify(str.encode('utf8'))
-
-class OpCodes:
-    OP_0 = 0x00
-    OP_PUSHDATA1 = 0x4c
-    OP_PUSHDATA2 = 0x4d
-    OP_PUSHDATA4 = 0x4e
-    OP_1NEGATE = 0x4f
-    OP_RESERVED = 0x50
-    OP_1 = 0x51
-    OP_DUP = 0x76
-    OP_HASH160 = 0xa9
-    OP_EQUAL = 0x87
-    OP_EQUALVERIFY = 0x88
-    OP_CHECKSIG = 0xac
-    OP_CHECKMULTISIG = 0xae
-    OP_RETURN = 0x6a
-    
-opcodes = OpCodes()
     
 class JSONRPCException(Exception):
     def __init__(self, rpc_error):
@@ -205,6 +185,27 @@ def compress_data(input_data):
 def decompress_data(compressed_data):
     return zstd.decompress(compressed_data)
 
+def unhexstr(str):
+    return binascii.unhexlify(str.encode('utf8'))
+
+class OpCodes:
+    OP_0 = 0x00
+    OP_PUSHDATA1 = 0x4c
+    OP_PUSHDATA2 = 0x4d
+    OP_PUSHDATA4 = 0x4e
+    OP_1NEGATE = 0x4f
+    OP_RESERVED = 0x50
+    OP_1 = 0x51
+    OP_DUP = 0x76
+    OP_HASH160 = 0xa9
+    OP_EQUAL = 0x87
+    OP_EQUALVERIFY = 0x88
+    OP_CHECKSIG = 0xac
+    OP_CHECKMULTISIG = 0xae
+    OP_RETURN = 0x6a
+    
+opcodes = OpCodes()
+
 async def get_unspent_transactions():
     global rpc_connection
     unspent_transactions = await rpc_connection.listunspent()
@@ -230,7 +231,7 @@ async def select_txins(value, burn_address="44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7
     for tx in valid_unspent:
         # Check if the wallet has the private key for the UTXO's address
         address_info = await rpc_connection.validateaddress(tx['address'])
-        if not address_info['ismine'] and not address_info['iswatchonly'] and not address_info['isvalid']:
+        if not address_info['ismine'] and not address_info['iswatchonly']:
             continue  # Skip this UTXO if the wallet doesn't have the private key
         # Check if the UTXO is still valid and unspent
         txout = await rpc_connection.gettxout(tx['txid'], tx['vout'])
@@ -244,35 +245,16 @@ async def select_txins(value, burn_address="44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7
         raise Exception("Insufficient funds")
     else:
         return selected_txins, total_amount
-    
-async def prepare_txins_and_change(value, estimated_fee):
-    global rpc_connection
-    txins, total_amount = await select_txins(value + estimated_fee)
-    if txins is None or total_amount is None:
-        logger.error("Insufficient funds to store the data")
-        return None, None
-    logger.info(f"Selected UTXOs: {txins}; Estimated transaction fee: {estimated_fee}")
-    change = round(Decimal(total_amount) - Decimal(value) - Decimal(estimated_fee), 5)
-    if change < 0:
-        logger.error("Insufficient funds to cover the transaction fee")
-        return None, None
-    return txins, Decimal(change)
 
 def pushdata(data):
-    if len(data) < 76:
+    if len(data) <= 75:
         return bytes([len(data)]) + data
-    elif len(data) < 256:
-        return bytes([76]) + bytes([len(data)]) + data
-    elif len(data) < 65536:
-        return bytes([77]) + struct.pack('<H', len(data)) + data
+    elif len(data) <= 255:
+        return bytes([opcodes.OP_PUSHDATA1, len(data)]) + data
+    elif len(data) <= 65535:
+        return bytes([opcodes.OP_PUSHDATA2]) + struct.pack('<H', len(data)) + data
     else:
-        return bytes([78]) + struct.pack('<I', len(data)) + data
-
-def build_p2pkh_output_script(pubkey_hash):
-    script = bytes([opcodes.OP_DUP, opcodes.OP_HASH160, len(pubkey_hash)])
-    script += pubkey_hash
-    script += bytes([opcodes.OP_EQUALVERIFY, opcodes.OP_CHECKSIG])
-    return script
+        return bytes([opcodes.OP_PUSHDATA4]) + struct.pack('<I', len(data)) + data
 
 def varint(n):
     if n < 0xfd:
@@ -283,56 +265,80 @@ def varint(n):
         return b'\xfe' + struct.pack('<I', n)
     else:
         return b'\xff' + struct.pack('<Q', n)
-
-async def add_output_transactions(change, txouts):
-    global rpc_connection
-    coin = 100000
-    change_address = await rpc_connection.getnewaddress()
-    pubkey_hash = get_raw_sha256_hash(change_address.encode())
-    script_pubkey = build_p2pkh_output_script(pubkey_hash)
-    txouts.append((int(change * coin), script_pubkey))  # Convert change to patoshis
-    return change
-
-def packtxout(value, scriptPubKey):
-    coin = 100000
-    return struct.pack('<q', int(value * coin)) + varint(len(scriptPubKey)) + scriptPubKey
-
-def packtxin(prevout, scriptSig, seq):
-    return prevout[0] + struct.pack('<I', prevout[1]) + varint(len(scriptSig)) + scriptSig + struct.pack('<I', seq)
-
-def packtx(txins, txouts, expiry_height):
-    version = 4  # Transaction version
-    overwinter_flag = 1 << 31  # Set the "overwintered" flag
-    version |= overwinter_flag
-    version_group_id = 0x892f2085  # Sapling version group ID
-    r = struct.pack('<I', version)  # Transaction version (4 bytes) with "overwintered" flag set
-    r += struct.pack('<I', version_group_id)  # Version group ID (4 bytes)
-    r += varint(len(txins))  # Number of inputs (varint)
-    for txin in txins:
-        r += packtxin((unhexlify(txin['txid']), txin['vout']), b'', 0xffffffff)
-    r += varint(len(txouts))  # Number of outputs (varint)
-    for (value, scriptPubKey) in txouts:
-        r += packtxout(value, scriptPubKey)    
-    locktime = 0
-    r += struct.pack('<i', locktime)  # Lock time (4 bytes)
-    r += struct.pack('<I', expiry_height)  # Expiry height (4 bytes)
-    r += struct.pack('<q', 0)  # Value balance (8 bytes)
-    # Sapling-specific fields
-    shielded_spend = 0
-    shielded_output = 0
-    r += varint(shielded_spend)  # Number of shielded spends (varint)
-    r += varint(shielded_output)  # Number of shielded outputs (varint)
-    if shielded_spend > 0 or shielded_output > 0:
-        consensus_branch_id = 0x5efaaeef  # Vermeer consensus branch ID
-        r += struct.pack('<I', consensus_branch_id)  # Consensus branch ID (4 bytes)
-    return r
-
-async def create_transaction(txins, txouts):
-    expiry_height = await rpc_connection.getblockcount() + 1000  # Set the expiry height to 1000 blocks from the current block height
-    tx = packtx(txins, txouts, expiry_height)
-    hex_transaction = hexlify(tx).decode('utf-8')
-    return hex_transaction
     
+class CMutableTransaction:
+    def __init__(self):
+        self.version = 4  # SAPLING_TX_VERSION
+        self.version_group_id = 0x892f2085  # SAPLING_VERSION_GROUP_ID
+        self.vin = []
+        self.vout = []
+        self.lock_time = 0
+        self.expiry_height = 0
+        self.value_balance = 0
+        self.vShieldedSpend = []
+        self.vShieldedOutput = []
+        self.binding_sig = b'\x00' * 64  # Placeholder binding signature
+
+def packtx(tx):
+    # Serialize transaction fields
+    tx_data = struct.pack('<I', tx.version)  # Transaction version (4 bytes)
+    tx_data += struct.pack('<I', tx.version_group_id)  # Version group ID (4 bytes)
+    # Serialize transaction inputs
+    tx_data += varint(len(tx.vin))  # Number of inputs (varint)
+    for txin in tx.vin:
+        tx_data += unhexlify(txin['txid'])[::-1]  # Transaction ID (32 bytes) in little-endian
+        tx_data += struct.pack('<I', txin['vout'])  # Output index (4 bytes)
+        tx_data += varint(0)  # scriptSig length (varint)
+        tx_data += struct.pack('<I', 0xffffffff)  # Sequence number (4 bytes)
+    # Serialize transaction outputs
+    tx_data += varint(len(tx.vout))  # Number of outputs (varint)
+    for txout in tx.vout:
+        tx_data += struct.pack('<q', int(txout[0]*psl_to_patoshis_ratio))  # Transaction amount in patoshis (8 bytes)
+        tx_data += varint(len(txout[1]))  # scriptPubKey length (varint)
+        tx_data += txout[1]  # scriptPubKey (variable length)
+    tx_data += struct.pack('<I', tx.lock_time)  # Locktime (4 bytes)
+    tx_data += struct.pack('<I', tx.expiry_height)  # Expiry height (4 bytes)
+    tx_data += struct.pack('<q', tx.value_balance)  # Value balance (8 bytes)
+    # Serialize Sapling-specific fields
+    tx_data += varint(len(tx.vShieldedSpend))  # Number of shielded spends (varint)
+    tx_data += varint(len(tx.vShieldedOutput))  # Number of shielded outputs (varint)
+    if tx.vShieldedSpend or tx.vShieldedOutput:
+        consensus_branch_id = 0x5efaaeef  # Vermeer consensus branch ID
+        tx_data += struct.pack('<I', consensus_branch_id)  # Consensus branch ID (4 bytes)
+        tx_data += tx.binding_sig  # Binding signature (64 bytes)
+    return tx_data
+
+def p2fms_script(pubkey):
+    script = bytes([opcodes.OP_1])  # OP_1
+    script += varint(len(pubkey))
+    script += pubkey
+    script += bytes([opcodes.OP_1, opcodes.OP_CHECKMULTISIG])  # OP_1, OP_CHECKMULTISIG
+    return script
+
+async def create_p2fms_transaction(inputs, outputs):
+    global rpc_connection
+    # Create the transaction object
+    tx = CMutableTransaction()
+    # Add selected UTXOs as transaction inputs
+    for utxo in inputs:
+        txin = {
+            'txid': utxo['txid'],
+            'vout': utxo['vout']
+        }
+        tx.vin.append(txin)
+    # Add P2FMS outputs to the transaction
+    for output in outputs:
+        pubkey = unhexlify(output[0])
+        amount = int(output[1] * 100000000)  # Convert to patoshis
+        script = p2fms_script(pubkey)
+        tx.vout.append((amount, script))
+    # Set the expiry height
+    tx.expiry_height = await rpc_connection.getblockcount() + 1000
+    # Serialize the transaction
+    tx_data = packtx(tx)
+    tx_hex = hexlify(tx_data).decode('utf-8')
+    return tx_hex
+
 async def send_transaction(signed_tx):
     global rpc_connection
     try:
@@ -350,7 +356,7 @@ def calculate_transaction_fee(signed_tx):
 async def create_and_send_transaction(txins, txouts, use_parallel=True):
     global rpc_connection
     logger.info(f"Now creating transaction with inputs:\n {txins}; \n and outputs:\n {txouts}")
-    hex_transaction = await create_transaction(txins, txouts)
+    hex_transaction = await create_p2fms_transaction(txins, txouts)
     assert isinstance(hex_transaction, str)
     signed_tx = await rpc_connection.signrawtransaction(hex_transaction)
     if 'errors' in signed_tx.keys():
@@ -376,25 +382,36 @@ async def create_and_send_transaction(txins, txouts, use_parallel=True):
     except Exception as e:
         logger.error(f"Error occurred while sending transaction: {e}")
         raise
-    
+
 def calculate_chunks(data, max_chunk_size):
     num_chunks = (len(data) + max_chunk_size - 1) // max_chunk_size
     chunk_size = (len(data) + num_chunks - 1) // num_chunks
     chunks = [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
     return chunks
 
+async def get_script_for_address():
+    global rpc_connection
+    # Get a new Pastel address for receiving change
+    change_address = await rpc_connection.getrawchangeaddress()
+    # Construct the P2PKH script for the change address
+    script = bytes([opcodes.OP_DUP, opcodes.OP_HASH160, 0x14])  # OP_DUP OP_HASH160 PUSH20
+    script += bytes.fromhex(change_address)
+    script += bytes([opcodes.OP_EQUALVERIFY, opcodes.OP_CHECKSIG])  # OP_EQUALVERIFY OP_CHECKSIG
+    return script
+
 async def store_data_chunk(chunk):
     global rpc_connection
     async with storage_task_semaphore:
         fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
-        script = bytes([opcodes.OP_1, len(fake_pubkey)]) + fake_pubkey + bytes([opcodes.OP_1, opcodes.OP_CHECKMULTISIG])
+        script = p2fms_script(fake_pubkey)
         txouts = [(0, script + pushdata(chunk))]
-        estimated_fee = Decimal(round(len(txouts[-1]) * fee_per_kb, 5))
-        txins, change = await prepare_txins_and_change(base_amount, estimated_fee)
-        if txins is None or change is None:
-            logger.error("Insufficient funds to store the data")
-            return None
-        change = await add_output_transactions(change, txouts)
+        estimated_fee = Decimal(round(len(txouts[-1][1]) * fee_per_kb, 5))
+        selected_utxos, total_amount = await select_txins(base_amount + estimated_fee)
+        txins = [{'txid': utxo['txid'], 'vout': utxo['vout']} for utxo in selected_utxos]
+        change = Decimal(total_amount) - base_amount - estimated_fee
+        if change > 0:
+            change_address = await rpc_connection.getnewaddress()
+            txouts.append((change, get_script_for_address(change_address)))
         transaction_id = await create_and_send_transaction(txins, txouts, use_parallel)
         if transaction_id:
             return transaction_id
@@ -413,15 +430,16 @@ async def store_chunk_txids(chunk_txids):
     global rpc_connection
     async with storage_task_semaphore:
         fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
-        script = bytes([opcodes.OP_1, len(fake_pubkey)]) + fake_pubkey + bytes([opcodes.OP_1, opcodes.OP_CHECKMULTISIG])
+        script = p2fms_script(fake_pubkey)
         txids_data = b''.join(txid.encode() for txid in chunk_txids)
         txouts = [(base_amount, script + pushdata(txids_data))]
-        estimated_fee = Decimal(round((len(txids_data) + len(txouts[-1]))* fee_per_kb, 5))
-        txins, change = await prepare_txins_and_change(base_amount, estimated_fee)
-        if txins is None or change is None:
-            logger.error("Insufficient funds to store the chunk TXIDs")
-            return None
-        change = await add_output_transactions(change, txouts)
+        estimated_fee = Decimal(round((len(txids_data) + len(txouts[-1][1]))* fee_per_kb, 5))
+        selected_utxos, total_amount = await select_txins(base_amount + estimated_fee)
+        txins = [{'txid': utxo['txid'], 'vout': utxo['vout']} for utxo in selected_utxos]
+        change = total_amount - base_amount - estimated_fee
+        if change > 0:
+            change_address = await rpc_connection.getnewaddress()
+            txouts.append((int(change * psl_to_patoshis_ratio), get_script_for_address(change_address)))
         transaction_id = await create_and_send_transaction(txins, txouts, use_parallel)
         if transaction_id:
             return transaction_id
