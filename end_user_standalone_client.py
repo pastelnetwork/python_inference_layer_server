@@ -433,23 +433,30 @@ async def get_closest_supernode_pastelid_from_list(local_pastelid: str, supernod
     return closest_supernode[0]
 
 async def fetch_current_psl_market_price():
-    async with httpx.AsyncClient() as client:
-        try:
-            # Fetch data from CoinMarketCap
-            response_cmc = await client.get("https://coinmarketcap.com/currencies/pastel/")
-            price_cmc = float(re.search(r'price today is \$([0-9\.]+) USD', response_cmc.text).group(1))
-        except (httpx.RequestError, AttributeError, ValueError):
-            price_cmc = None
-        try:
-            # Fetch data from CoinGecko
-            response_cg = await client.get("https://api.coingecko.com/api/v3/simple/price?ids=pastel&vs_currencies=usd")
-            if response_cg.status_code == 200:
-                data = response_cg.json()
-                price_cg = data.get("pastel", {}).get("usd")
-            else:
+    async def check_prices():
+        async with httpx.AsyncClient() as client:
+            try:
+                # Fetch data from CoinMarketCap
+                response_cmc = await client.get("https://coinmarketcap.com/currencies/pastel/")
+                price_cmc = float(re.search(r'price today is \$([0-9\.]+) USD', response_cmc.text).group(1))
+            except (httpx.RequestError, AttributeError, ValueError):
+                price_cmc = None
+            try:
+                # Fetch data from CoinGecko
+                response_cg = await client.get("https://api.coingecko.com/api/v3/simple/price?ids=pastel&vs_currencies=usd")
+                if response_cg.status_code == 200:
+                    data = response_cg.json()
+                    price_cg = data.get("pastel", {}).get("usd")
+                else:
+                    price_cg = None
+            except (httpx.RequestError, AttributeError, ValueError):
                 price_cg = None
-        except (httpx.RequestError, AttributeError, ValueError):
-            price_cg = None
+        return price_cmc, price_cg
+    price_cmc, price_cg = await check_prices()
+    if price_cmc is None and price_cg is None:
+        #Sleep for a couple seconds and try again:
+        await asyncio.sleep(2)
+        price_cmc, price_cg = await check_prices()
     # Calculate the average price
     prices = [price for price in [price_cmc, price_cg] if price is not None]
     if not prices:
@@ -1391,7 +1398,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_request.model_dump()
-        log_action_with_payload("Requesting", "a new Pastel credit pack ticket", payload)
+        log_action_with_payload("requesting", "a new Pastel credit pack ticket", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
                 f"{supernode_url}/credit_purchase_initial_request",
@@ -1408,7 +1415,7 @@ class PastelMessagingClient:
                 logger.error(f"Credit pack purchase request rejected: {result['rejection_reason_string']}")
                 return CreditPackPurchaseRequestRejection.model_validate(result)
             else:
-                log_action_with_payload("Received response to", "credit pack purchase request", result)
+                log_action_with_payload("receiving", "response to credit pack purchase request", result)
                 return CreditPackPurchaseRequestPreliminaryPriceQuote.model_validate(result)
             
     async def calculate_price_difference_percentage(self, quoted_price: float, estimated_price: float) -> float:
@@ -1498,7 +1505,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = price_quote_response.model_dump()
-        log_action_with_payload("Sending", "price quote response to supernode", payload)
+        log_action_with_payload("sending", "price quote response to supernode", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
             response = await client.post(
                 f"{supernode_url}/credit_purchase_preliminary_price_quote_response",
@@ -1516,7 +1523,7 @@ class PastelMessagingClient:
                 return CreditPackPurchaseRequestResponseTermination.model_validate(result)
             else:
                 transformed_result = transform_credit_pack_purchase_request_response(result)
-                log_action_with_payload("Received", "response to credit pack purchase request", transformed_result)
+                log_action_with_payload("receiving", "response to credit pack purchase request", transformed_result)
                 return CreditPackPurchaseRequestResponse.model_validate(transformed_result)
 
     async def check_status_of_credit_purchase_request(self, supernode_url: str, credit_pack_purchase_request_hash: str) -> Union[CreditPackPurchaseRequestResponse, CreditPackPurchaseRequestResponseTermination]:
@@ -1532,7 +1539,7 @@ class PastelMessagingClient:
         )
         # Convert the model instance to JSON payload
         payload = status_check.model_dump()
-        log_action_with_payload("Checking", "status of credit pack purchase request", payload)
+        log_action_with_payload("checking", "status of credit pack purchase request", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
                 f"{supernode_url}/check_status_of_credit_purchase_request",
@@ -1546,10 +1553,10 @@ class PastelMessagingClient:
             response.raise_for_status()
             result = response.json()
             if "termination_reason_string" in result:
-                log_action_with_payload("Received", "termination response from Supernode", result)
+                log_action_with_payload("receiving", "termination response from Supernode", result)
                 return CreditPackPurchaseRequestResponseTermination.model_validate(result)
             else:
-                log_action_with_payload("Received", "credit pack purchase request response from Supernode", result)
+                log_action_with_payload("receiving", "credit pack purchase request response from Supernode", result)
                 return CreditPackPurchaseRequestResponse.model_validate(result)
 
     async def confirm_credit_purchase_request(self, supernode_url: str, credit_pack_purchase_request_confirmation: CreditPackPurchaseRequestConfirmation) -> CreditPackPurchaseRequestConfirmationResponse:
@@ -1558,7 +1565,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_purchase_request_confirmation.model_dump()
-        log_action_with_payload("Confirming", "credit pack purchase request", payload)        
+        log_action_with_payload("confirming", "credit pack purchase request", payload)        
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*30)) as client: # Need to be patient with the timeout here since it requires the transaction to be mined/confirmed
             response = await client.post(
                 f"{supernode_url}/confirm_credit_purchase_request",
@@ -1571,7 +1578,7 @@ class PastelMessagingClient:
             )
             response.raise_for_status()
             result = response.json()
-            log_action_with_payload("Received", "response to credit pack purchase confirmation", result)
+            log_action_with_payload("receiving", "response to credit pack purchase confirmation", result)
             return CreditPackPurchaseRequestConfirmationResponse.model_validate(result)
 
     async def credit_pack_purchase_completion_announcement(self, supernode_url: str, credit_pack_purchase_request_confirmation: CreditPackPurchaseRequestConfirmation) -> None:
@@ -1580,7 +1587,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_purchase_request_confirmation.model_dump()
-        log_action_with_payload("Sending", "purchase completion announcement message", payload)
+        log_action_with_payload("sending", "purchase completion announcement message", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
                 f"{supernode_url}/credit_pack_purchase_completion_announcement",
@@ -1599,7 +1606,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_storage_retry_request.model_dump()
-        log_action_with_payload("Sending", "credit pack storage retry request", payload)
+        log_action_with_payload("sending", "credit pack storage retry request", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
                 f"{supernode_url}/credit_pack_storage_retry_request",
@@ -1612,7 +1619,7 @@ class PastelMessagingClient:
             )
             response.raise_for_status()
             result = response.json()
-            log_action_with_payload("Received", "response to credit pack storage retry request", result)
+            log_action_with_payload("receiving", "response to credit pack storage retry request", result)
             return CreditPackStorageRetryRequestResponse.model_validate(result)
 
     async def credit_pack_storage_retry_completion_announcement(self, supernode_url: str, credit_pack_storage_retry_request_response: CreditPackStorageRetryRequestResponse) -> None:
@@ -1621,7 +1628,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_storage_retry_request_response.model_dump()
-        log_action_with_payload("Sending", "storage retry completion announcement message", payload)
+        log_action_with_payload("sending", "storage retry completion announcement message", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
                 f"{supernode_url}/credit_pack_storage_retry_completion_announcement",
@@ -1640,7 +1647,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = request_data.model_dump()
-        log_action_with_payload("Making", "inference usage request", payload)
+        log_action_with_payload("making", "inference usage request", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
                 f"{supernode_url}/make_inference_api_usage_request",
@@ -1653,7 +1660,7 @@ class PastelMessagingClient:
             )
             response.raise_for_status()
             result = response.json()
-            log_action_with_payload("Received", "response to inference usage request", result)
+            log_action_with_payload("eeceived", "response to inference usage request", result)
             return InferenceAPIUsageResponse.model_validate(result)
 
     async def send_inference_confirmation(self, supernode_url: str, confirmation_data: InferenceConfirmation) -> Dict[str, Any]:
@@ -1662,7 +1669,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = confirmation_data.model_dump()
-        log_action_with_payload("Sending", "inference confirmation", payload)
+        log_action_with_payload("sending", "inference confirmation", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
             response = await client.post(
                 f"{supernode_url}/confirm_inference_request",
@@ -1675,7 +1682,7 @@ class PastelMessagingClient:
             )
             response.raise_for_status()
             result = response.json()
-            log_action_with_payload("Received", "response to inference confirmation", result)
+            log_action_with_payload("receiving", "response to inference confirmation", result)
             return result
 
     async def check_status_of_inference_request_results(self, supernode_url: str, inference_response_id: str) -> bool:
@@ -1685,7 +1692,7 @@ class PastelMessagingClient:
                 response = await client.get(f"{supernode_url}/check_status_of_inference_request_results/{inference_response_id}")
                 response.raise_for_status()
                 result = response.json()
-                log_action_with_payload("Received", f"status of inference request results for ID {inference_response_id}", result)
+                log_action_with_payload("receiving", f"status of inference request results for ID {inference_response_id}", result)
                 return result if isinstance(result, bool) else False
             except httpx.HTTPStatusError as e:
                 logger.error(f"HTTP error in check_status_of_inference_request_results from Supernode URL: {supernode_url}: {e}")
@@ -1706,12 +1713,12 @@ class PastelMessagingClient:
             "challenge_id": challenge_id,
             "challenge_signature": challenge_signature
         }
-        log_action_with_payload("Attempting", f"to retrieve inference output results for response ID {inference_response_id}", params)
+        log_action_with_payload("attempting", f"to retrieve inference output results for response ID {inference_response_id}", params)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(f"{supernode_url}/retrieve_inference_output_results", params=params)
             response.raise_for_status()
             result = response.json()
-            log_action_with_payload("Received", "inference output results", result)
+            log_action_with_payload("receiving", "inference output results", result)
             return InferenceAPIOutputResult.model_validate(result)
 
     async def call_audit_inference_request_response(self, supernode_url: str, inference_response_id: str) -> InferenceAPIUsageResponse:
@@ -1722,12 +1729,12 @@ class PastelMessagingClient:
                 "pastel_id": self.pastelid,
                 "signature": signature
             }
-            log_action_with_payload("Calling", "audit inference request response", payload)
+            log_action_with_payload("calling", "audit inference request response", payload)
             async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
                 response = await client.post(f"{supernode_url}/audit_inference_request_response", json=payload)
                 response.raise_for_status()
                 result = response.json()
-                log_action_with_payload("Received", "response to audit inference request response", result)
+                log_action_with_payload("receiving", "response to audit inference request response", result)
                 return InferenceAPIUsageResponse.model_validate(result)
         except Exception as e:
             logger.error(f"Error in audit_inference_request_response from Supernode URL: {supernode_url}: {e}")
@@ -1741,12 +1748,12 @@ class PastelMessagingClient:
                 "pastel_id": self.pastelid,
                 "signature": signature
             }
-            log_action_with_payload("Calling", "audit inference request result", payload)
+            log_action_with_payload("calling", "audit inference request result", payload)
             async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
                 response = await client.post(f"{supernode_url}/audit_inference_request_result", json=payload)
                 response.raise_for_status()
                 result = response.json()
-                log_action_with_payload("Received", "response to audit inference request result", result)
+                log_action_with_payload("receiving", "response to audit inference request result", result)
                 return InferenceAPIOutputResult.model_validate(result)
         except Exception as e:
             logger.error(f"Error in audit_inference_request_result from Supernode URL: {supernode_url}: {e}")

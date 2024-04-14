@@ -279,38 +279,32 @@ def varint(n):
         return bytes([n])
     elif n < 0xffff:
         return b'\xfd' + struct.pack('<H', n)
+    elif n < 0xffffffff:
+        return b'\xfe' + struct.pack('<I', n)
     else:
-        assert False
+        return b'\xff' + struct.pack('<Q', n)
 
 async def add_output_transactions(change, txouts):
     global rpc_connection
+    coin = 100000
     change_address = await rpc_connection.getnewaddress()
     pubkey_hash = get_raw_sha256_hash(change_address.encode())
     script_pubkey = build_p2pkh_output_script(pubkey_hash)
-    txouts.append((change, script_pubkey))
+    txouts.append((int(change * coin), script_pubkey))  # Convert change to patoshis
     return change
 
 def packtxout(value, scriptPubKey):
     coin = 100000
     return struct.pack('<q', int(value * coin)) + varint(len(scriptPubKey)) + scriptPubKey
 
-def packtxin(prevout, scriptSig, nSequence):
-    r = b''
-    r += prevout[0]  # Previous transaction hash (little-endian)
-    r += struct.pack('<I', prevout[1])  # Previous output index (4 bytes)
-    r += varint(len(scriptSig))  # Script length (varint)
-    r += scriptSig  # Script signature
-    r += struct.pack('<I', nSequence)  # Sequence number (4 bytes)
-    return r
+def packtxin(prevout, scriptSig, seq):
+    return prevout[0] + struct.pack('<I', prevout[1]) + varint(len(scriptSig)) + scriptSig + struct.pack('<I', seq)
 
-def packtx(txins, txouts):
-    expiry_height = 0
-    locktime = 0
-    version = 4
-    overwintered = 1 << 31  # Set the "overwintered" flag
-    version = version | overwintered
+def packtx(txins, txouts, expiry_height):
+    version = 4  # Transaction version
+    overwinter_flag = 1 << 31  # Set the "overwintered" flag
+    version |= overwinter_flag
     version_group_id = 0x892f2085  # Sapling version group ID
-    consensus_branch_id = 0x5efaaeef  # Vermeer consensus branch ID
     r = struct.pack('<I', version)  # Transaction version (4 bytes) with "overwintered" flag set
     r += struct.pack('<I', version_group_id)  # Version group ID (4 bytes)
     r += varint(len(txins))  # Number of inputs (varint)
@@ -318,14 +312,24 @@ def packtx(txins, txouts):
         r += packtxin((unhexlify(txin['txid']), txin['vout']), b'', 0xffffffff)
     r += varint(len(txouts))  # Number of outputs (varint)
     for (value, scriptPubKey) in txouts:
-        r += packtxout(value, scriptPubKey)
-    r += struct.pack('<I', locktime)  # Lock time (4 bytes)
+        r += packtxout(value, scriptPubKey)    
+    locktime = 0
+    r += struct.pack('<i', locktime)  # Lock time (4 bytes)
     r += struct.pack('<I', expiry_height)  # Expiry height (4 bytes)
-    r += struct.pack('<I', consensus_branch_id)  # Consensus branch ID (4 bytes)
+    r += struct.pack('<q', 0)  # Value balance (8 bytes)
+    # Sapling-specific fields
+    shielded_spend = 0
+    shielded_output = 0
+    r += varint(shielded_spend)  # Number of shielded spends (varint)
+    r += varint(shielded_output)  # Number of shielded outputs (varint)
+    if shielded_spend > 0 or shielded_output > 0:
+        consensus_branch_id = 0x5efaaeef  # Vermeer consensus branch ID
+        r += struct.pack('<I', consensus_branch_id)  # Consensus branch ID (4 bytes)
     return r
 
 async def create_transaction(txins, txouts):
-    tx = packtx(txins, txouts)
+    expiry_height = await rpc_connection.getblockcount() + 1000  # Set the expiry height to 1000 blocks from the current block height
+    tx = packtx(txins, txouts, expiry_height)
     hex_transaction = hexlify(tx).decode('utf-8')
     return hex_transaction
     
@@ -345,6 +349,7 @@ def calculate_transaction_fee(signed_tx):
 
 async def create_and_send_transaction(txins, txouts, use_parallel=True):
     global rpc_connection
+    logger.info(f"Now creating transaction with inputs:\n {txins}; \n and outputs:\n {txouts}")
     hex_transaction = await create_transaction(txins, txouts)
     assert isinstance(hex_transaction, str)
     signed_tx = await rpc_connection.signrawtransaction(hex_transaction)
@@ -430,7 +435,7 @@ async def store_data_in_blockchain(input_data):
         uncompressed_data_hash = get_raw_sha256_hash(input_data)
         compressed_data_hash = get_raw_sha256_hash(compressed_data)
         uncompressed_data_length = len(input_data)
-        max_chunk_size = 3000  # Maximum possible is around 9000 bytes
+        max_chunk_size = 800  # Maximum possible is around 9000 bytes
         header = uncompressed_data_length.to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash
         data_with_header = header + compressed_data
         chunks = calculate_chunks(data_with_header, max_chunk_size)
