@@ -309,6 +309,17 @@ def packtx(tx):
     # Serialize Sapling-specific fields
     tx_data += varint(len(tx.vShieldedSpend))  # Number of shielded spends (varint)
     tx_data += varint(len(tx.vShieldedOutput))  # Number of shielded outputs (varint)
+    if tx.vShieldedSpend:
+        tx_data += varint(len(tx.vShieldedSpend))  # Number of shielded spends (varint)
+        # Serialize shielded spends
+    else:
+        tx_data += varint(0)  # No shielded spends
+
+    if tx.vShieldedOutput:
+        tx_data += varint(len(tx.vShieldedOutput))  # Number of shielded outputs (varint)
+        # Serialize shielded outputs
+    else:
+        tx_data += varint(0)  # No shielded outputs    
     if tx.vShieldedSpend or tx.vShieldedOutput:
         consensus_branch_id = 0x5efaaeef  # Vermeer consensus branch ID
         tx_data += struct.pack('<I', consensus_branch_id)  # Consensus branch ID (4 bytes)
@@ -334,9 +345,7 @@ async def create_p2fms_transaction(inputs, outputs):
     for utxo in inputs:
         txin = {
             'txid': utxo['txid'],
-            'vout': utxo['vout'],
-            'scriptSig': '',  # Set scriptSig to an empty script initially
-            'sequence': 0xffffffff  # Set the sequence number to the maximum value
+            'vout': utxo['vout']
         }
         tx.vin.append(txin)
     for output in outputs:  # Add P2FMS outputs to the transaction
