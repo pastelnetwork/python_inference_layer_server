@@ -270,7 +270,10 @@ def varint(n):
     
 class CMutableTransaction:
     def __init__(self):
-        self.version = 4  # SAPLING_TX_VERSION
+        version = 4  #  SAPLING_TX_VERSION
+        overwinter_flag = 1 << 31  # Set the "overwintered" flag
+        version |= overwinter_flag        
+        self.version = version 
         self.version_group_id = 0x892f2085  # SAPLING_VERSION_GROUP_ID
         self.vin = []
         self.vout = []
@@ -290,9 +293,9 @@ def packtx(tx):
     for txin in tx.vin:
         tx_data += unhexlify(txin['txid'])[::-1]  # Transaction ID (32 bytes) in little-endian
         tx_data += struct.pack('<I', txin['vout'])  # Output index (4 bytes)
-        scriptSig = b''  # Empty scriptSig for now
+        scriptSig = ''  # Empty scriptSig for now
         tx_data += varint(len(scriptSig))  # scriptSig length (varint)
-        tx_data += scriptSig  # scriptSig (empty for now)        
+        tx_data += scriptSig.encode()  # scriptSig (empty for now)        
         tx_data += struct.pack('<I', 0xffffffff)  # Sequence number (4 bytes) - default to 0xffffffff
     # Serialize transaction outputs
     tx_data += varint(len(tx.vout))  # Number of outputs (varint)
@@ -309,12 +312,6 @@ def packtx(tx):
     # Serialize Sapling-specific fields
     tx_data += varint(len(tx.vShieldedSpend))  # Number of shielded spends (varint)
     tx_data += varint(len(tx.vShieldedOutput))  # Number of shielded outputs (varint)
-    if tx.vShieldedSpend:
-        tx_data += varint(len(tx.vShieldedSpend))  # Number of shielded spends (varint)
-        # Serialize shielded spends
-    else:
-        tx_data += varint(0)  # No shielded spends
-
     if tx.vShieldedOutput:
         tx_data += varint(len(tx.vShieldedOutput))  # Number of shielded outputs (varint)
         # Serialize shielded outputs
