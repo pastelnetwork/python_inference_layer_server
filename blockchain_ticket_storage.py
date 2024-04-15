@@ -3,10 +3,12 @@ import struct
 import hashlib
 import os
 import asyncio
+import base58
 import base64
 import json
 import random
 import time
+import traceback
 import urllib.parse as urlparse
 from decimal import Decimal
 from binascii import unhexlify, hexlify
@@ -288,12 +290,17 @@ def packtx(tx):
     for txin in tx.vin:
         tx_data += unhexlify(txin['txid'])[::-1]  # Transaction ID (32 bytes) in little-endian
         tx_data += struct.pack('<I', txin['vout'])  # Output index (4 bytes)
-        tx_data += varint(0)  # scriptSig length (varint)
-        tx_data += struct.pack('<I', 0xffffffff)  # Sequence number (4 bytes)
+        scriptSig = b''  # Empty scriptSig for now
+        tx_data += varint(len(scriptSig))  # scriptSig length (varint)
+        tx_data += scriptSig  # scriptSig (empty for now)
+        tx_data += struct.pack('<I', 0xffffffff)  # Sequence number (4 bytes) - default to 0xffffffff
     # Serialize transaction outputs
     tx_data += varint(len(tx.vout))  # Number of outputs (varint)
     for txout in tx.vout:
-        tx_data += struct.pack('<q', int(txout[0]*psl_to_patoshis_ratio))  # Transaction amount in patoshis (8 bytes)
+        amount_patoshis = int(txout[0])  # Transaction amount in patoshis
+        if amount_patoshis < 0 or amount_patoshis > 0xffffffffffffffff:
+            raise ValueError(f"Invalid output amount: {amount_patoshis}")
+        tx_data += struct.pack('<Q', amount_patoshis)  # Transaction amount in patoshis (8 bytes)
         tx_data += varint(len(txout[1]))  # scriptPubKey length (varint)
         tx_data += txout[1]  # scriptPubKey (variable length)
     tx_data += struct.pack('<I', tx.lock_time)  # Locktime (4 bytes)
@@ -309,6 +316,10 @@ def packtx(tx):
     return tx_data
 
 def p2fms_script(pubkey):
+    """ Creates a P2FMS script that can include arbitrary data via fake public keys."""
+    # Ensure that the public key is exactly 33 bytes (compressed public key)
+    if len(pubkey) != 33:
+        raise ValueError("Public key must be 33 bytes long.")
     script = bytes([opcodes.OP_1])  # OP_1
     script += varint(len(pubkey))
     script += pubkey
@@ -326,16 +337,14 @@ async def create_p2fms_transaction(inputs, outputs):
             'vout': utxo['vout']
         }
         tx.vin.append(txin)
-    # Add P2FMS outputs to the transaction
-    for output in outputs:
-        pubkey = unhexlify(output[0])
-        amount = int(output[1] * 100000000)  # Convert to patoshis
-        script = p2fms_script(pubkey)
-        tx.vout.append((amount, script))
-    # Set the expiry height
+    for output in outputs:  # Add P2FMS outputs to the transaction
+        amount_satoshis = int(output[0] * psl_to_patoshis_ratio)  # Convert amount to patoshis
+        script = output[1]
+        tx.vout.append((amount_satoshis, script))
+    lock_time = 0
+    tx.lock_time = lock_time  # Set the lock_time based on the provided value
     tx.expiry_height = await rpc_connection.getblockcount() + 1000
-    # Serialize the transaction
-    tx_data = packtx(tx)
+    tx_data = packtx(tx)  # Serialize the transaction
     tx_hex = hexlify(tx_data).decode('utf-8')
     return tx_hex
 
@@ -393,25 +402,25 @@ async def get_script_for_address():
     global rpc_connection
     # Get a new Pastel address for receiving change
     change_address = await rpc_connection.getrawchangeaddress()
+    # Convert the address to a public key hash (PKH)
+    pubkey_hash = base58.b58decode_check(change_address)[1:]
     # Construct the P2PKH script for the change address
-    script = bytes([opcodes.OP_DUP, opcodes.OP_HASH160, 0x14])  # OP_DUP OP_HASH160 PUSH20
-    script += bytes.fromhex(change_address)
-    script += bytes([opcodes.OP_EQUALVERIFY, opcodes.OP_CHECKSIG])  # OP_EQUALVERIFY OP_CHECKSIG
+    script = bytes([opcodes.OP_DUP, opcodes.OP_HASH160]) + varint(len(pubkey_hash)) + pubkey_hash + bytes([opcodes.OP_EQUALVERIFY, opcodes.OP_CHECKSIG])
     return script
 
 async def store_data_chunk(chunk):
     global rpc_connection
     async with storage_task_semaphore:
         fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
-        script = p2fms_script(fake_pubkey)
-        txouts = [(0, script + pushdata(chunk))]
-        estimated_fee = Decimal(round(len(txouts[-1][1]) * fee_per_kb, 5))
+        script = p2fms_script(fake_pubkey) + pushdata(chunk)  # Create script with embedded data
+        txouts = [(int(base_amount * psl_to_patoshis_ratio), script)]  # Use the script directly in the txouts list
+        estimated_fee = Decimal(round(len(script) * fee_per_kb, 5))
         selected_utxos, total_amount = await select_txins(base_amount + estimated_fee)
         txins = [{'txid': utxo['txid'], 'vout': utxo['vout']} for utxo in selected_utxos]
-        change = Decimal(total_amount) - base_amount - estimated_fee
+        change = int((Decimal(total_amount) - base_amount - estimated_fee)*psl_to_patoshis_ratio)
         if change > 0:
-            change_address = await rpc_connection.getnewaddress()
-            txouts.append((change, get_script_for_address(change_address)))
+            script_for_address = await get_script_for_address()
+            txouts.append((change, script_for_address))
         transaction_id = await create_and_send_transaction(txins, txouts, use_parallel)
         if transaction_id:
             return transaction_id
@@ -432,19 +441,19 @@ async def store_chunk_txids(chunk_txids):
         fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
         script = p2fms_script(fake_pubkey)
         txids_data = b''.join(txid.encode() for txid in chunk_txids)
-        txouts = [(base_amount, script + pushdata(txids_data))]
-        estimated_fee = Decimal(round((len(txids_data) + len(txouts[-1][1]))* fee_per_kb, 5))
+        txouts = [(int(base_amount * psl_to_patoshis_ratio), script + pushdata(txids_data))]
+        estimated_fee = Decimal(round((len(txids_data) + len(txouts[-1][1])) * fee_per_kb, 5))
         selected_utxos, total_amount = await select_txins(base_amount + estimated_fee)
         txins = [{'txid': utxo['txid'], 'vout': utxo['vout']} for utxo in selected_utxos]
-        change = total_amount - base_amount - estimated_fee
+        change = int((total_amount - base_amount - estimated_fee) * psl_to_patoshis_ratio)
         if change > 0:
-            change_address = await rpc_connection.getnewaddress()
-            txouts.append((int(change * psl_to_patoshis_ratio), get_script_for_address(change_address)))
+            change_script = await get_script_for_address()
+            txouts.append((change, change_script))
         transaction_id = await create_and_send_transaction(txins, txouts, use_parallel)
         if transaction_id:
             return transaction_id
         return None
-
+    
 async def store_data_in_blockchain(input_data):
     global rpc_connection
     try:    
@@ -473,9 +482,11 @@ async def store_data_in_blockchain(input_data):
                     return final_txid
         except Exception as e:
             logger.error(f"Error occurred while storing data in the blockchain: {e}")
+            logger.error(traceback.format_exc())
             raise        
     except Exception as e:
         logger.error(f"Error occurred while storing data in the blockchain: {e}")
+        logger.error(traceback.format_exc())
         raise
         
 async def retrieve_data_from_blockchain(txid):
