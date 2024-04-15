@@ -25,7 +25,7 @@ retrieval_task_semaphore = asyncio.BoundedSemaphore(max_retrieval_tasks_in_paral
 transaction_semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
 use_parallel = 0
 fee_per_kb = Decimal(0.0001)
-base_amount = Decimal(0.00001)
+base_amount = Decimal(0.000001)
 psl_to_patoshis_ratio = 100000
 locked_utxos = set()
     
@@ -204,7 +204,6 @@ class OpCodes:
     OP_EQUALVERIFY = 0x88
     OP_CHECKSIG = 0xac
     OP_CHECKMULTISIG = 0xae
-    OP_RETURN = 0x6a
     
 opcodes = OpCodes()
 
@@ -323,16 +322,24 @@ def packtx(tx):
         tx_data += tx.binding_sig  # Binding signature (64 bytes)
     return tx_data
 
-def p2fms_script(pubkey):
-    """ Creates a P2FMS script that can include arbitrary data via fake public keys."""
-    # Ensure that the public key is exactly 33 bytes (compressed public key)
-    if len(pubkey) != 33:
-        raise ValueError("Public key must be 33 bytes long.")
-    script = bytes([opcodes.OP_1])  # OP_1
-    script += varint(len(pubkey))
-    script += pubkey
-    script += bytes([opcodes.OP_1, opcodes.OP_CHECKMULTISIG])  # OP_1, OP_CHECKMULTISIG
+def p2fms_script(valid_pubkey, data_segments):
+    """Creates a P2FMS script with one valid compressed public key and multiple data payloads encoded as fake uncompressed public keys."""
+    if len(valid_pubkey) != 33:
+        raise ValueError("Valid public key must be 33 bytes long.")
+    if len(data_segments) > 19:
+        raise ValueError("Maximum of 19 data payloads allowed.")
+    script = bytes([len(data_segments) + 1])  # OP_n, where n is the number of pubkeys (1 valid + data segments)
+    script += varint(len(valid_pubkey)) + valid_pubkey  # Append the valid pubkey first
+    for segment in data_segments:
+        if len(segment) > 65:
+            raise ValueError("Data segment size must be 65 bytes or less.")
+        script += varint(65) + segment.ljust(65, b'\0')[:65]  # Ensure 65 bytes per fake pubkey
+    script += bytes([opcodes.OP_1, opcodes.OP_CHECKMULTISIG])  # OP_1, OP_CHECKMULTISIG for a 1-of-n multisig
     return script
+
+def segment_data(data, segment_size_in_bytes=65):
+    """ Breaks data into segments of specified size. """
+    return [data[i:i + segment_size_in_bytes] for i in range(0, len(data), segment_size_in_bytes)]
     
 async def create_p2fms_transaction(inputs, outputs):
     global rpc_connection
@@ -383,7 +390,8 @@ async def create_and_send_transaction(txins, txouts, use_parallel=True):
     if not signed_tx['complete']:
         logger.error("Failed to sign all transaction inputs")
         return None
-    logger.info(f"Created signed raw transaction with fields:\n {signed_tx}")
+    decoded_signed_raw_transaction = await rpc_connection.decoderawtransaction(signed_tx['hex'])
+    logger.info(f"Created signed raw transaction with fields:\n {decoded_signed_raw_transaction}")
     hex_signed_transaction = signed_tx['hex']
     try:
         if use_parallel:
@@ -403,9 +411,9 @@ async def create_and_send_transaction(txins, txouts, use_parallel=True):
         raise
 
 def calculate_chunks(data, max_chunk_size):
-    num_chunks = (len(data) + max_chunk_size - 1) // max_chunk_size
+    num_chunks = max(1, (len(data) + max_chunk_size - 1) // max_chunk_size)
     chunk_size = (len(data) + num_chunks - 1) // num_chunks
-    chunks = [data[i:i+chunk_size] for i in range(0, len(data), chunk_size)]
+    chunks = [data[i:i + chunk_size] for i in range(0, len(data), chunk_size)]
     return chunks
 
 async def get_script_for_address():
@@ -424,8 +432,9 @@ async def store_data_chunk(chunk):
         valid_address = await rpc_connection.getnewaddress() # Get a valid public key from the wallet using getnewaddress
         valid_address_info = await rpc_connection.validateaddress(valid_address) # Convert the address to a public key
         valid_pubkey = unhexstr(valid_address_info['pubkey'])
-        script = p2fms_script(valid_pubkey) + pushdata(chunk)  # Create script with embedded data
-        txouts = [(int(base_amount * psl_to_patoshis_ratio), script)]  # Use the script directly in the txouts list
+        data_segments = segment_data(chunk)
+        script = p2fms_script(valid_pubkey, data_segments) # Create script with embedded data
+        txouts = [(int(1), script)]  # Use the script directly in the txouts list
         estimated_fee = Decimal(round(len(script) * fee_per_kb, 5))
         selected_utxos, total_amount = await select_txins(base_amount + estimated_fee)
         txins = [{'txid': utxo['txid'], 'vout': utxo['vout']} for utxo in selected_utxos]
@@ -455,8 +464,9 @@ async def store_chunk_txids(chunk_txids):
         valid_address = await rpc_connection.getnewaddress() # Get a valid public key from the wallet using getnewaddress
         valid_address_info = await rpc_connection.validateaddress(valid_address) # Convert the address to a public key
         valid_pubkey = unhexstr(valid_address_info['pubkey'])
-        script = p2fms_script(valid_pubkey)
-        txids_data = b''.join(txid.encode() for txid in chunk_txids)
+        data_segments = segment_data(chunk_txids)
+        script = p2fms_script(valid_pubkey, data_segments)
+        txids_data = b''.join(unhexstr(txid) for txid in chunk_txids)  # Store TXIDs in binary form
         txouts = [(int(base_amount * psl_to_patoshis_ratio), script + pushdata(txids_data))]
         estimated_fee = Decimal(round((len(txids_data) + len(txouts[-1][1])) * fee_per_kb, 5))
         selected_utxos, total_amount = await select_txins(base_amount + estimated_fee)
@@ -480,7 +490,7 @@ async def store_data_in_blockchain(input_data):
         uncompressed_data_hash = get_raw_sha256_hash(input_data)
         compressed_data_hash = get_raw_sha256_hash(compressed_data)
         uncompressed_data_length = len(input_data)
-        max_chunk_size = 800  # Maximum possible is around 9000 bytes
+        max_chunk_size = 65*19  # Maximum possible is 1235 bytes because we can store data in 19 fake full-sized keys in p2fms
         header = uncompressed_data_length.to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash
         data_with_header = header + compressed_data
         chunks = calculate_chunks(data_with_header, max_chunk_size)
@@ -515,9 +525,9 @@ async def retrieve_data_from_blockchain(txid):
         script = unhexstr(output['scriptPubKey']['hex'])
         if script[0] == opcodes.OP_1 and script[-1] == opcodes.OP_CHECKMULTISIG:
             data = script[35:]  # Skip the fake multisig script
-            if len(data) > 64:  # Check if the data is a chunk or chunk TXIDs
+            if len(data) > 32:  # Check if the data is a chunk or chunk TXIDs
                 try: # Try to decode the data as chunk TXIDs
-                    chunk_txids = [data[i:i+64].decode() for i in range(0, len(data), 64)]
+                    chunk_txids = [hexlify(data[i:i+32]).decode() for i in range(0, len(data), 32)]
                     data_chunks = []
                     for txid in chunk_txids:
                         chunk = await retrieve_chunk(txid)
