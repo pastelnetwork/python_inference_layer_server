@@ -3,6 +3,7 @@ import hashlib
 import os
 import asyncio
 import base64
+import base58
 import json
 import random
 import time
@@ -25,8 +26,24 @@ use_parallel = 0
 fee_per_kb = Decimal(0.0001)
 base_amount = Decimal(0.000001)
 psl_to_patoshis_ratio = 100000
-burn_address="44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7"
     
+def get_network_info(rpc_port):
+    if rpc_port == '9932':
+        network = 'mainnet'
+        burn_address = 'PtpasteLBurnAddressXXXXXXXXXXbJ5ndd'
+        address_prefix_bytes = b'\x19'  # Mainnet address prefix byte
+    elif rpc_port == '19932':
+        network = 'testnet'
+        burn_address = 'tPpasteLBurnAddressXXXXXXXXXXX3wy7u'
+        address_prefix_bytes = b'\x7f'  # Testnet address prefix byte
+    elif rpc_port == '29932':
+        network = 'devnet'
+        burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7'
+        address_prefix_bytes = b'\x1c'  # Devnet address prefix byte
+    else:
+        raise ValueError(f"Unknown RPC port: {rpc_port}")
+    return network, burn_address, address_prefix_bytes
+
 class JSONRPCException(Exception):
     def __init__(self, rpc_error):
         parent_args = []
@@ -229,22 +246,46 @@ async def select_txins(value, number_of_utxos_to_review=10):
         return selected_txins, Decimal(total_amount)
 
 async def p2fms_script(data_segments):
-    if len(data_segments) > 19:
-        raise ValueError("Maximum of 19 data payloads allowed.")
-    keys = [burn_address]
+    global rpc_connection
+    if network == 'mainnet':
+        address_prefix_bytes = b'\x38\x87'  # Prefix for mainnet
+    elif network == 'testnet':
+        address_prefix_bytes = b'\x78\xcd'  # Prefix for testnet
+    elif network == 'devnet':
+        address_prefix_bytes = b'\x0f\x21'  # Prefix for devnet
+    else:
+        raise ValueError("Invalid network type specified")
+    keys_required_to_spend = 1
+    if len(data_segments) > 15:
+        raise ValueError("Maximum of 15 data payloads allowed.")
+    valid_address = await rpc_connection.getnewaddress()  # Get a valid address from the wallet
+    keys = [valid_address]
     for segment in data_segments:
-        if len(segment) > 65:
-            raise ValueError("Data segment size must be 65 bytes or less.")
-        keys.append(segment.ljust(65, b'\0')[:65].hex())
-    result = await rpc_connection.createmultisig(1, keys)
-    multisig_address = result["multisigaddress"]
+        if len(segment) > 19:
+            raise ValueError("Data segment size must be 19 bytes or less.")
+        fake_address_bytes = address_prefix_bytes + segment.ljust(19, b'\0')
+        checksum = hashlib.sha256(hashlib.sha256(fake_address_bytes).digest()).digest()[:4]
+        fake_address = base58.b58encode_check(fake_address_bytes + checksum).decode()
+        validate_address_check = await rpc_connection.validateaddress(fake_address)
+        if validate_address_check['isvalid']:
+            keys.append(fake_address)
+        else:
+            raise ValueError("Invalid fake address generated.")
+    result = await rpc_connection.createmultisig(keys_required_to_spend, keys)
+    multisig_address = result["address"]
     hex_encoded_redemption_script = result["redeemScript"]
-    decoded_redemption_script = unhexstr(hex_encoded_redemption_script)
-    logger.info(f"Created P2FMS address:\n {multisig_address} \nWith redeemScript: {hex_encoded_redemption_script}; \nAnd decoded redeemScript: {decoded_redemption_script}")
+    decoded_redemption_script = bytes.fromhex(hex_encoded_redemption_script).decode('utf-8')
+    logger.info(f"Created P2FMS address: {multisig_address} with redeemScript: {decoded_redemption_script}")
     return multisig_address, decoded_redemption_script
 
-def segment_data(data, segment_size_in_bytes=65):
-    data_segments = [data[i:i + segment_size_in_bytes] for i in range(0, len(data), segment_size_in_bytes)]
+def segment_data(data):
+    segment_size_in_bytes = 19  # The size of arbitrary data that can be stored in a fake address
+    data_segments = []
+    remaining_data = data
+    while len(remaining_data) > 0:
+        segment = remaining_data[:segment_size_in_bytes]
+        data_segments.append(segment)
+        remaining_data = remaining_data[segment_size_in_bytes:]
     return data_segments
     
 async def create_p2fms_transaction(inputs, outputs):
@@ -256,12 +297,20 @@ async def create_p2fms_transaction(inputs, outputs):
             'txid': utxo['txid'],
             'vout': utxo['vout']
         })
-    # Create the transaction outputs
-    transaction_outputs = {}
-    for output in outputs:
-        amount = output[0]
-        script = output[1]
-        transaction_outputs[script] = amount
+    transaction_outputs = {} 
+    for output in outputs: # Create the transaction outputs
+        if isinstance(output, tuple):
+            address, amount = output
+            transaction_outputs[address] = float(amount)
+        else:
+            transaction_outputs[output] = float(base_amount)
+    # Calculate the change amount
+    total_input_amount = sum(utxo['amount'] for utxo in inputs)
+    total_output_amount = sum(transaction_outputs.values())
+    change_amount = total_input_amount - total_output_amount - fee_per_kb
+    if change_amount > 0:
+        change_address = await rpc_connection.getrawchangeaddress()
+        transaction_outputs[change_address] = float(change_amount)
     # Create the raw transaction
     raw_transaction = await rpc_connection.createrawtransaction(transaction_inputs, transaction_outputs)
     return raw_transaction
@@ -309,18 +358,16 @@ async def create_and_send_transaction(txins, txouts, use_parallel=True):
         raise
 
 def calculate_chunks(data):
-    max_segments_per_chunk=19 # Max signatures in a multisig is 20, but the first one has to be a real valid pubkey (we use the burn address for this), leaving 19 slots for arbitrary data
-    segment_size_in_bytes=65 # Each of the 19 available slots for arbitrary data can be up to 65 bytes long (for hex-encoded public keys) or 33 bytes long (regular PSL addresses)
-    max_chunk_size = max_segments_per_chunk * segment_size_in_bytes
-    num_chunks = max(1, (len(data) + max_chunk_size - 1) // max_chunk_size)
-    chunk_size = (len(data) + num_chunks - 1) // num_chunks
+    max_segments_per_chunk = 15  # Max signatures in a multisig is 16, but the first one has to be a real valid address, leaving 15 slots for arbitrary data
+    segment_size_in_bytes = 19  # Each of the 15 available slots for arbitrary data can be up to 19 bytes long (for fake addresses)
+    max_chunk_size = max_segments_per_chunk * segment_size_in_bytes - 2  # 283 bytes, but we use 2 bytes for an index number for each chunk
+    num_chunks = (len(data) + max_chunk_size - 1) // max_chunk_size
     chunks = []
-    for i in range(0, len(data), chunk_size):
-        chunk = data[i:i + chunk_size]
-        num_segments = min(max_segments_per_chunk, (len(chunk) + segment_size_in_bytes - 1) // segment_size_in_bytes)
-        padded_chunk_size = num_segments * segment_size_in_bytes
-        padded_chunk = chunk.ljust(padded_chunk_size, b'\0')
-        chunks.append(padded_chunk)
+    for i in range(num_chunks):
+        start_index = i * max_chunk_size
+        end_index = min((i + 1) * max_chunk_size, len(data))
+        chunk = data[start_index:end_index]
+        chunks.append(chunk)
     return chunks
 
 async def store_data_chunks(chunks):
@@ -496,4 +543,5 @@ def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~
     return rpchost, rpcport, rpcuser, rpcpassword, other_flags
 
 rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
+network, burn_address, address_prefix_bytes = get_network_info(rpc_port)
 rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
