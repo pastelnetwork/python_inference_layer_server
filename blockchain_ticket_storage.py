@@ -202,9 +202,6 @@ def compress_data(input_data):
 def decompress_data(compressed_data):
     return zstd.decompress(compressed_data)
 
-def unhexstr(str):
-    return binascii.unhexlify(str.encode('utf8'))
-
 async def get_unspent_transactions():
     global rpc_connection
     unspent_transactions = await rpc_connection.listunspent()
@@ -244,42 +241,133 @@ async def select_txins(value, number_of_utxos_to_review=10):
         raise Exception("Insufficient funds")
     else:
         return selected_txins, Decimal(total_amount)
+class OpCodes:
+    OP_0 = 0x00
+    OP_PUSHDATA1 = 0x4c
+    OP_PUSHDATA2 = 0x4d
+    OP_PUSHDATA4 = 0x4e
+    OP_1NEGATE = 0x4f
+    OP_RESERVED = 0x50
+    OP_1 = 0x51
+    OP_DUP = 0x76
+    OP_HASH160 = 0xa9
+    OP_EQUAL = 0x87
+    OP_EQUALVERIFY = 0x88
+    OP_CHECKSIG = 0xac
+    OP_CHECKMULTISIG = 0xae
+    OP_RETURN = 0x6a
+    
+opcodes = OpCodes()
+
+def unhexstr(str):
+    return binascii.unhexlify(str.encode('utf8'))
+
+def pushdata(data):
+    if len(data) <= 75:
+        return bytes([len(data)]) + data
+    elif len(data) <= 255:
+        return bytes([opcodes.OP_PUSHDATA1, len(data)]) + data
+    elif len(data) <= 65535:
+        return bytes([opcodes.OP_PUSHDATA2]) + struct.pack('<H', len(data)) + data
+    else:
+        return bytes([opcodes.OP_PUSHDATA4]) + struct.pack('<I', len(data)) + data
+
+def varint(n):
+    if n < 0xfd:
+        return bytes([n])
+    elif n < 0xffff:
+        return b'\xfd' + struct.pack('<H', n)
+    elif n < 0xffffffff:
+        return b'\xfe' + struct.pack('<I', n)
+    else:
+        return b'\xff' + struct.pack('<Q', n)
+class CMutableTransaction:
+    def __init__(self):
+        version = 4  #  SAPLING_TX_VERSION
+        overwinter_flag = 1 << 31  # Set the "overwintered" flag
+        version |= overwinter_flag        
+        self.version = version 
+        self.version_group_id = 0x892f2085  # SAPLING_VERSION_GROUP_ID
+        self.vin = []
+        self.vout = []
+        self.lock_time = 0
+        self.expiry_height = 0
+        self.value_balance = 0
+        self.vShieldedSpend = []
+        self.vShieldedOutput = []
+        self.binding_sig = b'\x00' * 64  # Placeholder binding signature
+
+def packtx(tx):
+    # Serialize transaction fields
+    tx_data = struct.pack('<I', tx.version)  # Transaction version (4 bytes)
+    tx_data += struct.pack('<I', tx.version_group_id)  # Version group ID (4 bytes)
+    # Serialize transaction inputs
+    tx_data += varint(len(tx.vin))  # Number of inputs (varint)
+    for txin in tx.vin:
+        tx_data += unhexlify(txin['txid'])[::-1]  # Transaction ID (32 bytes) in little-endian
+        tx_data += struct.pack('<I', txin['vout'])  # Output index (4 bytes)
+        scriptSig = ''  # Empty scriptSig for now
+        tx_data += varint(len(scriptSig))  # scriptSig length (varint)
+        tx_data += scriptSig.encode()  # scriptSig (empty for now)        
+        tx_data += struct.pack('<I', 0xffffffff)  # Sequence number (4 bytes) - default to 0xffffffff
+    # Serialize transaction outputs
+    tx_data += varint(len(tx.vout))  # Number of outputs (varint)
+    for txout in tx.vout:
+        amount_patoshis = int(txout[0])  # Transaction amount in patoshis
+        if amount_patoshis < 0 or amount_patoshis > 0xffffffffffffffff:
+            raise ValueError(f"Invalid output amount: {amount_patoshis}")
+        tx_data += struct.pack('<Q', amount_patoshis)  # Transaction amount in patoshis (8 bytes)
+        tx_data += varint(len(txout[1]))  # scriptPubKey length (varint)
+        tx_data += txout[1]  # scriptPubKey (variable length)
+    tx_data += struct.pack('<I', tx.lock_time)  # Locktime (4 bytes)
+    tx_data += struct.pack('<I', tx.expiry_height)  # Expiry height (4 bytes)
+    tx_data += struct.pack('<q', tx.value_balance)  # Value balance (8 bytes)
+    # Serialize Sapling-specific fields
+    tx_data += varint(len(tx.vShieldedSpend))  # Number of shielded spends (varint)
+    tx_data += varint(len(tx.vShieldedOutput))  # Number of shielded outputs (varint)
+    if tx.vShieldedOutput:
+        tx_data += varint(len(tx.vShieldedOutput))  # Number of shielded outputs (varint)
+        # Serialize shielded outputs
+    else:
+        tx_data += varint(0)  # No shielded outputs    
+    if tx.vShieldedSpend or tx.vShieldedOutput:
+        consensus_branch_id = 0x5efaaeef  # Vermeer consensus branch ID
+        tx_data += struct.pack('<I', consensus_branch_id)  # Consensus branch ID (4 bytes)
+        tx_data += tx.binding_sig  # Binding signature (64 bytes)
+    return tx_data
+
+def createmultisig(pubkeys, address_prefix_bytes):
+    num_required = 1
+    if len(pubkeys) > 16:
+        raise ValueError("Number of addresses involved in the multisignature address creation > 16\nReduce the number")
+    script = bytes([opcodes.OP_1 + num_required - 1])
+    for pubkey in pubkeys:
+        script += pushdata(unhexstr(pubkey))
+    script += bytes([opcodes.OP_1 + len(pubkeys) - 1, opcodes.OP_CHECKMULTISIG])
+    script_hash = hashlib.sha256(script).digest()
+    script_hash = hashlib.new('ripemd160', script_hash).digest()
+    multisig_address = base58.b58encode_check(address_prefix_bytes + script_hash).decode()
+    generated_multisig = {"multisigaddress": multisig_address, "redeemScript": script.hex()}
+    return generated_multisig
 
 async def p2fms_script(data_segments):
-    global rpc_connection
-    if network == 'mainnet':
-        address_prefix_bytes = b'\x38\x87'  # Prefix for mainnet
-    elif network == 'testnet':
-        address_prefix_bytes = b'\x78\xcd'  # Prefix for testnet
-    elif network == 'devnet':
-        address_prefix_bytes = b'\x0f\x21'  # Prefix for devnet
-    else:
-        raise ValueError("Invalid network type specified")
-    keys_required_to_spend = 1
     if len(data_segments) > 15:
         raise ValueError("Maximum of 15 data payloads allowed.")
     valid_address = await rpc_connection.getnewaddress()  # Get a valid address from the wallet
-    keys = [valid_address]
+    keys = [valid_address]    
     for segment in data_segments:
-        if len(segment) > 19:
-            raise ValueError("Data segment size must be 19 bytes or less.")
-        fake_address_bytes = address_prefix_bytes + segment.ljust(19, b'\0')
-        checksum = hashlib.sha256(hashlib.sha256(fake_address_bytes).digest()).digest()[:4]
-        fake_address = base58.b58encode_check(fake_address_bytes + checksum).decode()
-        validate_address_check = await rpc_connection.validateaddress(fake_address)
-        if validate_address_check['isvalid']:
-            keys.append(fake_address)
-        else:
-            raise ValueError("Invalid fake address generated.")
-    result = await rpc_connection.createmultisig(keys_required_to_spend, keys)
-    multisig_address = result["address"]
+        if len(segment) > 65:
+            raise ValueError("Data segment size must be 65 bytes or less.")
+        keys.append(segment.ljust(65, b'\0')[:65].hex())
+    result = createmultisig(keys)
+    multisig_address = result["multisigaddress"]
     hex_encoded_redemption_script = result["redeemScript"]
-    decoded_redemption_script = bytes.fromhex(hex_encoded_redemption_script).decode('utf-8')
-    logger.info(f"Created P2FMS address: {multisig_address} with redeemScript: {decoded_redemption_script}")
+    decoded_redemption_script = unhexstr(hex_encoded_redemption_script)
+    logger.info(f"Created P2FMS address:\n {multisig_address} \nWith redeemScript: {hex_encoded_redemption_script}; \nAnd decoded redeemScript: {decoded_redemption_script}")
     return multisig_address, decoded_redemption_script
 
 def segment_data(data):
-    segment_size_in_bytes = 19  # The size of arbitrary data that can be stored in a fake address
+    segment_size_in_bytes = 65  # The size of arbitrary data that can be stored in a fake pubkey
     data_segments = []
     remaining_data = data
     while len(remaining_data) > 0:
@@ -323,6 +411,11 @@ async def send_transaction(signed_tx):
     except Exception as e:
         logger.error(f"Error occurred while sending transaction: {e}")
         raise
+    
+def calculate_transaction_fee(signed_tx):
+    tx_size = len(signed_tx['hex']) / 2  # Convert bytes to virtual size
+    fee = Decimal(tx_size) * fee_per_kb / 1000  # Calculate fee based on virtual size
+    return fee    
 
 async def create_and_send_transaction(txins, txouts, use_parallel=True):
     global rpc_connection
@@ -359,8 +452,8 @@ async def create_and_send_transaction(txins, txouts, use_parallel=True):
 
 def calculate_chunks(data):
     max_segments_per_chunk = 15  # Max signatures in a multisig is 16, but the first one has to be a real valid address, leaving 15 slots for arbitrary data
-    segment_size_in_bytes = 19  # Each of the 15 available slots for arbitrary data can be up to 19 bytes long (for fake addresses)
-    max_chunk_size = max_segments_per_chunk * segment_size_in_bytes - 2  # 283 bytes, but we use 2 bytes for an index number for each chunk
+    segment_size_in_bytes = 65  # Each of the 15 available slots for arbitrary data can be up to 65 bytes (the size of a pubkey)
+    max_chunk_size = max_segments_per_chunk*segment_size_in_bytes - 2  # Subtract 2 bytes for the index
     num_chunks = (len(data) + max_chunk_size - 1) // max_chunk_size
     chunks = []
     for i in range(num_chunks):
