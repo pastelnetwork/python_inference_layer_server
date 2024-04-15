@@ -292,7 +292,7 @@ def packtx(tx):
         tx_data += struct.pack('<I', txin['vout'])  # Output index (4 bytes)
         scriptSig = b''  # Empty scriptSig for now
         tx_data += varint(len(scriptSig))  # scriptSig length (varint)
-        tx_data += scriptSig  # scriptSig (empty for now)
+        tx_data += scriptSig  # scriptSig (empty for now)        
         tx_data += struct.pack('<I', 0xffffffff)  # Sequence number (4 bytes) - default to 0xffffffff
     # Serialize transaction outputs
     tx_data += varint(len(tx.vout))  # Number of outputs (varint)
@@ -334,7 +334,9 @@ async def create_p2fms_transaction(inputs, outputs):
     for utxo in inputs:
         txin = {
             'txid': utxo['txid'],
-            'vout': utxo['vout']
+            'vout': utxo['vout'],
+            'scriptSig': '',  # Set scriptSig to an empty script initially
+            'sequence': 0xffffffff  # Set the sequence number to the maximum value
         }
         tx.vin.append(txin)
     for output in outputs:  # Add P2FMS outputs to the transaction
@@ -366,6 +368,7 @@ async def create_and_send_transaction(txins, txouts, use_parallel=True):
     global rpc_connection
     logger.info(f"Now creating transaction with inputs:\n {txins}; \n and outputs:\n {txouts}")
     hex_transaction = await create_p2fms_transaction(txins, txouts)
+    logger.info(f"Hex raw transaction created before signing: {hex_transaction}")
     assert isinstance(hex_transaction, str)
     signed_tx = await rpc_connection.signrawtransaction(hex_transaction)
     if 'errors' in signed_tx.keys():
@@ -417,7 +420,9 @@ async def store_data_chunk(chunk):
         estimated_fee = Decimal(round(len(script) * fee_per_kb, 5))
         selected_utxos, total_amount = await select_txins(base_amount + estimated_fee)
         txins = [{'txid': utxo['txid'], 'vout': utxo['vout']} for utxo in selected_utxos]
-        change = int((total_amount * psl_to_patoshis_ratio) - (base_amount * psl_to_patoshis_ratio) - (estimated_fee * psl_to_patoshis_ratio))
+        total_input_amount = Decimal(total_amount)*Decimal(psl_to_patoshis_ratio)
+        total_output_amount = (base_amount + estimated_fee)*Decimal(psl_to_patoshis_ratio)  
+        change = int(total_input_amount - total_output_amount)
         if change > 0:
             script_for_address = await get_script_for_address()
             txouts.append((change, script_for_address))
@@ -445,7 +450,9 @@ async def store_chunk_txids(chunk_txids):
         estimated_fee = Decimal(round((len(txids_data) + len(txouts[-1][1])) * fee_per_kb, 5))
         selected_utxos, total_amount = await select_txins(base_amount + estimated_fee)
         txins = [{'txid': utxo['txid'], 'vout': utxo['vout']} for utxo in selected_utxos]
-        change = int((total_amount * psl_to_patoshis_ratio) - (base_amount * psl_to_patoshis_ratio) - (estimated_fee * psl_to_patoshis_ratio))
+        total_input_amount = Decimal(total_amount)*Decimal(psl_to_patoshis_ratio)
+        total_output_amount = (base_amount + estimated_fee)*Decimal(psl_to_patoshis_ratio)  
+        change = int(total_input_amount - total_output_amount)
         if change > 0:
             change_script = await get_script_for_address()
             txouts.append((change, change_script))
