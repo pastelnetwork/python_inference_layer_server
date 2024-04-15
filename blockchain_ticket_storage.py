@@ -420,8 +420,10 @@ async def get_script_for_address():
 async def store_data_chunk(chunk):
     global rpc_connection
     async with storage_task_semaphore:
-        fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
-        script = p2fms_script(fake_pubkey) + pushdata(chunk)  # Create script with embedded data
+        valid_address = await rpc_connection.getnewaddress() # Get a valid public key from the wallet using getnewaddress
+        valid_address_info = await rpc_connection.validateaddress(valid_address) # Convert the address to a public key
+        valid_pubkey = valid_address_info['pubkey']
+        script = p2fms_script(valid_pubkey) + pushdata(chunk)  # Create script with embedded data
         txouts = [(int(base_amount * psl_to_patoshis_ratio), script)]  # Use the script directly in the txouts list
         estimated_fee = Decimal(round(len(script) * fee_per_kb, 5))
         selected_utxos, total_amount = await select_txins(base_amount + estimated_fee)
@@ -449,8 +451,10 @@ async def store_data_chunks(chunks):
 async def store_chunk_txids(chunk_txids):
     global rpc_connection
     async with storage_task_semaphore:
-        fake_pubkey = os.urandom(33)  # Generate a random 33-byte public key
-        script = p2fms_script(fake_pubkey)
+        valid_address = await rpc_connection.getnewaddress() # Get a valid public key from the wallet using getnewaddress
+        valid_address_info = await rpc_connection.validateaddress(valid_address) # Convert the address to a public key
+        valid_pubkey = valid_address_info['pubkey']
+        script = p2fms_script(valid_pubkey)
         txids_data = b''.join(txid.encode() for txid in chunk_txids)
         txouts = [(int(base_amount * psl_to_patoshis_ratio), script + pushdata(txids_data))]
         estimated_fee = Decimal(round((len(txids_data) + len(txouts[-1][1])) * fee_per_kb, 5))
