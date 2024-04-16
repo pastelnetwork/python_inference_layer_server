@@ -8,7 +8,7 @@ import json
 import random
 import time
 import traceback
-from binascii import unhexlify, hexlify
+from binascii import unhexlify, hexlify, a2b_hex
 import urllib.parse as urlparse
 from decimal import Decimal
 import zstandard as zstd
@@ -177,12 +177,12 @@ class AsyncAuthServiceProxy:
         elif elapsed_time < self.circuit_breaker_timeout / 2:
             self.circuit_breaker_timeout = max(self.circuit_breaker_timeout * 0.8, 60)
 
-def get_sha256_hash(input_data):
+def get_sha3_256_hash(input_data):
     if isinstance(input_data, str):
         input_data = input_data.encode('utf-8')
     return hashlib.sha3_256(input_data).hexdigest()
     
-def get_raw_sha256_hash(input_data):
+def get_raw_sha3_256_hash(input_data):
     if isinstance(input_data, str):
         input_data = input_data.encode('utf-8')
     return hashlib.sha3_256(input_data).digest()
@@ -366,10 +366,12 @@ async def store_data_in_blockchain(input_data):
     global rpc_connection
     try:    
         compressed_data = compress_data(input_data)
-        uncompressed_data_hash = get_raw_sha256_hash(input_data)
-        compressed_data_hash = get_raw_sha256_hash(compressed_data)
-        uncompressed_data_length = len(input_data)
-        header = uncompressed_data_length.to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash
+        uncompressed_data_hash = get_raw_sha3_256_hash(input_data)
+        compressed_data_hash = get_raw_sha3_256_hash(compressed_data)
+        compressed_data_length = len(compressed_data)
+        identifier = "CREDIT_PACK_STORAGE_TICKET"
+        identifier_padded = identifier.encode('utf-8').ljust(32, b'\x00')  # Pad the identifier to 32 bytes
+        header = identifier_padded + compressed_data_length.to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash
         data_with_header = header + compressed_data
         combined_data_hex = hexlify(data_with_header)
         txins, change = await select_txins(0.00001)
@@ -414,34 +416,41 @@ async def store_data_in_blockchain(input_data):
 
 async def retrieve_data_from_blockchain(txid):
     global rpc_connection
-    raw_transaction = await rpc_connection.getrawtransaction(txid)
-    outputs = raw_transaction.split('0100000000000000')
-    encoded_hex_data = ''
-    for output in outputs[1:-2]:  # there are 3 65-byte parts in this that we need
-        cur = 6
-        encoded_hex_data += output[cur:cur+130]
-        cur += 132
-        encoded_hex_data += output[cur:cur+130]
-        cur += 132
-        encoded_hex_data += output[cur:cur+130]
-    encoded_hex_data += outputs[-2][6:-4]
-    reconstructed_combined_data = unhexstr(encoded_hex_data)
-    uncompressed_data_length = int.from_bytes(reconstructed_combined_data[:2], 'big')
-    uncompressed_data_hash = reconstructed_combined_data[2:34]
-    compressed_data_hash = reconstructed_combined_data[34:66]
-    compressed_data = reconstructed_combined_data[66:]
-    if get_raw_sha256_hash(compressed_data) != compressed_data_hash:
-        logger.error("Compressed data hash verification failed")
+    try:
+        # Get the raw transaction from the blockchain using the transaction ID
+        raw_transaction = await rpc_connection.getrawtransaction(txid, 1)  # Verbose output includes decoded data
+        outputs = raw_transaction['vout']  # Extract outputs from the transaction
+        # Concatenate all scriptPubKey hex strings excluding the last two (change and receiving address outputs)
+        encoded_hex_data = ''.join(output['scriptPubKey']['hex'] for output in outputs[:-2])
+        # Decode the hex data to bytes, then extract the header and compressed data
+        reconstructed_combined_data = unhexlify(encoded_hex_data)
+        # Extract the identifier
+        identifier_padded = reconstructed_combined_data[:32]
+        identifier = identifier_padded.rstrip(b'\x00').decode('utf-8')  # Strip padding and decode
+        logger.info(f"Found Blockchain Ticket with Identifier: {identifier}")
+        # Define the header size with the identifier included
+        header_size = 32 + 2 + 32 + 32  # Identifier (32 bytes) + lengths and hashes
+        compressed_data_length = int.from_bytes(reconstructed_combined_data[32:34], 'big')
+        uncompressed_data_hash = reconstructed_combined_data[34:66]
+        compressed_data_hash = reconstructed_combined_data[66:98]
+        compressed_data = reconstructed_combined_data[header_size:header_size + compressed_data_length]
+        # Validate the compressed data hash
+        if get_raw_sha3_256_hash(compressed_data) != compressed_data_hash:
+            logger.error("Compressed data hash verification failed")
+            return None
+        # Decompress the data and validate the uncompressed data hash and length
+        decompressed_data = decompress_data(compressed_data)
+        if get_raw_sha3_256_hash(decompressed_data) != uncompressed_data_hash:
+            logger.error("Uncompressed data hash verification failed")
+            return None
+        # Log successful retrieval and return the decompressed data
+        logger.info(f"Data retrieved successfully from the blockchain. Length: {len(decompressed_data)} bytes")
+        return decompressed_data
+    except Exception as e:
+        logger.error(f"Error occurred while retrieving data from the blockchain: {e}")
+        traceback.print_exc()
         return None
-    decompressed_data = decompress_data(compressed_data)
-    if get_raw_sha256_hash(decompressed_data) != uncompressed_data_hash:
-        logger.error("Uncompressed data hash verification failed")
-        return None
-    if len(decompressed_data) != uncompressed_data_length:
-        logger.error("Uncompressed data length verification failed")
-        return None
-    logger.info(f"Data retrieved successfully from the blockchain. Length: {len(decompressed_data)} bytes")
-    return decompressed_data
+
             
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
