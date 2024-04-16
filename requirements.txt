@@ -9,6 +9,7 @@ httpx
 magika
 mistralai
 pandas
+plyvel
 psutil
 python-decouple
 python-Levenshtein

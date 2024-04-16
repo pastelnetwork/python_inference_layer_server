@@ -1421,7 +1421,7 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
     try:
         logger.info("Now attempting to write the ticket data to the blockchain...")
         credit_pack_ticket_txid, total_bytes_used = await store_data_in_blockchain(credit_pack_purchase_request_response_json)
-        logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data; total bytes used to store the data was {total_bytes_used:,} now waiting for the transaction to be confirmed...")
+        logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data; total bytes used to store the data was {total_bytes_used:,}; now waiting for the transaction to be confirmed...")
         max_retries = 20
         retry_delay = 10
         try_count = 0
@@ -1435,7 +1435,7 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
                     logger.info(f"Transaction {credit_pack_ticket_txid} has been confirmed with {num_confirmations} confirmations.")
                     break
                 else:
-                    logger.info(f"Transaction {credit_pack_ticket_txid} is not yet confirmed. Waiting for {retry_delay} seconds before checking again.")
+                    logger.info(f"Transaction {credit_pack_ticket_txid} is not yet confirmed. Waiting for {retry_delay:.2f} seconds before checking again.")
                     await asyncio.sleep(retry_delay)
                     try_count += 1
                     retry_delay *= 1.15  # Optional: increase delay between retries
