@@ -1,48 +1,40 @@
-import binascii
 import hashlib
+import struct
 import os
+import io
 import asyncio
 import base64
-import base58
 import json
 import random
 import time
 import traceback
+from binascii import unhexlify, hexlify
 import urllib.parse as urlparse
 from decimal import Decimal
-from binascii import hexlify
 import zstandard as zstd
 from httpx import AsyncClient, Limits, Timeout
 from logger_config import setup_logger
 logger = setup_logger()
 
-max_storage_tasks_in_parallel = 20
-max_retrieval_tasks_in_parallel = 20
 max_concurrent_requests = 5
-storage_task_semaphore = asyncio.BoundedSemaphore(max_storage_tasks_in_parallel)
-retrieval_task_semaphore = asyncio.BoundedSemaphore(max_retrieval_tasks_in_parallel)  # Adjust the number as needed
-transaction_semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
 use_parallel = 0
-fee_per_kb = Decimal(0.0001)
-base_amount = Decimal(0.000001)
-psl_to_patoshis_ratio = 100000
+FEEPERKB = Decimal(0.001)
+base_transaction_amount = 0.00001
+COIN = 100000 # patoshis in 1 PSL
     
 def get_network_info(rpc_port):
     if rpc_port == '9932':
         network = 'mainnet'
         burn_address = 'PtpasteLBurnAddressXXXXXXXXXXbJ5ndd'
-        address_prefix_bytes = b'\x19'  # Mainnet address prefix byte
     elif rpc_port == '19932':
         network = 'testnet'
         burn_address = 'tPpasteLBurnAddressXXXXXXXXXXX3wy7u'
-        address_prefix_bytes = b'\x7f'  # Testnet address prefix byte
     elif rpc_port == '29932':
         network = 'devnet'
         burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7'
-        address_prefix_bytes = b'\x1c'  # Devnet address prefix byte
     else:
         raise ValueError(f"Unknown RPC port: {rpc_port}")
-    return network, burn_address, address_prefix_bytes
+    return network, burn_address
 
 class JSONRPCException(Exception):
     def __init__(self, rpc_error):
@@ -241,6 +233,11 @@ async def select_txins(value, number_of_utxos_to_review=10):
         raise Exception("Insufficient funds")
     else:
         return selected_txins, Decimal(total_amount)
+    
+def pushint(n):
+    assert 0 < n <= 16
+    return bytes([0x51 + n-1])
+    
 class OpCodes:
     OP_0 = 0x00
     OP_PUSHDATA1 = 0x4c
@@ -258,9 +255,45 @@ class OpCodes:
     OP_RETURN = 0x6a
     
 opcodes = OpCodes()
+    
+def checkmultisig_scriptpubkey_dump(fd):
+    data = fd.read(65*3)
+    if not data:
+        return None
+    r = pushint(1)
+    n = 0
+    while data:
+        chunk = data[0:65]
+        data = data[65:]
+        if len(chunk) < 33:
+            chunk += b'\x00'*(33-len(chunk))
+        elif len(chunk) < 65:
+            chunk += b'\x00'*(65-len(chunk))
+        r += pushdata(chunk)
+        n += 1
+    r += pushint(n) + bytes([opcodes.OP_CHECKMULTISIG])
+    return r
+    
+def addr2bytes(s):
+    digits58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+    n = 0
+    for c in s:
+        n *= 58
+        if c not in digits58:
+            raise ValueError
+        n += digits58.index(c)
+    h = '%x' % n
+    if len(h) % 2:
+        h = '0' + h
+    for c in s:
+        if c == digits58[0]:
+            h = '00' + h
+        else:
+            break
+    return unhexstr(h)[1:-4] # skip version and checksum
 
 def unhexstr(str):
-    return binascii.unhexlify(str.encode('utf8'))
+    return unhexlify(str.encode('utf8'))
 
 def pushdata(data):
     if len(data) <= 75:
@@ -281,6 +314,14 @@ def varint(n):
         return b'\xfe' + struct.pack('<I', n)
     else:
         return b'\xff' + struct.pack('<Q', n)
+    
+class CTxIn:
+    def __init__(self, prevout_hash, prevout_n, script_sig=b'', sequence=0xffffffff):
+        self.prevout_hash = prevout_hash
+        self.prevout_n = prevout_n
+        self.script_sig = script_sig
+        self.sequence = sequence
+    
 class CMutableTransaction:
     def __init__(self):
         version = 4  #  SAPLING_TX_VERSION
@@ -304,19 +345,15 @@ def packtx(tx):
     # Serialize transaction inputs
     tx_data += varint(len(tx.vin))  # Number of inputs (varint)
     for txin in tx.vin:
-        tx_data += unhexlify(txin['txid'])[::-1]  # Transaction ID (32 bytes) in little-endian
-        tx_data += struct.pack('<I', txin['vout'])  # Output index (4 bytes)
-        scriptSig = ''  # Empty scriptSig for now
-        tx_data += varint(len(scriptSig))  # scriptSig length (varint)
-        tx_data += scriptSig.encode()  # scriptSig (empty for now)        
-        tx_data += struct.pack('<I', 0xffffffff)  # Sequence number (4 bytes) - default to 0xffffffff
+        tx_data += txin.prevout_hash[::-1]  # Transaction ID (32 bytes) in little-endian
+        tx_data += struct.pack('<I', txin.prevout_n)  # Output index (4 bytes)
+        tx_data += varint(len(txin.script_sig))  # scriptSig length (varint)
+        tx_data += txin.script_sig  # scriptSig (variable length)        
+        tx_data += struct.pack('<I', txin.sequence)  # Sequence number (4 bytes)
     # Serialize transaction outputs
     tx_data += varint(len(tx.vout))  # Number of outputs (varint)
     for txout in tx.vout:
-        amount_patoshis = int(txout[0])  # Transaction amount in patoshis
-        if amount_patoshis < 0 or amount_patoshis > 0xffffffffffffffff:
-            raise ValueError(f"Invalid output amount: {amount_patoshis}")
-        tx_data += struct.pack('<Q', amount_patoshis)  # Transaction amount in patoshis (8 bytes)
+        tx_data += struct.pack('<Q', int(txout[0]*COIN))  # Transaction amount in patoshis (8 bytes)
         tx_data += varint(len(txout[1]))  # scriptPubKey length (varint)
         tx_data += txout[1]  # scriptPubKey (variable length)
     tx_data += struct.pack('<I', tx.lock_time)  # Locktime (4 bytes)
@@ -335,279 +372,85 @@ def packtx(tx):
         tx_data += struct.pack('<I', consensus_branch_id)  # Consensus branch ID (4 bytes)
         tx_data += tx.binding_sig  # Binding signature (64 bytes)
     return tx_data
-
-def createmultisig(pubkeys, address_prefix_bytes):
-    num_required = 1
-    if len(pubkeys) > 16:
-        raise ValueError("Number of addresses involved in the multisignature address creation > 16\nReduce the number")
-    script = bytes([opcodes.OP_1 + num_required - 1])
-    for pubkey in pubkeys:
-        script += pushdata(unhexstr(pubkey))
-    script += bytes([opcodes.OP_1 + len(pubkeys) - 1, opcodes.OP_CHECKMULTISIG])
-    script_hash = hashlib.sha256(script).digest()
-    script_hash = hashlib.new('ripemd160', script_hash).digest()
-    multisig_address = base58.b58encode_check(address_prefix_bytes + script_hash).decode()
-    generated_multisig = {"multisigaddress": multisig_address, "redeemScript": script.hex()}
-    return generated_multisig
-
-async def p2fms_script(data_segments):
-    if len(data_segments) > 15:
-        raise ValueError("Maximum of 15 data payloads allowed.")
-    valid_address = await rpc_connection.getnewaddress()  # Get a valid address from the wallet
-    keys = [valid_address]    
-    for segment in data_segments:
-        if len(segment) > 65:
-            raise ValueError("Data segment size must be 65 bytes or less.")
-        keys.append(segment.ljust(65, b'\0')[:65].hex())
-    result = createmultisig(keys)
-    multisig_address = result["multisigaddress"]
-    hex_encoded_redemption_script = result["redeemScript"]
-    decoded_redemption_script = unhexstr(hex_encoded_redemption_script)
-    logger.info(f"Created P2FMS address:\n {multisig_address} \nWith redeemScript: {hex_encoded_redemption_script}; \nAnd decoded redeemScript: {decoded_redemption_script}")
-    return multisig_address, decoded_redemption_script
-
-def segment_data(data):
-    segment_size_in_bytes = 65  # The size of arbitrary data that can be stored in a fake pubkey
-    data_segments = []
-    remaining_data = data
-    while len(remaining_data) > 0:
-        segment = remaining_data[:segment_size_in_bytes]
-        data_segments.append(segment)
-        remaining_data = remaining_data[segment_size_in_bytes:]
-    return data_segments
-    
-async def create_p2fms_transaction(inputs, outputs):
-    global rpc_connection
-    # Create the transaction inputs
-    transaction_inputs = []
-    for utxo in inputs:
-        transaction_inputs.append({
-            'txid': utxo['txid'],
-            'vout': utxo['vout']
-        })
-    transaction_outputs = {} 
-    for output in outputs: # Create the transaction outputs
-        if isinstance(output, tuple):
-            address, amount = output
-            transaction_outputs[address] = float(amount)
-        else:
-            transaction_outputs[output] = float(base_amount)
-    # Calculate the change amount
-    total_input_amount = sum(utxo['amount'] for utxo in inputs)
-    total_output_amount = sum(transaction_outputs.values())
-    change_amount = total_input_amount - total_output_amount - fee_per_kb
-    if change_amount > 0:
-        change_address = await rpc_connection.getrawchangeaddress()
-        transaction_outputs[change_address] = float(change_amount)
-    # Create the raw transaction
-    raw_transaction = await rpc_connection.createrawtransaction(transaction_inputs, transaction_outputs)
-    return raw_transaction
-
-async def send_transaction(signed_tx):
-    global rpc_connection
-    try:
-        txid = await rpc_connection.sendrawtransaction(signed_tx)
-        return txid
-    except Exception as e:
-        logger.error(f"Error occurred while sending transaction: {e}")
-        raise
-    
-def calculate_transaction_fee(signed_tx):
-    tx_size = len(signed_tx['hex']) / 2  # Convert bytes to virtual size
-    fee = Decimal(tx_size) * fee_per_kb / 1000  # Calculate fee based on virtual size
-    return fee    
-
-async def create_and_send_transaction(txins, txouts, use_parallel=True):
-    global rpc_connection
-    logger.info(f"Now creating transaction with inputs:\n {txins}; \n and outputs:\n {txouts}")
-    hex_transaction = await create_p2fms_transaction(txins, txouts)
-    logger.info(f"Hex raw transaction created before signing: {hex_transaction}")
-    assert isinstance(hex_transaction, str)
-    signed_tx = await rpc_connection.signrawtransaction(hex_transaction)
-    if 'errors' in signed_tx.keys():
-        logger.error(f"Error occurred while signing transaction: {signed_tx['errors']}")
-        return None
-    if not signed_tx['complete']:
-        logger.error("Failed to sign all transaction inputs")
-        return None
-    decoded_signed_raw_transaction = await rpc_connection.decoderawtransaction(signed_tx['hex'])
-    logger.info(f"Created signed raw transaction with fields:\n {decoded_signed_raw_transaction}")
-    hex_signed_transaction = signed_tx['hex']
-    try:
-        if use_parallel:
-            async with transaction_semaphore:
-                send_raw_transaction_result = await send_transaction(hex_signed_transaction)
-        else:
-            send_raw_transaction_result = await send_transaction(hex_signed_transaction)
-        return send_raw_transaction_result
-    except JSONRPCException as e:
-        if e.code == -25 or e.code == -26:  # -25 indicates missing inputs, -26 indicates insufficient funds
-            logger.error(f"Error occurred while sending transaction: {e}")
-            return None
-        else:
-            raise
-    except Exception as e:
-        logger.error(f"Error occurred while sending transaction: {e}")
-        raise
-
-def calculate_chunks(data):
-    max_segments_per_chunk = 15  # Max signatures in a multisig is 16, but the first one has to be a real valid address, leaving 15 slots for arbitrary data
-    segment_size_in_bytes = 65  # Each of the 15 available slots for arbitrary data can be up to 65 bytes (the size of a pubkey)
-    max_chunk_size = max_segments_per_chunk*segment_size_in_bytes - 2  # Subtract 2 bytes for the index
-    num_chunks = (len(data) + max_chunk_size - 1) // max_chunk_size
-    chunks = []
-    for i in range(num_chunks):
-        start_index = i * max_chunk_size
-        end_index = min((i + 1) * max_chunk_size, len(data))
-        chunk = data[start_index:end_index]
-        chunks.append(chunk)
-    return chunks
-
-async def store_data_chunks(chunks):
-    chunk_storage_txids = []
-    for i, chunk in enumerate(chunks):
-        index = i.to_bytes(2, 'big')  # 2-byte index
-        chunk_with_index = index + chunk
-        txid = await store_data_chunk(chunk_with_index)
-        chunk_storage_txids.append(txid)
-    return chunk_storage_txids
-
-async def store_data_chunk(chunk):
-    global rpc_connection
-    async with storage_task_semaphore:
-        data_segments = segment_data(chunk)
-        multisig_address, redemption_script = await p2fms_script(data_segments)  # Create script with embedded data
-        txouts = [
-            (multisig_address, base_amount),
-            (redemption_script, 0)  # Include the redemption script as a separate output with 0 value
-        ]
-        selected_utxos, total_amount = await select_txins(base_amount)
-        txins = [{'txid': utxo['txid'], 'vout': utxo['vout']} for utxo in selected_utxos]
-        change_address = await rpc_connection.getrawchangeaddress()  # Get a change address from the wallet
-        change_amount = total_amount - base_amount - fee_per_kb  # Calculate the change amount
-        if change_amount > 0:
-            txouts.append((change_address, change_amount))  # Add the change output to the transaction
-        transaction_id = await create_and_send_transaction(txins, txouts, use_parallel)
-        if transaction_id:
-            return transaction_id
-        return None
-
-async def store_chunk_txids(chunk_txids):
-    serialized_txids = b''.join(unhexstr(txid) for txid in chunk_txids)
-    transaction_id = await store_data_chunk(serialized_txids)
-    return transaction_id
     
 async def store_data_in_blockchain(input_data):
     global rpc_connection
     try:    
-        # await rpc_connection.lockunspent(True) # Unlock all previously locked UTXOs before starting a new transaction
         compressed_data = compress_data(input_data)
         uncompressed_data_hash = get_raw_sha256_hash(input_data)
         compressed_data_hash = get_raw_sha256_hash(compressed_data)
         uncompressed_data_length = len(input_data)
         header = uncompressed_data_length.to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash
         data_with_header = header + compressed_data
-        chunks = calculate_chunks(data_with_header)
-        logger.info(f"Total size of compressed data: {len(compressed_data)} bytes; Data will be stored in {len(chunks)} chunks")
-        try:
-            chunk_txids = await store_data_chunks(chunks)
-            if chunk_txids is None:
-                logger.error("Error occurred while storing data chunks")
-                return None
-            else:
-                logger.info(f"Data chunks stored successfully in the blockchain. Chunk TXIDs: {chunk_txids}")
-                final_txid = await store_chunk_txids(chunk_txids)
-                if final_txid is None:
-                    return None
-                else:
-                    logger.info(f"Data stored successfully in the blockchain. Final TXID containing all chunk txids: {final_txid}")
-                    return final_txid
-        except Exception as e:
-            logger.error(f"Error occurred while storing data in the blockchain: {e}")
-            logger.error(traceback.format_exc())
-            raise        
+        combined_data_hex = hexlify(data_with_header)
+        fd = io.BytesIO(combined_data_hex)
+        txins, change = await select_txins(0.00001)
+        raw_transaction = CMutableTransaction()
+        raw_transaction.vin = [CTxIn(unhexlify(txin['txid']), txin['vout']) for txin in txins]
+        txouts = []
+        while True:
+            script_pubkey = checkmultisig_scriptpubkey_dump(fd)
+            if script_pubkey is None:
+                break
+            value = Decimal(1/COIN)
+            txouts.append((value, script_pubkey))
+            change -= value   
+        out_value = Decimal(base_transaction_amount) # dest output
+        change -= out_value
+        receiving_address = await rpc_connection.getnewaddress()
+        txouts.append((out_value, bytes([opcodes.OP_DUP]) + bytes([opcodes.OP_HASH160]) + pushdata(addr2bytes(receiving_address)) + bytes([opcodes.OP_EQUALVERIFY]) + bytes([opcodes.OP_CHECKSIG])))
+        change_address = await rpc_connection.getnewaddress() # change output
+        txouts.append([change, bytes([opcodes.OP_DUP]) + bytes([opcodes.OP_HASH160]) + pushdata(addr2bytes(change_address)) + bytes([opcodes.OP_EQUALVERIFY]) + bytes([opcodes.OP_CHECKSIG])])
+        logger.info(f"Data length: {len(input_data)} bytes; Compressed data length: {len(compressed_data):,} bytes; Number of multisig outputs: {len(txouts):,}; Total size of multisig outputs in bytes: {sum(len(txout[1]) for txout in txouts):,}")
+        raw_transaction.vout = txouts        
+        final_tx = packtx(raw_transaction)
+        signed_tx = await rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
+        final_signed_transaction_size_in_bytes = len(signed_tx['hex'])/2
+        logger.info(f"Final signed transaction size: {final_signed_transaction_size_in_bytes:,} bytes; Overall expansion factor versus compressed data size: {final_signed_transaction_size_in_bytes/len(compressed_data):.2f}")
+        fee = Decimal(len(signed_tx['hex'])/1000) * FEEPERKB
+        assert(signed_tx['complete'])
+        hex_signed_transaction = signed_tx['hex']
+        logger.info(f"Sending data transaction to address: {receiving_address}")
+        logger.info(f"Size: {len(hex_signed_transaction)/2}  Fee: {fee}")   
+        send_raw_transaction_result = await rpc_connection.sendrawtransaction(hex_signed_transaction)
+        blockchain_transaction_id = send_raw_transaction_result
+        print('Transaction ID: ' + blockchain_transaction_id)
+        return blockchain_transaction_id
     except Exception as e:
         logger.error(f"Error occurred while storing data in the blockchain: {e}")
-        logger.error(traceback.format_exc())
-        raise
+        traceback.print_exc()
+        return None
 
 async def retrieve_data_from_blockchain(txid):
     global rpc_connection
     raw_transaction = await rpc_connection.getrawtransaction(txid)
-    decoded_transaction = await rpc_connection.decoderawtransaction(raw_transaction)
-    for output in decoded_transaction['vout']:
-        script_pub_key = output['scriptPubKey']['hex']
-        script = unhexstr(script_pub_key)
-        if script.startswith(b'\x51'):  # Check if the script starts with OP_1
-            data_segments = []
-            offset = 1  # Skip OP_1
-            num_keys = script[offset]
-            offset += 1
-            for _ in range(num_keys):
-                key_length = script[offset]
-                offset += 1
-                if key_length == 33:  # Skip the valid pubkey (33 bytes)
-                    offset += 33
-                else:  # Extract the data segment (65 bytes)
-                    data_start = offset
-                    data_end = data_start + 65
-                    data_segments.append(script[data_start:data_end])
-                    offset = data_end
-            combined_data = b''.join(data_segments)
-            if len(combined_data) > 32:  # Check if the data is a chunk or chunk TXIDs
-                try:
-                    chunk_txids = [hexlify(combined_data[i:i+32]).decode() for i in range(0, len(combined_data), 32)]
-                    data_chunks = []
-                    for txid in chunk_txids:
-                        chunk = await retrieve_chunk(txid)
-                        data_chunks.append(chunk)
-                    sorted_chunks = sorted(data_chunks, key=lambda x: int.from_bytes(x[:2], 'big'))
-                    combined_data = b''.join(chunk[2:] for chunk in sorted_chunks)
-                except Exception as e:  # noqa: F841
-                    pass  # Treat the data as a single chunk
-            uncompressed_data_length = int.from_bytes(combined_data[:2], 'big')
-            uncompressed_data_hash = combined_data[2:34]
-            compressed_data_hash = combined_data[34:66]
-            compressed_data = combined_data[66:]
-            if get_raw_sha256_hash(compressed_data) != compressed_data_hash:
-                logger.error("Compressed data hash verification failed")
-                return None
-            decompressed_data = decompress_data(compressed_data)
-            if get_raw_sha256_hash(decompressed_data) != uncompressed_data_hash:
-                logger.error("Uncompressed data hash verification failed")
-                return None
-            if len(decompressed_data) != uncompressed_data_length:
-                logger.error("Uncompressed data length verification failed")
-                return None
-            logger.info(f"Data retrieved successfully from the blockchain. Length: {len(decompressed_data)} bytes")
-            return decompressed_data
-    return None
-
-async def retrieve_chunk(txid):
-    global rpc_connection
-    raw_transaction = await rpc_connection.getrawtransaction(txid)
-    decoded_transaction = await rpc_connection.decoderawtransaction(raw_transaction)
-    for output in decoded_transaction['vout']:
-        script_pub_key = output['scriptPubKey']['hex']
-        script = unhexstr(script_pub_key)
-        if script.startswith(b'\x51'):  # Check if the script starts with OP_1
-            data_segments = []
-            offset = 1  # Skip OP_1
-            num_keys = script[offset]
-            offset += 1
-            for _ in range(num_keys):
-                key_length = script[offset]
-                offset += 1
-                if key_length == 33:  # Skip the valid pubkey (33 bytes)
-                    offset += 33
-                else:  # Extract the data segment (65 bytes)
-                    data_start = offset
-                    data_end = data_start + 65
-                    data_segments.append(script[data_start:data_end])
-                    offset = data_end
-            chunk_data = b''.join(data_segments)
-            return chunk_data
-    return None
+    outputs = raw_transaction.split('0100000000000000')
+    encoded_hex_data = ''
+    for output in outputs[1:-2]:  # there are 3 65-byte parts in this that we need
+        cur = 6
+        encoded_hex_data += output[cur:cur+130]
+        cur += 132
+        encoded_hex_data += output[cur:cur+130]
+        cur += 132
+        encoded_hex_data += output[cur:cur+130]
+    encoded_hex_data += outputs[-2][6:-4]
+    reconstructed_combined_data = unhexstr(encoded_hex_data)
+    uncompressed_data_length = int.from_bytes(reconstructed_combined_data[:2], 'big')
+    uncompressed_data_hash = reconstructed_combined_data[2:34]
+    compressed_data_hash = reconstructed_combined_data[34:66]
+    compressed_data = reconstructed_combined_data[66:]
+    if get_raw_sha256_hash(compressed_data) != compressed_data_hash:
+        logger.error("Compressed data hash verification failed")
+        return None
+    decompressed_data = decompress_data(compressed_data)
+    if get_raw_sha256_hash(decompressed_data) != uncompressed_data_hash:
+        logger.error("Uncompressed data hash verification failed")
+        return None
+    if len(decompressed_data) != uncompressed_data_length:
+        logger.error("Uncompressed data length verification failed")
+        return None
+    logger.info(f"Data retrieved successfully from the blockchain. Length: {len(decompressed_data)} bytes")
+    return decompressed_data
             
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
@@ -636,5 +479,5 @@ def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~
     return rpchost, rpcport, rpcuser, rpcpassword, other_flags
 
 rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
-network, burn_address, address_prefix_bytes = get_network_info(rpc_port)
+network, burn_address = get_network_info(rpc_port)
 rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
