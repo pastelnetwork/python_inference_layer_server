@@ -1416,6 +1416,55 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
     except Exception as e:
         logger.error(f"Error checking burn transaction: {str(e)}")
         raise
+    
+async def save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse, txid: str) -> None:
+    try:
+        mapping = db_code.CreditPackPurchaseRequestResponseTxidMapping(
+            credit_pack_purchase_request_response_id=credit_pack_purchase_request_response.id,
+            pastel_api_credit_pack_ticket_registration_txid=txid
+        )
+        async with db_code.Session() as db_session:
+            db_session.add(mapping)
+            await db_session.commit()
+    except Exception as e:
+        logger.error(f"Error saving credit pack purchase request response txid mapping: {str(e)}")
+        raise
+        
+async def retrieve_credit_pack_ticket_from_blockchain_using_txid(txid: str) -> db_code.CreditPackPurchaseRequestResponse:
+    try:
+        retrieved_data = await retrieve_data_from_blockchain(txid)
+        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(retrieved_data)
+        return credit_pack_purchase_request_response
+    except Exception as e:
+        logger.error(f"Error retrieving credit pack ticket from blockchain: {str(e)}")
+        raise
+    
+async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPackPurchaseRequestResponse:
+    try:
+        # Try to retrieve the credit pack ticket from the local database using the txid mapping
+        async with db_code.Session() as db_session:
+            mapping = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestResponseTxidMapping).where(db_code.CreditPackPurchaseRequestResponseTxidMapping.pastel_api_credit_pack_ticket_registration_txid == txid)
+            ).one_or_none()
+            if mapping is not None:
+                credit_pack_purchase_request_response = await db_session.get(db_code.CreditPackPurchaseRequestResponse, mapping.credit_pack_purchase_request_response_id)
+                return credit_pack_purchase_request_response
+        # If the ticket is not found in the local database, retrieve it from the blockchain
+        credit_pack_purchase_request_response = await retrieve_credit_pack_ticket_from_blockchain_using_txid(txid)
+        if credit_pack_purchase_request_response is not None:
+            # Save the retrieved ticket to the local database for future reference
+            async with db_code.Session() as db_session:
+                db_session.add(credit_pack_purchase_request_response)
+                await db_session.commit()
+                await db_session.refresh(credit_pack_purchase_request_response)
+            # Save the txid mapping for the retrieved ticket
+            await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, txid)
+        else:
+            raise ValueError(f"Credit pack ticket not found for txid: {txid}")
+        return credit_pack_purchase_request_response
+    except Exception as e:
+        logger.error(f"Error retrieving credit pack ticket using txid: {txid}. Error: {str(e)}")
+        raise
 
 async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json: str) -> str:
     try:
@@ -1423,9 +1472,10 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
         credit_pack_ticket_txid, total_bytes_used = await store_data_in_blockchain(credit_pack_purchase_request_response_json)
         logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data; total bytes used to store the data was {total_bytes_used:,}; now waiting for the transaction to be confirmed...")
         max_retries = 20
-        retry_delay = 10
+        retry_delay = 20
         try_count = 0
         num_confirmations = 0
+        storage_validation_error_string = ""
         while try_count < max_retries and num_confirmations == 0:
             # Retrieve the transaction details using gettransaction RPC method
             tx_info = await rpc_connection.gettransaction(credit_pack_ticket_txid)
@@ -1450,27 +1500,28 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
             decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
             if decoded_reconstructed_file_data == credit_pack_purchase_request_response_json:
                 logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
+                # Save the retrieved ticket to the local database
+                credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(credit_pack_purchase_request_response_json)
+                async with db_code.Session() as db_session:
+                    db_session.add(credit_pack_purchase_request_response)
+                    await db_session.commit()
+                    await db_session.refresh(credit_pack_purchase_request_response)
+                # Save the txid mapping for the stored ticket
+                await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, credit_pack_ticket_txid)
             else:
                 logger.error("Failed to verify that the stored blockchain ticket data can be reconstructed exactly!")
                 storage_validation_error_string = "Failed to verify that the stored blockchain ticket data can be reconstructed exactly! Difference: " + str(set(decoded_reconstructed_file_data).symmetric_difference(set(credit_pack_purchase_request_response_json)))
                 logger.error(storage_validation_error_string)
-                raise ValueError(storage_validation_error_string)
+                return credit_pack_ticket_txid, storage_validation_error_string
         else:
-            logger.error(f"Transaction {credit_pack_ticket_txid} was not confirmed after {max_retries} attempts.")
+            storage_validation_error_string = f"Transaction {credit_pack_ticket_txid} was not confirmed after {max_retries} attempts."
+            logger.error(storage_validation_error_string)
             raise TimeoutError(f"Transaction {credit_pack_ticket_txid} was not confirmed after {max_retries} attempts.")
-        return credit_pack_ticket_txid
+        return credit_pack_ticket_txid, storage_validation_error_string
     except Exception as e:
-        logger.error(f"Error storing credit pack ticket: {str(e)}")
-        raise
-
-async def retrieve_credit_pack_ticket_from_blockchain(credit_pack_ticket_txid: str) -> db_code.CreditPackPurchaseRequestResponse:
-    try:
-        retrieved_data = await retrieve_data_from_blockchain(credit_pack_ticket_txid)
-        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(retrieved_data)
-        return credit_pack_purchase_request_response
-    except Exception as e:
-        logger.error(f"Error retrieving credit pack ticket: {str(e)}")
-        raise
+        storage_validation_error_string = f"Error storing credit pack ticket: {str(e)}"
+        logger.error(storage_validation_error_string)
+        return credit_pack_ticket_txid, storage_validation_error_string
 
 async def check_original_supernode_storage_confirmation(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> bool:
     async with db_code.Session() as db:
@@ -1633,34 +1684,42 @@ async def request_and_sign_challenge(supernode_url: str) -> Dict[str, str]:
             "challenge_signature": challenge_signature
         }    
         
-async def send_credit_pack_purchase_request_final_response_to_supernodes(response: db_code.CreditPackPurchaseRequestResponse, supernodes: List[str]) -> None:
+async def send_credit_pack_purchase_request_final_response_to_supernodes(response: db_code.CreditPackPurchaseRequestResponse, supernodes: List[str]) -> List[httpx.Response]:
     try:
         async with httpx.AsyncClient() as client:
             tasks = []
             supernode_list_df, _ = await check_supernode_list_func()
             for supernode_pastelid in supernodes:
-                supernode_base_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
-                url = f"{supernode_base_url}/credit_pack_purchase_request_final_response_announcement"
-                challenge_dict = await request_and_sign_challenge(supernode_base_url)
-                challenge = challenge_dict["challenge"]
-                challenge_id = challenge_dict["challenge_id"]
-                challenge_signature = challenge_dict["challenge_signature"]
-                payload = {
-                    "response": response.model_dump(),
-                    "challenge": challenge,
-                    "challenge_id": challenge_id,
-                    "challenge_signature": challenge_signature
-                }
-                task = asyncio.create_task(client.post(url, json=payload))
-                tasks.append(task)
+                payload = {}
+                try:
+                    supernode_base_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
+                    url = f"{supernode_base_url}/credit_pack_purchase_request_final_response_announcement"
+                    challenge_dict = await request_and_sign_challenge(supernode_base_url)
+                    challenge = challenge_dict["challenge"]
+                    challenge_id = challenge_dict["challenge_id"]
+                    challenge_signature = challenge_dict["challenge_signature"]
+                    payload = {
+                        "response": response.model_dump(),
+                        "challenge": challenge,
+                        "challenge_id": challenge_id,
+                        "challenge_signature": challenge_signature
+                    }
+                except Exception as e:
+                    logger.warning(f"Error getting challenge from supernode {supernode_pastelid}: {str(e)}")
+                if len(payload) > 0:
+                    task = asyncio.create_task(client.post(url, json=payload))
+                    tasks.append(task)
             responses = await asyncio.gather(*tasks, return_exceptions=True)
+            valid_responses = []
             for response in responses:
                 if isinstance(response, httpx.Response):
-                    if response.status_code != 200:
+                    if response.status_code == 200:
+                        valid_responses.append(response)
+                    else:
                         logger.warning(f"Error sending final response announcement to supernode {response.url}: {response.text}")
                 else:
                     logger.error(f"Error sending final response announcement to supernode: {str(response)}")
-            return responses
+            return valid_responses
     except Exception as e:
         logger.error(f"Error sending final response announcement to supernodes: {str(e)}")
         raise    
@@ -1941,27 +2000,32 @@ async def get_closest_agreeing_supernode_pastelid(end_user_pastelid: str, agreei
     except Exception as e:
         logger.error(f"Error getting closest agreeing supernode pastelid: {str(e)}")
         raise    
-
+    
 async def send_credit_pack_storage_completion_announcement_to_supernodes(response: db_code.CreditPackPurchaseRequestConfirmationResponse, agreeing_supernode_pastelids: List[str]) -> List[httpx.Response]:
     try:
         async with httpx.AsyncClient() as client:
             tasks = []
             supernode_list_df, _ = await check_supernode_list_func()
             for supernode_pastelid in agreeing_supernode_pastelids:
-                supernode_url = f"http://{await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)}:7123"
-                challenge_dict = await request_and_sign_challenge(supernode_url)
-                url = f"{supernode_url}/credit_pack_storage_completion_announcement"
-                challenge = challenge_dict["challenge"]
-                challenge_id = challenge_dict["challenge_id"]
-                challenge_signature = challenge_dict["challenge_signature"]
-                payload = {
-                    "response": response.model_dump(),
-                    "challenge": challenge,
-                    "challenge_id": challenge_id,
-                    "challenge_signature": challenge_signature
-                }
-                task = asyncio.create_task(client.post(url, json=payload))
-                tasks.append(task)
+                payload = {}
+                try:
+                    supernode_base_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
+                    url = f"{supernode_base_url}/credit_pack_storage_completion_announcement"
+                    challenge_dict = await request_and_sign_challenge(supernode_base_url)
+                    challenge = challenge_dict["challenge"]
+                    challenge_id = challenge_dict["challenge_id"]
+                    challenge_signature = challenge_dict["challenge_signature"]
+                    payload = {
+                        "credit_pack_price_agreement_request": response.model_dump(),
+                        "challenge": challenge,
+                        "challenge_id": challenge_id,
+                        "challenge_signature": challenge_signature
+                    }     
+                except Exception as e:
+                    logger.warning(f"Error getting challenge from supernode {supernode_pastelid}: {str(e)}")
+                if len(payload) > 0:
+                    task = asyncio.create_task(client.post(url, json=payload))
+                    tasks.append(task)
             responses = await asyncio.gather(*tasks, return_exceptions=True)
             valid_responses = []
             for response in responses:
@@ -1976,7 +2040,7 @@ async def send_credit_pack_storage_completion_announcement_to_supernodes(respons
     except Exception as e:
         logger.error(f"Error sending storage completion announcement to supernodes: {str(e)}")
         raise
-
+    
 async def process_credit_purchase_request_confirmation(confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> db_code.CreditPackPurchaseRequestConfirmationResponse:
     try:
         # Validate the confirmation fields
@@ -2023,12 +2087,16 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             logger.info(f"Achieved a compression ratio of {compression_ratio:.2f} on credit pack ticket data!")
             logger.info(f"Required burn transaction confirmed with {num_confirmations} confirmations; now attempting to write the credit pack ticket to the blockchain (a total of {credit_pack_ticket_bytes_before_compression:,} bytes before compression and {credit_pack_ticket_bytes_after_compression:,} bytes after compression)...")
             log_action_with_payload("Writing", "the credit pack ticket to the blockchain", credit_pack_purchase_request_response_json)
-            pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json)
+            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json)
+            if storage_validation_error_string=="":
+                credit_pack_confirmation_outcome_string = "success"
+            else:
+                credit_pack_confirmation_outcome_string = "failed"
             # Create the confirmation response without the hash and signature fields
             confirmation_response = db_code.CreditPackPurchaseRequestConfirmationResponse(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields,
                 sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields,
-                credit_pack_confirmation_outcome_string="success",
+                credit_pack_confirmation_outcome_string=credit_pack_confirmation_outcome_string,
                 pastel_api_credit_pack_ticket_registration_txid=pastel_api_credit_pack_ticket_registration_txid,
                 credit_pack_confirmation_failure_reason_if_applicable="",
                 credit_purchase_request_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
@@ -2038,6 +2106,8 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields="",
                 responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash=""
             )
+            
+            
             # Generate the hash and signature fields
             confirmation_response.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(confirmation_response)
             confirmation_response.responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash = await sign_message_with_pastelid_func(
@@ -2141,12 +2211,16 @@ async def process_credit_pack_storage_retry_request(storage_retry_request: db_co
         original_supernode_confirmed_storage = await check_original_supernode_storage_confirmation(storage_retry_request.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
         if not original_supernode_confirmed_storage:
             # Store the credit pack ticket on the blockchain
-            pastel_api_credit_pack_ticket_registration_txid = await store_credit_pack_ticket_in_blockchain(json.loads(storage_retry_request.credit_pack_purchase_request_response_json))
+            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(json.loads(storage_retry_request.credit_pack_purchase_request_response_json))
+            if storage_validation_error_string=="":
+                credit_pack_confirmation_outcome_string = "success"
+            else:
+                credit_pack_confirmation_outcome_string = "failed"            
             # Create the retry request response without the hash and signature fields
             retry_request_response = db_code.CreditPackStorageRetryRequestResponse(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=storage_retry_request.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
                 sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields=storage_retry_request.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
-                credit_pack_storage_retry_confirmation_outcome_string="success",
+                credit_pack_storage_retry_confirmation_outcome_string=credit_pack_confirmation_outcome_string,
                 pastel_api_credit_pack_ticket_registration_txid=pastel_api_credit_pack_ticket_registration_txid,
                 credit_pack_storage_retry_confirmation_failure_reason_if_applicable="",
                 credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),

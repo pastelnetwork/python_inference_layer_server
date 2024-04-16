@@ -1391,6 +1391,25 @@ class PastelMessagingClient:
             return [UserMessage.model_validate(message) for message in result]
         
     # Credit pack related client methods:        
+    async def get_credit_pack_ticket_from_txid(self, supernode_url: str, txid: str) -> CreditPackPurchaseRequestResponse:
+        challenge_result = await self.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        challenge_id = challenge_result["challenge_id"]
+        challenge_signature = challenge_result["signature"]
+        params = {
+            "txid": txid,
+            "pastelid": self.pastelid,
+            "challenge": challenge,
+            "challenge_id": challenge_id,
+            "challenge_signature": challenge_signature
+        }
+        log_action_with_payload("retrieving", "credit pack ticket from txid", params)
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            response = await client.get(f"{supernode_url}/get_credit_pack_ticket_from_txid", params=params)
+            response.raise_for_status()
+            result = response.json()
+            log_action_with_payload("receiving", "credit pack ticket from Supernode", result)
+            return CreditPackPurchaseRequestResponse.model_validate(result)
 
     async def credit_pack_ticket_initial_purchase_request(self, supernode_url: str, credit_pack_request: CreditPackPurchaseRequest) -> Union[CreditPackPurchaseRequestPreliminaryPriceQuote, CreditPackPurchaseRequestRejection]:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
@@ -1660,7 +1679,7 @@ class PastelMessagingClient:
             )
             response.raise_for_status()
             result = response.json()
-            log_action_with_payload("eeceived", "response to inference usage request", result)
+            log_action_with_payload("received", "response to inference usage request", result)
             return InferenceAPIUsageResponse.model_validate(result)
 
     async def send_inference_confirmation(self, supernode_url: str, confirmation_data: InferenceConfirmation) -> Dict[str, Any]:

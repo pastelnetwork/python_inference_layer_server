@@ -20,7 +20,6 @@ from logger_config import setup_logger
 import database_code as db_code
 
 logger = setup_logger()
-
 base_transaction_amount = Decimal(0.1)
 max_concurrent_requests = 1000
 FEEPERKB = Decimal(0.1)
@@ -243,6 +242,7 @@ async def select_txins(value, number_of_utxos_to_review=10):
     else:
         return selected_txins, Decimal(total_amount)
     
+
 def pushint(n):
     assert 0 < n <= 16
     return bytes([0x51 + n-1])
@@ -488,350 +488,350 @@ def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~
             other_flags[current_flag] = current_value
     return rpchost, rpcport, rpcuser, rpcpassword, other_flags
 
-#_________________________________________________________________________________________________________
 
-#Code for getting ticket data directly from the blockchain files without using the slow RPC methods
-
-
-def deserialize_block(raw_block_bytes):
-    f = io.BytesIO(raw_block_bytes)
-    def read_bytes(n):
-        data = f.read(n)
-        if len(data) < n:
-            raise ValueError(f"Not enough data to read {n} bytes")
-        return data
-    def read_varint():
-        b = f.read(1)
-        if not b:
-            raise ValueError("Not enough data to read varint")
-        n = int.from_bytes(b, 'little')
-        if n < 0xfd:
-            return n
-        elif n == 0xfd:
-            return int.from_bytes(read_bytes(2), 'little')
-        elif n == 0xfe:
-            return int.from_bytes(read_bytes(4), 'little')
-        else:
-            return int.from_bytes(read_bytes(8), 'little')
-    try:
-        version = struct.unpack('<I', read_bytes(4))[0]
-        prev_block_hash = read_bytes(32)[::-1].hex()
-        merkle_root = read_bytes(32)[::-1].hex()
-        final_sapling_root = read_bytes(32)[::-1].hex()
-        timestamp = struct.unpack('<I', read_bytes(4))[0]
-        bits = struct.unpack('<I', read_bytes(4))[0]
-        pastel_id_length = read_varint()
-        pastel_id = read_bytes(pastel_id_length).decode('utf-8')
-        signature_length = read_varint()
-        signature = read_bytes(signature_length)
-        nonce = read_bytes(32).hex()
-        solution_length = len(raw_block_bytes) - f.tell()
-        solution = read_bytes(solution_length).hex()
-        num_transactions = read_varint()
-        transactions = []
-        for _ in range(num_transactions):
-            transaction = deserialize_transaction(f)
-            transactions.append(transaction)
-        return {
-            'version': version,
-            'prev_block_hash': prev_block_hash,
-            'merkle_root': merkle_root,
-            'final_sapling_root': final_sapling_root,
-            'timestamp': timestamp,
-            'bits': bits,
-            'pastel_id': pastel_id,
-            'signature': signature,
-            'nonce': nonce,
-            'solution': solution,
-            'num_transactions': num_transactions,
-            'transactions': transactions
-        }
-    except (struct.error, ValueError) as e:
-        print(f"Error deserializing block: {e}")
-        return None
-    
-def deserialize_transaction(f):
-    def read_bytes(n):
-        data = f.read(n)
-        if len(data) < n:
-            raise ValueError(f"Not enough data to read {n} bytes")
-        return data
-    def read_varint():
-        b = f.read(1)
-        if not b:
-            raise ValueError("Not enough data to read varint")
-        n = int.from_bytes(b, 'little')
-        if n < 0xfd:
-            return n
-        elif n == 0xfd:
-            return int.from_bytes(read_bytes(2), 'little')
-        elif n == 0xfe:
-            return int.from_bytes(read_bytes(4), 'little')
-        else:
-            return int.from_bytes(read_bytes(8), 'little')
-    try:
-        version = struct.unpack('<I', read_bytes(4))[0]
-        version_group_id = struct.unpack('<I', read_bytes(4))[0]
-        num_inputs = read_varint()
-        vin = []
-        for _ in range(num_inputs):
-            prevout_hash = read_bytes(32)[::-1]
-            prevout_n = struct.unpack('<I', read_bytes(4))[0]
-            script_sig_length = read_varint()
-            script_sig = read_bytes(script_sig_length)
-            sequence = struct.unpack('<I', read_bytes(4))[0]
-            vin.append((prevout_hash, prevout_n, script_sig, sequence))
-        num_outputs = read_varint()
-        vout = []
-        for _ in range(num_outputs):
-            value = struct.unpack('<Q', read_bytes(8))[0]
-            script_pubkey_length = read_varint()
-            script_pubkey = read_bytes(script_pubkey_length)
-            vout.append((value, script_pubkey))
-        lock_time = struct.unpack('<I', read_bytes(4))[0]
-        expiry_height = struct.unpack('<I', read_bytes(4))[0]
-        value_balance = struct.unpack('<Q', read_bytes(8))[0]
-        num_shielded_spends = read_varint()
-        num_shielded_outputs = read_varint()
-        if num_shielded_outputs > 0:
-            num_shielded_outputs = read_varint()
-        return {
-            'version': version,
-            'version_group_id': version_group_id,
-            'vin': vin,
-            'vout': vout,
-            'lock_time': lock_time,
-            'expiry_height': expiry_height,
-            'value_balance': value_balance,
-            'num_shielded_spends': num_shielded_spends,
-            'num_shielded_outputs': num_shielded_outputs,
-        }
-    except (struct.error, ValueError) as e:
-        print(f"Error deserializing transaction: {e}")
-        return None
-    
-def get_block_files(network):
-    pastel_dir = os.path.expanduser("~/.pastel")
-    if network == "mainnet":
-        blocks_dir = os.path.join(pastel_dir, "blocks")
-    else:
-        blocks_dir = os.path.join(pastel_dir, network, "blocks")
-    return [os.path.join(blocks_dir, f) for f in os.listdir(blocks_dir) if f.startswith("blk") and f.endswith(".dat")], blocks_dir
-
-async def process_block_files(block_files):
-    try:
-        for block_file in block_files:
-            with open(block_file, "rb") as f:
-                magic = f.read(4)
-                while magic == b'\xf9\xbe\xb4\xd9':
-                    block_size = struct.unpack("<I", f.read(4))[0]
-                    raw_block_bytes = f.read(block_size)
-                    block = deserialize_block(raw_block_bytes)
-                    if block is not None:
-                        for transaction in block['transactions']:
-                            txid = transaction['txid']
-                            await process_transaction(transaction, txid)
-                    magic = f.read(4)
-    except Exception as e:
-        logger.error(f"Error occurred while processing block files: {e}")
-        traceback.print_exc()
-
-class CDiskTxPos:
-    def __init__(self, nFile=0, nPos=0, nTxSize=0):
-        self.nFile = nFile
-        self.nPos = nPos
-        self.nTxSize = nTxSize
-
-    def serialize(self):
-        return struct.pack("<iii", self.nFile, self.nPos, self.nTxSize)
-
-    @classmethod
-    def deserialize(cls, raw_data):
-        nFile, nPos, nTxSize = struct.unpack("<iii", raw_data)
-        return cls(nFile, nPos, nTxSize)
-
-    def __repr__(self):
-        return f"CDiskTxPos(nFile={self.nFile}, nPos={self.nPos}, nTxSize={self.nTxSize})"
-
-def decode_compactsize(raw_hex):
-    """Decodes the compactsize encoding used in the UTXO data"""
-    if len(raw_hex) == 0:
-        return 0, 0
-    first_byte = raw_hex[0]
-    if first_byte < 253:
-        return first_byte, 1
-    elif first_byte == 253:
-        return struct.unpack("<H", raw_hex[1:3])[0], 3
-    elif first_byte == 254:
-        return struct.unpack("<I", raw_hex[1:5])[0], 5
-    else:
-        return struct.unpack("<Q", raw_hex[1:9])[0], 9
-
-def extract_tx_pos(raw_utxo_data):
-    try:
-        # Extract the transaction position from the UTXO data
-        # Assuming the UTXO data has the following structure:
-        # [value (8 bytes)][script length (varint)][script (variable length)]
-        value_hex = raw_utxo_data[:8]
-        script_length, varint_size = decode_compactsize(raw_utxo_data[8:])
-        script_start = 8 + varint_size
-        script_hex = raw_utxo_data[script_start:script_start+script_length]
-        return value_hex, script_hex
-    except Exception as e:
-        logger.error(f"Error occurred while extracting UTXO data: {e}")
-        traceback.print_exc()
-        return None, None
-    
-def get_block_file_path(block_file_index, blocks_dir):
-    # Generate the block file path based on the block file index
-    # Assuming the block files are named in the format "blk00000.dat", "blk00001.dat", etc.
-    block_file_name = f"blk{block_file_index:05d}.dat"
-    block_file_path = os.path.join(blocks_dir, block_file_name)
-    return block_file_path
-
-def is_data_storage_script(script_hex):
-    # Check if the script matches the pattern used for storing arbitrary data
-    # Assuming the data storage script follows the format:
-    # OP_RETURN <data> (where <data> contains the identifier "CREDIT_PACK_STORAGE_TICKET")
-    if script_hex.startswith('6a'):  # Check if the script starts with OP_RETURN (0x6a)
-        data = script_hex[2:]  # Extract the data part of the script
-        if 'CREDIT_PACK_STORAGE_TICKET' in bytes.fromhex(data).decode('utf-8', errors='ignore'):
-            return True
-    return False
-        
-def retrieve_raw_transaction_bytes(txid, raw_utxo_data):
-    try:
-        # Extract the transaction position from the UTXO data
-        tx_pos = extract_tx_pos(raw_utxo_data)
-        if tx_pos is None:
-            logger.error(f"Failed to extract transaction position for UTXO {txid}")
-            return None
-        # Open the block file and seek to the transaction position
-        block_file_path = get_block_file_path(tx_pos.nFile)
-        with open(block_file_path, "rb") as block_file:
-            block_file.seek(tx_pos.nPos)
-            # Read the block header
-            block_header_bytes = block_file.read(80)  # Assuming a fixed block header size of 80 bytes
-            # Extract the transaction offset from the block header
-            tx_offset = struct.unpack("<I", block_header_bytes[-4:])[0]
-            # Seek to the transaction position within the block
-            block_file.seek(tx_pos.nPos + tx_offset)
-            # Read the transaction bytes
-            raw_transaction_bytes = block_file.read(tx_pos.nTxSize)
-        return raw_transaction_bytes
-    except Exception as e:
-        logger.error(f"Error occurred while retrieving raw transaction bytes for UTXO {txid}: {e}")
-        traceback.print_exc()
-        return None
-
-async def process_utxo(txid, raw_utxo_data):
-    try:
-        raw_transaction_bytes = await retrieve_raw_transaction_bytes(txid, raw_utxo_data)
-        if raw_transaction_bytes is not None:
-            transaction = deserialize_transaction(raw_transaction_bytes)
-            if transaction is not None:
-                await attempt_to_reconstruct_data_from_raw_transaction_data(transaction)
-    except Exception as e:
-        logger.error(f"Error occurred while processing UTXO {txid}: {e}")
-        traceback.print_exc()
-        
-async def process_transaction(transaction, txid):
-    try:
-        for output in transaction['vout']:
-            script_pubkey = output['scriptPubKey']
-            if is_data_storage_script(script_pubkey):
-                await process_utxo(txid, script_pubkey)
-    except Exception as e:
-        logger.error(f"Error occurred while processing transaction {txid}: {e}")
-        traceback.print_exc()
-
-async def process_leveldb_files(leveldb_dir):
-    try:
-        db = plyvel.DB(leveldb_dir)
-        for txid_raw, raw_utxo_data in db.iterator():
-            txid_hex = txid_raw.hex()[::-1]
-            await process_utxo(txid_hex, raw_utxo_data)
-    except Exception as e:
-        logger.error(f"Error occurred while processing LevelDB files: {e}")
-        traceback.print_exc()
-    finally:
-        db.close()
-    
-def get_leveldb_files(network):
-    pastel_dir = os.path.expanduser("~/.pastel")
-    if network == "mainnet":
-        chainstate_dir = os.path.join(pastel_dir, "chainstate")
-    else:
-        chainstate_dir = os.path.join(pastel_dir, network, "chainstate")
-    # Create a temporary directory to store the copied LevelDB files
-    temp_dir = tempfile.mkdtemp()
-    # Copy the entire chainstate directory to the temporary directory
-    dst_chainstate_dir = os.path.join(temp_dir, "chainstate")
-    logger.info(f"Making a copy of the leveldb files so we can read them; about to copy {sum(os.path.getsize(os.path.join(chainstate_dir, f)) for f in os.listdir(chainstate_dir))/1024/1024} mb of data")
-    shutil.copytree(chainstate_dir, dst_chainstate_dir)
-    # Remove the LOCK file from the copied directory
-    logger.info("Done copying leveldb files to temp directory; now removing copied LOCK file...")
-    lock_file_path = os.path.join(dst_chainstate_dir, "LOCK")
-    if os.path.exists(lock_file_path):
-        os.remove(lock_file_path)
-    return dst_chainstate_dir
-
-async def attempt_to_reconstruct_data_from_raw_transaction_data(raw_transaction_bytes):
-    try:
-        transaction = deserialize_transaction(raw_transaction_bytes)
-        outputs = transaction['vout']  # Extract outputs from the transaction
-        # Concatenate all scriptPubKey hex strings excluding the last two (change and receiving address outputs)
-        encoded_hex_data = ''.join(output['scriptPubKey']['hex'][4:-4] for output in outputs[:-2])
-        # Decode the hex data to bytes and clean up extraneous characters and padding
-        reconstructed_combined_data = bytes.fromhex(encoded_hex_data)
-        reconstructed_combined_data_cleaned = reconstructed_combined_data.decode('utf-8').replace("A", "").rstrip("\x00")
-        data_buffer = bytes.fromhex(reconstructed_combined_data_cleaned)
-        # Extract the identifier
-        identifier_padded = data_buffer[:32]
-        identifier = identifier_padded.rstrip(b'\x00').decode('utf-8')
-        data_buffer = data_buffer[32:]  # Remove the identifier from the buffer
-        # Extract compressed data length
-        compressed_data_length = int.from_bytes(data_buffer[:2], 'big')
-        data_buffer = data_buffer[2:]  # Remove the compressed data length from the buffer
-        # Extract hashes
-        uncompressed_data_hash = data_buffer[:32]
-        compressed_data_hash = data_buffer[32:64]
-        data_buffer = data_buffer[64:]  # Remove the hashes from the buffer
-        # Extract compressed data
-        compressed_data = data_buffer[:compressed_data_length]
-        data_buffer = data_buffer[compressed_data_length:]  # Remove the compressed data from the buffer
-        # Validate the compressed data hash
-        if get_raw_sha3_256_hash(compressed_data) != compressed_data_hash:
-            logger.error("Compressed data hash verification failed")
-            return None
-        # Decompress the data and validate the uncompressed data hash and length
-        decompressed_data = decompress_data(compressed_data)
-        if get_raw_sha3_256_hash(decompressed_data) != uncompressed_data_hash:
-            logger.error("Uncompressed data hash verification failed")
-            return None
-        # Log successful retrieval and return the decompressed data
-        logger.info(f"Data retrieved successfully from the blockchain. Identifier: {identifier}, Length: {len(decompressed_data)} bytes")
-        return decompressed_data
-    except Exception as e:
-        logger.error(f"Error occurred while retrieving data from the blockchain: {e}")
-        traceback.print_exc()
-        return None
-
-async def save_credit_pack_purchase_request_response(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse) -> None:
-    try:
-        async with db_code.Session() as db_session:
-            db_session.add(credit_pack_purchase_request_response)
-            await db_session.commit()
-    except Exception as e:
-        logger.error(f"Error saving credit pack purchase request response: {str(e)}")
-        raise
-        
 rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
 network, burn_address = get_network_info(rpc_port)
 rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
 use_direct_ticket_scanning = 0
 
+#_________________________________________________________________________________________________________
+
+#Code for getting ticket data directly from the blockchain files without using the slow RPC methods
+
 if use_direct_ticket_scanning:
+    def deserialize_block(raw_block_bytes):
+        f = io.BytesIO(raw_block_bytes)
+        def read_bytes(n):
+            data = f.read(n)
+            if len(data) < n:
+                raise ValueError(f"Not enough data to read {n} bytes")
+            return data
+        def read_varint():
+            b = f.read(1)
+            if not b:
+                raise ValueError("Not enough data to read varint")
+            n = int.from_bytes(b, 'little')
+            if n < 0xfd:
+                return n
+            elif n == 0xfd:
+                return int.from_bytes(read_bytes(2), 'little')
+            elif n == 0xfe:
+                return int.from_bytes(read_bytes(4), 'little')
+            else:
+                return int.from_bytes(read_bytes(8), 'little')
+        try:
+            version = struct.unpack('<I', read_bytes(4))[0]
+            prev_block_hash = read_bytes(32)[::-1].hex()
+            merkle_root = read_bytes(32)[::-1].hex()
+            final_sapling_root = read_bytes(32)[::-1].hex()
+            timestamp = struct.unpack('<I', read_bytes(4))[0]
+            bits = struct.unpack('<I', read_bytes(4))[0]
+            pastel_id_length = read_varint()
+            pastel_id = read_bytes(pastel_id_length).decode('utf-8')
+            signature_length = read_varint()
+            signature = read_bytes(signature_length)
+            nonce = read_bytes(32).hex()
+            solution_length = len(raw_block_bytes) - f.tell()
+            solution = read_bytes(solution_length).hex()
+            num_transactions = read_varint()
+            transactions = []
+            for _ in range(num_transactions):
+                transaction = deserialize_transaction(f)
+                transactions.append(transaction)
+            return {
+                'version': version,
+                'prev_block_hash': prev_block_hash,
+                'merkle_root': merkle_root,
+                'final_sapling_root': final_sapling_root,
+                'timestamp': timestamp,
+                'bits': bits,
+                'pastel_id': pastel_id,
+                'signature': signature,
+                'nonce': nonce,
+                'solution': solution,
+                'num_transactions': num_transactions,
+                'transactions': transactions
+            }
+        except (struct.error, ValueError) as e:
+            print(f"Error deserializing block: {e}")
+            return None
+        
+    def deserialize_transaction(f):
+        def read_bytes(n):
+            data = f.read(n)
+            if len(data) < n:
+                raise ValueError(f"Not enough data to read {n} bytes")
+            return data
+        def read_varint():
+            b = f.read(1)
+            if not b:
+                raise ValueError("Not enough data to read varint")
+            n = int.from_bytes(b, 'little')
+            if n < 0xfd:
+                return n
+            elif n == 0xfd:
+                return int.from_bytes(read_bytes(2), 'little')
+            elif n == 0xfe:
+                return int.from_bytes(read_bytes(4), 'little')
+            else:
+                return int.from_bytes(read_bytes(8), 'little')
+        try:
+            version = struct.unpack('<I', read_bytes(4))[0]
+            version_group_id = struct.unpack('<I', read_bytes(4))[0]
+            num_inputs = read_varint()
+            vin = []
+            for _ in range(num_inputs):
+                prevout_hash = read_bytes(32)[::-1]
+                prevout_n = struct.unpack('<I', read_bytes(4))[0]
+                script_sig_length = read_varint()
+                script_sig = read_bytes(script_sig_length)
+                sequence = struct.unpack('<I', read_bytes(4))[0]
+                vin.append((prevout_hash, prevout_n, script_sig, sequence))
+            num_outputs = read_varint()
+            vout = []
+            for _ in range(num_outputs):
+                value = struct.unpack('<Q', read_bytes(8))[0]
+                script_pubkey_length = read_varint()
+                script_pubkey = read_bytes(script_pubkey_length)
+                vout.append((value, script_pubkey))
+            lock_time = struct.unpack('<I', read_bytes(4))[0]
+            expiry_height = struct.unpack('<I', read_bytes(4))[0]
+            value_balance = struct.unpack('<Q', read_bytes(8))[0]
+            num_shielded_spends = read_varint()
+            num_shielded_outputs = read_varint()
+            if num_shielded_outputs > 0:
+                num_shielded_outputs = read_varint()
+            return {
+                'version': version,
+                'version_group_id': version_group_id,
+                'vin': vin,
+                'vout': vout,
+                'lock_time': lock_time,
+                'expiry_height': expiry_height,
+                'value_balance': value_balance,
+                'num_shielded_spends': num_shielded_spends,
+                'num_shielded_outputs': num_shielded_outputs,
+            }
+        except (struct.error, ValueError) as e:
+            print(f"Error deserializing transaction: {e}")
+            return None
+        
+    def get_block_files(network):
+        pastel_dir = os.path.expanduser("~/.pastel")
+        if network == "mainnet":
+            blocks_dir = os.path.join(pastel_dir, "blocks")
+        else:
+            blocks_dir = os.path.join(pastel_dir, network, "blocks")
+        return [os.path.join(blocks_dir, f) for f in os.listdir(blocks_dir) if f.startswith("blk") and f.endswith(".dat")], blocks_dir
+
+    async def process_block_files(block_files):
+        try:
+            for block_file in block_files:
+                with open(block_file, "rb") as f:
+                    magic = f.read(4)
+                    while magic == b'\xf9\xbe\xb4\xd9':
+                        block_size = struct.unpack("<I", f.read(4))[0]
+                        raw_block_bytes = f.read(block_size)
+                        block = deserialize_block(raw_block_bytes)
+                        if block is not None:
+                            for transaction in block['transactions']:
+                                txid = transaction['txid']
+                                await process_transaction(transaction, txid)
+                        magic = f.read(4)
+        except Exception as e:
+            logger.error(f"Error occurred while processing block files: {e}")
+            traceback.print_exc()
+
+    class CDiskTxPos:
+        def __init__(self, nFile=0, nPos=0, nTxSize=0):
+            self.nFile = nFile
+            self.nPos = nPos
+            self.nTxSize = nTxSize
+
+        def serialize(self):
+            return struct.pack("<iii", self.nFile, self.nPos, self.nTxSize)
+
+        @classmethod
+        def deserialize(cls, raw_data):
+            nFile, nPos, nTxSize = struct.unpack("<iii", raw_data)
+            return cls(nFile, nPos, nTxSize)
+
+        def __repr__(self):
+            return f"CDiskTxPos(nFile={self.nFile}, nPos={self.nPos}, nTxSize={self.nTxSize})"
+
+    def decode_compactsize(raw_hex):
+        """Decodes the compactsize encoding used in the UTXO data"""
+        if len(raw_hex) == 0:
+            return 0, 0
+        first_byte = raw_hex[0]
+        if first_byte < 253:
+            return first_byte, 1
+        elif first_byte == 253:
+            return struct.unpack("<H", raw_hex[1:3])[0], 3
+        elif first_byte == 254:
+            return struct.unpack("<I", raw_hex[1:5])[0], 5
+        else:
+            return struct.unpack("<Q", raw_hex[1:9])[0], 9
+
+    def extract_tx_pos(raw_utxo_data):
+        try:
+            # Extract the transaction position from the UTXO data
+            # Assuming the UTXO data has the following structure:
+            # [value (8 bytes)][script length (varint)][script (variable length)]
+            value_hex = raw_utxo_data[:8]
+            script_length, varint_size = decode_compactsize(raw_utxo_data[8:])
+            script_start = 8 + varint_size
+            script_hex = raw_utxo_data[script_start:script_start+script_length]
+            return value_hex, script_hex
+        except Exception as e:
+            logger.error(f"Error occurred while extracting UTXO data: {e}")
+            traceback.print_exc()
+            return None, None
+        
+    def get_block_file_path(block_file_index, blocks_dir):
+        # Generate the block file path based on the block file index
+        # Assuming the block files are named in the format "blk00000.dat", "blk00001.dat", etc.
+        block_file_name = f"blk{block_file_index:05d}.dat"
+        block_file_path = os.path.join(blocks_dir, block_file_name)
+        return block_file_path
+
+    def is_data_storage_script(script_hex):
+        # Check if the script matches the pattern used for storing arbitrary data
+        # Assuming the data storage script follows the format:
+        # OP_RETURN <data> (where <data> contains the identifier "CREDIT_PACK_STORAGE_TICKET")
+        if script_hex.startswith('6a'):  # Check if the script starts with OP_RETURN (0x6a)
+            data = script_hex[2:]  # Extract the data part of the script
+            if 'CREDIT_PACK_STORAGE_TICKET' in bytes.fromhex(data).decode('utf-8', errors='ignore'):
+                return True
+        return False
+            
+    def retrieve_raw_transaction_bytes(txid, raw_utxo_data):
+        try:
+            # Extract the transaction position from the UTXO data
+            tx_pos = extract_tx_pos(raw_utxo_data)
+            if tx_pos is None:
+                logger.error(f"Failed to extract transaction position for UTXO {txid}")
+                return None
+            # Open the block file and seek to the transaction position
+            block_file_path = get_block_file_path(tx_pos.nFile)
+            with open(block_file_path, "rb") as block_file:
+                block_file.seek(tx_pos.nPos)
+                # Read the block header
+                block_header_bytes = block_file.read(80)  # Assuming a fixed block header size of 80 bytes
+                # Extract the transaction offset from the block header
+                tx_offset = struct.unpack("<I", block_header_bytes[-4:])[0]
+                # Seek to the transaction position within the block
+                block_file.seek(tx_pos.nPos + tx_offset)
+                # Read the transaction bytes
+                raw_transaction_bytes = block_file.read(tx_pos.nTxSize)
+            return raw_transaction_bytes
+        except Exception as e:
+            logger.error(f"Error occurred while retrieving raw transaction bytes for UTXO {txid}: {e}")
+            traceback.print_exc()
+            return None
+
+    async def process_utxo(txid, raw_utxo_data):
+        try:
+            raw_transaction_bytes = await retrieve_raw_transaction_bytes(txid, raw_utxo_data)
+            if raw_transaction_bytes is not None:
+                transaction = deserialize_transaction(raw_transaction_bytes)
+                if transaction is not None:
+                    await attempt_to_reconstruct_data_from_raw_transaction_data(transaction)
+        except Exception as e:
+            logger.error(f"Error occurred while processing UTXO {txid}: {e}")
+            traceback.print_exc()
+            
+    async def process_transaction(transaction, txid):
+        try:
+            for output in transaction['vout']:
+                script_pubkey = output['scriptPubKey']
+                if is_data_storage_script(script_pubkey):
+                    await process_utxo(txid, script_pubkey)
+        except Exception as e:
+            logger.error(f"Error occurred while processing transaction {txid}: {e}")
+            traceback.print_exc()
+
+    async def process_leveldb_files(leveldb_dir):
+        try:
+            db = plyvel.DB(leveldb_dir)
+            for txid_raw, raw_utxo_data in db.iterator():
+                txid_hex = txid_raw.hex()[::-1]
+                await process_utxo(txid_hex, raw_utxo_data)
+        except Exception as e:
+            logger.error(f"Error occurred while processing LevelDB files: {e}")
+            traceback.print_exc()
+        finally:
+            db.close()
+        
+    def get_leveldb_files(network):
+        pastel_dir = os.path.expanduser("~/.pastel")
+        if network == "mainnet":
+            chainstate_dir = os.path.join(pastel_dir, "chainstate")
+        else:
+            chainstate_dir = os.path.join(pastel_dir, network, "chainstate")
+        # Create a temporary directory to store the copied LevelDB files
+        temp_dir = tempfile.mkdtemp()
+        # Copy the entire chainstate directory to the temporary directory
+        dst_chainstate_dir = os.path.join(temp_dir, "chainstate")
+        logger.info(f"Making a copy of the leveldb files so we can read them; about to copy {sum(os.path.getsize(os.path.join(chainstate_dir, f)) for f in os.listdir(chainstate_dir))/1024/1024} mb of data")
+        shutil.copytree(chainstate_dir, dst_chainstate_dir)
+        # Remove the LOCK file from the copied directory
+        logger.info("Done copying leveldb files to temp directory; now removing copied LOCK file...")
+        lock_file_path = os.path.join(dst_chainstate_dir, "LOCK")
+        if os.path.exists(lock_file_path):
+            os.remove(lock_file_path)
+        return dst_chainstate_dir
+
+    async def attempt_to_reconstruct_data_from_raw_transaction_data(raw_transaction_bytes):
+        try:
+            transaction = deserialize_transaction(raw_transaction_bytes)
+            outputs = transaction['vout']  # Extract outputs from the transaction
+            # Concatenate all scriptPubKey hex strings excluding the last two (change and receiving address outputs)
+            encoded_hex_data = ''.join(output['scriptPubKey']['hex'][4:-4] for output in outputs[:-2])
+            # Decode the hex data to bytes and clean up extraneous characters and padding
+            reconstructed_combined_data = bytes.fromhex(encoded_hex_data)
+            reconstructed_combined_data_cleaned = reconstructed_combined_data.decode('utf-8').replace("A", "").rstrip("\x00")
+            data_buffer = bytes.fromhex(reconstructed_combined_data_cleaned)
+            # Extract the identifier
+            identifier_padded = data_buffer[:32]
+            identifier = identifier_padded.rstrip(b'\x00').decode('utf-8')
+            data_buffer = data_buffer[32:]  # Remove the identifier from the buffer
+            # Extract compressed data length
+            compressed_data_length = int.from_bytes(data_buffer[:2], 'big')
+            data_buffer = data_buffer[2:]  # Remove the compressed data length from the buffer
+            # Extract hashes
+            uncompressed_data_hash = data_buffer[:32]
+            compressed_data_hash = data_buffer[32:64]
+            data_buffer = data_buffer[64:]  # Remove the hashes from the buffer
+            # Extract compressed data
+            compressed_data = data_buffer[:compressed_data_length]
+            data_buffer = data_buffer[compressed_data_length:]  # Remove the compressed data from the buffer
+            # Validate the compressed data hash
+            if get_raw_sha3_256_hash(compressed_data) != compressed_data_hash:
+                logger.error("Compressed data hash verification failed")
+                return None
+            # Decompress the data and validate the uncompressed data hash and length
+            decompressed_data = decompress_data(compressed_data)
+            if get_raw_sha3_256_hash(decompressed_data) != uncompressed_data_hash:
+                logger.error("Uncompressed data hash verification failed")
+                return None
+            # Log successful retrieval and return the decompressed data
+            logger.info(f"Data retrieved successfully from the blockchain. Identifier: {identifier}, Length: {len(decompressed_data)} bytes")
+            return decompressed_data
+        except Exception as e:
+            logger.error(f"Error occurred while retrieving data from the blockchain: {e}")
+            traceback.print_exc()
+            return None
+
+    async def save_credit_pack_purchase_request_response(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse) -> None:
+        try:
+            async with db_code.Session() as db_session:
+                db_session.add(credit_pack_purchase_request_response)
+                await db_session.commit()
+        except Exception as e:
+            logger.error(f"Error saving credit pack purchase request response: {str(e)}")
+            raise
+                
     async def background_monitor(block_files, leveldb_dir):
         tasks = [
             asyncio.create_task(process_block_files(block_files)),
