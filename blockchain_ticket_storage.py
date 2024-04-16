@@ -18,8 +18,8 @@ logger = setup_logger()
 
 max_concurrent_requests = 5
 use_parallel = 0
-FEEPERKB = Decimal(0.001)
-base_transaction_amount = 0.00001
+FEEPERKB = Decimal(0.1)
+base_transaction_amount = Decimal(0.1)
 COIN = 100000 # patoshis in 1 PSL
     
 def get_network_info(rpc_port):
@@ -319,7 +319,7 @@ class CTxIn:
     def __init__(self, prevout_hash, prevout_n, script_sig=b'', sequence=0xffffffff):
         self.prevout_hash = prevout_hash
         self.prevout_n = prevout_n
-        self.script_sig = script_sig
+        self.script_sig = script_sig if isinstance(script_sig, bytes) else script_sig.encode('utf-8')
         self.sequence = sequence
     
 class CMutableTransaction:
@@ -345,7 +345,7 @@ def packtx(tx):
     # Serialize transaction inputs
     tx_data += varint(len(tx.vin))  # Number of inputs (varint)
     for txin in tx.vin:
-        tx_data += txin.prevout_hash[::-1]  # Transaction ID (32 bytes) in little-endian
+        tx_data += txin.prevout_hash  # Transaction ID (32 bytes) in little-endian
         tx_data += struct.pack('<I', txin.prevout_n)  # Output index (4 bytes)
         tx_data += varint(len(txin.script_sig))  # scriptSig length (varint)
         tx_data += txin.script_sig  # scriptSig (variable length)        
@@ -392,10 +392,10 @@ async def store_data_in_blockchain(input_data):
             script_pubkey = checkmultisig_scriptpubkey_dump(fd)
             if script_pubkey is None:
                 break
-            value = Decimal(1/COIN)
+            value = round(Decimal(100/COIN), 5)            
             txouts.append((value, script_pubkey))
             change -= value   
-        out_value = Decimal(base_transaction_amount) # dest output
+        out_value = round(base_transaction_amount, 5)
         change -= out_value
         receiving_address = await rpc_connection.getnewaddress()
         txouts.append((out_value, bytes([opcodes.OP_DUP]) + bytes([opcodes.OP_HASH160]) + pushdata(addr2bytes(receiving_address)) + bytes([opcodes.OP_EQUALVERIFY]) + bytes([opcodes.OP_CHECKSIG])))
@@ -405,16 +405,17 @@ async def store_data_in_blockchain(input_data):
         raw_transaction.vout = txouts        
         final_tx = packtx(raw_transaction)
         signed_tx = await rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
+        logger.info(f"Signed transaction: {signed_tx}")
         final_signed_transaction_size_in_bytes = len(signed_tx['hex'])/2
         logger.info(f"Final signed transaction size: {final_signed_transaction_size_in_bytes:,} bytes; Overall expansion factor versus compressed data size: {final_signed_transaction_size_in_bytes/len(compressed_data):.2f}")
-        fee = Decimal(len(signed_tx['hex'])/1000) * FEEPERKB
+        fee = round(Decimal(len(signed_tx['hex'])/1000) * FEEPERKB, 5)
         assert(signed_tx['complete'])
         hex_signed_transaction = signed_tx['hex']
         logger.info(f"Sending data transaction to address: {receiving_address}")
         logger.info(f"Size: {len(hex_signed_transaction)/2}  Fee: {fee}")   
         send_raw_transaction_result = await rpc_connection.sendrawtransaction(hex_signed_transaction)
         blockchain_transaction_id = send_raw_transaction_result
-        print('Transaction ID: ' + blockchain_transaction_id)
+        logger.info(f"Transaction ID: {blockchain_transaction_id}")
         return blockchain_transaction_id
     except Exception as e:
         logger.error(f"Error occurred while storing data in the blockchain: {e}")
