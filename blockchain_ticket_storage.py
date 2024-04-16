@@ -386,7 +386,7 @@ async def store_data_in_blockchain(input_data):
         fd = io.BytesIO(combined_data_hex)
         txins, change = await select_txins(0.00001)
         raw_transaction = CMutableTransaction()
-        raw_transaction.vin = [CTxIn(unhexlify(txin['txid']), txin['vout']) for txin in txins]
+        raw_transaction.vin = [CTxIn(unhexlify(txin['txid'][::-1]), txin['vout']) for txin in txins]
         txouts = []
         while True:
             script_pubkey = checkmultisig_scriptpubkey_dump(fd)
