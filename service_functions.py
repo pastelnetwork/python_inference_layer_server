@@ -2950,7 +2950,6 @@ async def process_inference_api_usage_request(inference_api_usage_request: db_co
     saved_request = await save_inference_api_usage_request(inference_api_usage_request)
     credit_pack_ticket_pastel_txid = inference_api_usage_request.credit_pack_ticket_pastel_txid
     credit_pack_purchase_request_response_object = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_pastel_txid)
-    # credit_pack_purchase_request_object = await get_credit_pack_purchase_request_from_response(credit_pack_purchase_request_response_object)
     credit_usage_tracking_psl_address = credit_pack_purchase_request_response_object.credit_usage_tracking_psl_address
     # Create and save the InferenceAPIUsageResponse
     inference_response = await create_and_save_inference_api_usage_response(saved_request, proposed_cost_in_credits, remaining_credits_after_request, credit_usage_tracking_psl_address)
