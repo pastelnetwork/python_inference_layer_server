@@ -2274,7 +2274,7 @@ async def main():
             logger.error("Credit pack ticket storage failed!")
 
     if use_test_inference_request_functionality:
-        credit_pack_ticket_pastel_txid = "75708a3f64d529b1c3fddb677735853838584fb9c254795801c7f6de84e1e295"
+        credit_pack_ticket_pastel_txid = "0a0869744c8be34680d67d76a26b46bb61cdabb88d4c657e602b91863457650c" # https://explorer-devnet.pastel.network/tx/0a0869744c8be34680d67d76a26b46bb61cdabb88d4c657e602b91863457650c
         if use_test_llm_text_completion:
             start_time = time.time()
             input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "

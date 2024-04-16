@@ -485,12 +485,12 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
         }
         
 class CreditPackPurchaseRequestResponseTxidMapping(SQLModel, table=True):
-    sha3_256_hash_of_credit_pack_purchase_request_fields: int = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_fields", primary_key=True, index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_fields", primary_key=True, index=True)
     pastel_api_credit_pack_ticket_registration_txid: str = Field(unique=True, index=True)        
     class Config:
         json_schema_extra = {
             "example": {
-                "credit_pack_purchase_request_response_id": 1,
+                "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "pastel_api_credit_pack_ticket_registration_txid": "0123456789abcdef..."
             }
         }

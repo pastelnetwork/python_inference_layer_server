@@ -1443,7 +1443,7 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
 async def save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse, txid: str) -> None:
     try:
         mapping = db_code.CreditPackPurchaseRequestResponseTxidMapping(
-            sha3_256_hash_of_price_agreement_request_fields=credit_pack_purchase_request_response.sha3_256_hash_of_price_agreement_request_fields,
+            sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
             pastel_api_credit_pack_ticket_registration_txid=txid
         )
         async with db_code.Session() as db_session:
@@ -1532,8 +1532,7 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
                 # Save the retrieved ticket to the local database
                 credit_pack_purchase_request_response_json_transformed = transform_credit_pack_purchase_request_response(json.loads(credit_pack_purchase_request_response_json))
                 credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_json_transformed)
-                # Save the txid mapping for the stored ticket
-                await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, credit_pack_ticket_txid)
+                logger.info(f"Reconstructed credit pack ticket data: {credit_pack_purchase_request_response}")
             else:
                 logger.error("Failed to verify that the stored blockchain ticket data can be reconstructed exactly!")
                 storage_validation_error_string = "Failed to verify that the stored blockchain ticket data can be reconstructed exactly! Difference: " + str(set(decoded_reconstructed_file_data).symmetric_difference(set(credit_pack_purchase_request_response_json)))
@@ -2116,6 +2115,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json)
             if storage_validation_error_string=="":
                 credit_pack_confirmation_outcome_string = "success"
+                await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, pastel_api_credit_pack_ticket_registration_txid)
             else:
                 credit_pack_confirmation_outcome_string = "failed"
             # Create the confirmation response without the hash and signature fields
