@@ -16,11 +16,16 @@ from httpx import AsyncClient, Limits, Timeout
 from logger_config import setup_logger
 logger = setup_logger()
 
-max_concurrent_requests = 5
-use_parallel = 0
-FEEPERKB = Decimal(0.1)
 base_transaction_amount = Decimal(0.1)
+max_concurrent_requests = 1000
+FEEPERKB = Decimal(0.1)
 COIN = 100000 # patoshis in 1 PSL
+OP_CHECKSIG = b'\xac'
+OP_CHECKMULTISIG = b'\xae'
+OP_PUSHDATA1 = b'\x4c'
+OP_DUP = b'\x76'
+OP_HASH160 = b'\xa9'
+OP_EQUALVERIFY = b'\x88'
     
 def get_network_info(rpc_port):
     if rpc_port == '9932':
@@ -61,7 +66,6 @@ def EncodeDecimal(o):
     raise TypeError(repr(o) + " is not JSON serializable")
 
 class AsyncAuthServiceProxy:
-    max_concurrent_requests = 1000
     _semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
     def __init__(self, service_url, service_name=None, reconnect_timeout=25, max_retries=3, request_timeout=120, fallback_url=None):
         self.service_url = service_url
@@ -238,24 +242,6 @@ def pushint(n):
     assert 0 < n <= 16
     return bytes([0x51 + n-1])
     
-class OpCodes:
-    OP_0 = 0x00
-    OP_PUSHDATA1 = 0x4c
-    OP_PUSHDATA2 = 0x4d
-    OP_PUSHDATA4 = 0x4e
-    OP_1NEGATE = 0x4f
-    OP_RESERVED = 0x50
-    OP_1 = 0x51
-    OP_DUP = 0x76
-    OP_HASH160 = 0xa9
-    OP_EQUAL = 0x87
-    OP_EQUALVERIFY = 0x88
-    OP_CHECKSIG = 0xac
-    OP_CHECKMULTISIG = 0xae
-    OP_RETURN = 0x6a
-    
-opcodes = OpCodes()
-    
 def checkmultisig_scriptpubkey_dump(fd):
     data = fd.read(65*3)
     if not data:
@@ -271,7 +257,7 @@ def checkmultisig_scriptpubkey_dump(fd):
             chunk += b'\x00'*(65-len(chunk))
         r += pushdata(chunk)
         n += 1
-    r += pushint(n) + bytes([opcodes.OP_CHECKMULTISIG])
+    r += pushint(n) + OP_CHECKMULTISIG
     return r
     
 def addr2bytes(s):
@@ -290,36 +276,39 @@ def addr2bytes(s):
             h = '00' + h
         else:
             break
-    return unhexstr(h)[1:-4] # skip version and checksum
+    decoded_address = unhexstr(h)
+    prefix_length = 2
+    return decoded_address[prefix_length:-4]
 
 def unhexstr(str):
     return unhexlify(str.encode('utf8'))
 
 def pushdata(data):
-    if len(data) <= 75:
-        return bytes([len(data)]) + data
-    elif len(data) <= 255:
-        return bytes([opcodes.OP_PUSHDATA1, len(data)]) + data
-    elif len(data) <= 65535:
-        return bytes([opcodes.OP_PUSHDATA2]) + struct.pack('<H', len(data)) + data
+    length = len(data)
+    if length < 0x4c:
+        return bytes([length]) + data
+    elif length <= 0xff:
+        return b'\x4c' + bytes([length]) + data
+    elif length <= 0xffff:
+        return b'\x4d' + struct.pack('<H', length) + data
     else:
-        return bytes([opcodes.OP_PUSHDATA4]) + struct.pack('<I', len(data)) + data
+        return b'\x4e' + struct.pack('<I', length) + data
 
 def varint(n):
     if n < 0xfd:
         return bytes([n])
-    elif n < 0xffff:
+    elif n <= 0xffff:
         return b'\xfd' + struct.pack('<H', n)
-    elif n < 0xffffffff:
+    elif n <= 0xffffffff:
         return b'\xfe' + struct.pack('<I', n)
     else:
         return b'\xff' + struct.pack('<Q', n)
-    
+            
 class CTxIn:
     def __init__(self, prevout_hash, prevout_n, script_sig=b'', sequence=0xffffffff):
         self.prevout_hash = prevout_hash
         self.prevout_n = prevout_n
-        self.script_sig = script_sig if isinstance(script_sig, bytes) else script_sig.encode('utf-8')
+        self.script_sig = script_sig
         self.sequence = sequence
     
 class CMutableTransaction:
@@ -345,7 +334,7 @@ def packtx(tx):
     # Serialize transaction inputs
     tx_data += varint(len(tx.vin))  # Number of inputs (varint)
     for txin in tx.vin:
-        tx_data += txin.prevout_hash  # Transaction ID (32 bytes) in little-endian
+        tx_data += txin.prevout_hash[::-1]  # Transaction ID (32 bytes) in little-endian
         tx_data += struct.pack('<I', txin.prevout_n)  # Output index (4 bytes)
         tx_data += varint(len(txin.script_sig))  # scriptSig length (varint)
         tx_data += txin.script_sig  # scriptSig (variable length)        
@@ -358,7 +347,7 @@ def packtx(tx):
         tx_data += txout[1]  # scriptPubKey (variable length)
     tx_data += struct.pack('<I', tx.lock_time)  # Locktime (4 bytes)
     tx_data += struct.pack('<I', tx.expiry_height)  # Expiry height (4 bytes)
-    tx_data += struct.pack('<q', tx.value_balance)  # Value balance (8 bytes)
+    tx_data += struct.pack('<Q', tx.value_balance)  # Value balance (8 bytes)
     # Serialize Sapling-specific fields
     tx_data += varint(len(tx.vShieldedSpend))  # Number of shielded spends (varint)
     tx_data += varint(len(tx.vShieldedOutput))  # Number of shielded outputs (varint)
@@ -383,11 +372,11 @@ async def store_data_in_blockchain(input_data):
         header = uncompressed_data_length.to_bytes(2, 'big') + uncompressed_data_hash + compressed_data_hash
         data_with_header = header + compressed_data
         combined_data_hex = hexlify(data_with_header)
-        fd = io.BytesIO(combined_data_hex)
         txins, change = await select_txins(0.00001)
         raw_transaction = CMutableTransaction()
-        raw_transaction.vin = [CTxIn(unhexlify(txin['txid'][::-1]), txin['vout']) for txin in txins]
+        raw_transaction.vin = [CTxIn(unhexlify(txin['txid']), txin['vout']) for txin in txins]
         txouts = []
+        fd = io.BytesIO(combined_data_hex)
         while True:
             script_pubkey = checkmultisig_scriptpubkey_dump(fd)
             if script_pubkey is None:
@@ -398,34 +387,26 @@ async def store_data_in_blockchain(input_data):
         out_value = round(base_transaction_amount, 5)
         change -= out_value
         receiving_address = await rpc_connection.getnewaddress()
-        txouts.append((out_value, bytes([opcodes.OP_DUP]) + bytes([opcodes.OP_HASH160]) + pushdata(addr2bytes(receiving_address)) + bytes([opcodes.OP_EQUALVERIFY]) + bytes([opcodes.OP_CHECKSIG])))
+        txouts.append((out_value, OP_DUP + OP_HASH160 + pushdata(addr2bytes(receiving_address)) + OP_EQUALVERIFY + OP_CHECKSIG))
         change_address = await rpc_connection.getnewaddress() # change output
-        txouts.append([change, bytes([opcodes.OP_DUP]) + bytes([opcodes.OP_HASH160]) + pushdata(addr2bytes(change_address)) + bytes([opcodes.OP_EQUALVERIFY]) + bytes([opcodes.OP_CHECKSIG])])
+        txouts.append([change, OP_DUP + OP_HASH160 + pushdata(addr2bytes(change_address)) + OP_EQUALVERIFY + OP_CHECKSIG])
         logger.info(f"Data length: {len(input_data)} bytes; Compressed data length: {len(compressed_data):,} bytes; Number of multisig outputs: {len(txouts):,}; Total size of multisig outputs in bytes: {sum(len(txout[1]) for txout in txouts):,}")
         raw_transaction.vout = txouts        
-        # Sign the transaction
         unsigned_tx = packtx(raw_transaction)
-        signed_tx = await rpc_connection.signrawtransaction(hexlify(unsigned_tx).decode('utf-8'))
-        # Extract the signed transaction hex
-        signed_tx_hex = signed_tx['hex']
-        # Decode the signed transaction hex to get the updated transaction object
-        decoded_tx = await rpc_connection.decoderawtransaction(signed_tx_hex)
-        # Update the script_sig for each input in the raw_transaction
-        for i, txin in enumerate(decoded_tx['vin']):
-            script_sig = unhexlify(txin['scriptSig']['hex'])
-            raw_transaction.vin[i].script_sig = script_sig
+        signed_tx_before_fees = await rpc_connection.signrawtransaction(hexlify(unsigned_tx).decode('utf-8'))
+        fee = round(Decimal(len(signed_tx_before_fees)/1000) * FEEPERKB, 5)
+        change -= fee
+        txouts[-1][0] = change
         final_tx = packtx(raw_transaction)
-        final_signed_transaction_size_in_bytes = len(final_tx) / 2
-        logger.info(f"Final signed transaction size: {final_signed_transaction_size_in_bytes:,} bytes; Overall expansion factor versus compressed data size: {final_signed_transaction_size_in_bytes/len(compressed_data):.2f}")
-        fee = round(Decimal(len(final_tx)/1000) * FEEPERKB, 5)
-        assert(signed_tx['complete'])
-        hex_signed_transaction = hexlify(final_tx).decode('utf-8')
+        signed_tx_after_fees = await rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
+        assert(signed_tx_after_fees['complete'])
+        hex_signed_transaction = signed_tx_after_fees['hex']
+        final_signed_transaction_size_in_bytes = len(hex_signed_transaction)/2
+        logger.info(f"Final signed transaction size: {final_signed_transaction_size_in_bytes:,} bytes; Overall expansion factor versus compressed data size: {final_signed_transaction_size_in_bytes/len(compressed_data):.2f}; Total transaction fee: {fee:.5f} PSL")
         logger.info(f"Sending data transaction to address: {receiving_address}")
-        logger.info(f"Size: {len(final_tx)/2}  Fee: {fee}")
-        send_raw_transaction_result = await rpc_connection.sendrawtransaction(hex_signed_transaction)
-        blockchain_transaction_id = send_raw_transaction_result
-        logger.info(f"Transaction ID: {blockchain_transaction_id}")
-        return blockchain_transaction_id
+        txid = await rpc_connection.sendrawtransaction(hex_signed_transaction)
+        logger.info(f"TXID of Data Transaction: {txid}")
+        return txid, final_signed_transaction_size_in_bytes
     except Exception as e:
         logger.error(f"Error occurred while storing data in the blockchain: {e}")
         traceback.print_exc()
