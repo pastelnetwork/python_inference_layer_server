@@ -392,7 +392,7 @@ async def store_data_in_blockchain(input_data):
         txouts.append((out_value, OP_DUP + OP_HASH160 + pushdata(addr2bytes(receiving_address)) + OP_EQUALVERIFY + OP_CHECKSIG))
         change_address = await rpc_connection.getnewaddress() # change output
         txouts.append([change, OP_DUP + OP_HASH160 + pushdata(addr2bytes(change_address)) + OP_EQUALVERIFY + OP_CHECKSIG])
-        logger.info(f"Data length: {len(input_data)} bytes; Compressed data length: {len(compressed_data):,} bytes; Number of multisig outputs: {len(txouts):,}; Total size of multisig outputs in bytes: {sum(len(txout[1]) for txout in txouts):,}")
+        logger.info(f"Original Data length: {len(input_data):,} bytes; Compressed data length: {len(compressed_data):,} bytes; Number of multisig outputs: {len(txouts):,}; Total size of multisig outputs in bytes: {sum(len(txout[1]) for txout in txouts):,}") 
         raw_transaction.vout = txouts        
         unsigned_tx = packtx(raw_transaction)
         signed_tx_before_fees = await rpc_connection.signrawtransaction(hexlify(unsigned_tx).decode('utf-8'))
@@ -421,19 +421,25 @@ async def retrieve_data_from_blockchain(txid):
         raw_transaction = await rpc_connection.getrawtransaction(txid, 1)  # Verbose output includes decoded data
         outputs = raw_transaction['vout']  # Extract outputs from the transaction
         # Concatenate all scriptPubKey hex strings excluding the last two (change and receiving address outputs)
-        encoded_hex_data = ''.join(output['scriptPubKey']['hex'] for output in outputs[:-2])
-        # Decode the hex data to bytes, then extract the header and compressed data
+        encoded_hex_data = ''.join(output['scriptPubKey']['hex'][4:-4] for output in outputs[:-2])
+        # Decode the hex data to bytes and clean up extraneous characters and padding
         reconstructed_combined_data = unhexlify(encoded_hex_data)
+        reconstructed_combined_data_cleaned = reconstructed_combined_data.decode('utf-8').replace("A", "").rstrip("\x00")
+        data_buffer = unhexlify(reconstructed_combined_data_cleaned)
         # Extract the identifier
-        identifier_padded = reconstructed_combined_data[:32]
-        identifier = identifier_padded.rstrip(b'\x00').decode('utf-8')  # Strip padding and decode
-        logger.info(f"Found Blockchain Ticket with Identifier: {identifier}")
-        # Define the header size with the identifier included
-        header_size = 32 + 2 + 32 + 32  # Identifier (32 bytes) + lengths and hashes
-        compressed_data_length = int.from_bytes(reconstructed_combined_data[32:34], 'big')
-        uncompressed_data_hash = reconstructed_combined_data[34:66]
-        compressed_data_hash = reconstructed_combined_data[66:98]
-        compressed_data = reconstructed_combined_data[header_size:header_size + compressed_data_length]
+        identifier_padded = data_buffer[:32]
+        identifier = identifier_padded.rstrip(b'\x00').decode('utf-8')
+        data_buffer = data_buffer[32:]  # Remove the identifier from the buffer
+        # Extract compressed data length
+        compressed_data_length = int.from_bytes(data_buffer[:2], 'big')
+        data_buffer = data_buffer[2:]  # Remove the compressed data length from the buffer
+        # Extract hashes
+        uncompressed_data_hash = data_buffer[:32]
+        compressed_data_hash = data_buffer[32:64]
+        data_buffer = data_buffer[64:]  # Remove the hashes from the buffer
+        # Extract compressed data
+        compressed_data = data_buffer[:compressed_data_length]
+        data_buffer = data_buffer[compressed_data_length:]  # Remove the compressed data from the buffer
         # Validate the compressed data hash
         if get_raw_sha3_256_hash(compressed_data) != compressed_data_hash:
             logger.error("Compressed data hash verification failed")
@@ -444,14 +450,13 @@ async def retrieve_data_from_blockchain(txid):
             logger.error("Uncompressed data hash verification failed")
             return None
         # Log successful retrieval and return the decompressed data
-        logger.info(f"Data retrieved successfully from the blockchain. Length: {len(decompressed_data)} bytes")
+        logger.info(f"Data retrieved successfully from the blockchain. Identifier: {identifier}, Length: {len(decompressed_data)} bytes")
         return decompressed_data
     except Exception as e:
         logger.error(f"Error occurred while retrieving data from the blockchain: {e}")
         traceback.print_exc()
         return None
-
-            
+    
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
         lines = f.readlines()
