@@ -485,7 +485,7 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
         }
         
 class CreditPackPurchaseRequestResponseTxidMapping(SQLModel, table=True):
-    sha3_256_hash_of_price_agreement_request_fields: int = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_price_agreement_request_fields", primary_key=True, index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields: int = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_fields", primary_key=True, index=True)
     pastel_api_credit_pack_ticket_registration_txid: str = Field(unique=True, index=True)        
     class Config:
         json_schema_extra = {
