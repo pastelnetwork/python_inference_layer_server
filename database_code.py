@@ -483,7 +483,20 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
                 "responding_supernode_signature_on_credit_pack_purchase_request_response_hash": "0xdef0..."
             }
         }
+        
+class CreditPackPurchaseRequestResponseTxidMapping(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    credit_pack_purchase_request_response_id: int = Field(foreign_key="creditpackpurchaserequestresponse.id", index=True)
+    pastel_api_credit_pack_ticket_registration_txid: str = Field(unique=True, index=True)        
 
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "credit_pack_purchase_request_response_id": 1,
+                "pastel_api_credit_pack_ticket_registration_txid": "0123456789abcdef..."
+            }
+        }
+        
 class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
@@ -643,7 +656,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True, index=True)
     inference_request_id: str = Field(unique=True, index=True)
     requesting_pastelid: str = Field(index=True)
-    credit_pack_identifier: str = Field(index=True)
+    credit_pack_ticket_pastel_txid: str = Field(index=True)
     requested_model_canonical_string: str
     model_inference_type_string: str
     model_parameters_json: str  # Store the dict serialized as a JSON string
@@ -670,7 +683,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
             "example": {
                 "inference_request_id": "0x1234...",
                 "requesting_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
-                "credit_pack_identifier": "0x5678...",
+                "credit_pack_ticket_pastel_txid": "0x5678...",
                 "requested_model_canonical_string": "gpt-3.5-turbo",
                 "model_inference_type_string": "text-completion",
                 "model_parameters_json": '{"max_tokens": 100, "temperature": 0.7}',

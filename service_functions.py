@@ -1156,6 +1156,17 @@ async def get_credit_pack_purchase_request_response(sha3_256_hash_of_credit_pack
         logger.error(f"Error getting credit pack purchase request response: {str(e)}")
         raise
 
+def get_credit_pack_purchase_request_from_response(response: db_code.CreditPackPurchaseRequestResponse) -> Optional[db_code.CreditPackPurchaseRequest]:
+    try:
+        async with db_code.Session() as db_session:
+            result = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequest).where(db_code.CreditPackPurchaseRequest.sha3_256_hash_of_credit_pack_purchase_request_fields == response.sha3_256_hash_of_credit_pack_purchase_request_fields)
+            )
+            return result.one_or_none()
+    except Exception as e:
+        logger.error(f"Error getting credit pack purchase request response: {str(e)}")
+        raise    
+    
 async def save_credit_pack_purchase_request_response(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse) -> None:
     try:
         async with db_code.Session() as db_session:
@@ -2831,26 +2842,32 @@ def normalize_string(s):
     """Remove non-alphanumeric characters and convert to lowercase."""
     return re.sub(r'\W+', '', s).lower()
 
+def validate_pastel_txid_string(input_string: str):
+    # Sample txid: 625694b632a05f5df8d70904b9b3ff03d144aec0352b2290a275379586daf8db
+    return re.match(r'^[0-9a-fA-F]{64}$', input_string) is not None
+
 async def validate_inference_api_usage_request(inference_api_usage_request: db_code.InferenceAPIUsageRequest) -> Tuple[bool, float, float]:
     try:
         validation_errors = await validate_inference_request_message_data_func()
         if validation_errors:
             raise ValueError(f"Invalid inference request message: {', '.join(validation_errors)}")        
         requesting_pastelid = inference_api_usage_request.requesting_pastelid
-        credit_pack_identifier = inference_api_usage_request.credit_pack_identifier
+        credit_pack_ticket_pastel_txid = inference_api_usage_request.credit_pack_ticket_pastel_txid
         requested_model = inference_api_usage_request.requested_model_canonical_string
         model_inference_type_string = inference_api_usage_request.model_inference_type_string
         model_parameters = inference_api_usage_request.model_parameters_json
         input_data = inference_api_usage_request.model_input_data_json_b64
-        # # TODO: Remove this placeholder code and replace with actual credit pack ticket
-        # # Check if the credit pack identifier matches the global credit pack
-        # if credit_pack_identifier != credit_pack.credit_pack_identifier:
-        #     logger.warning(f"Invalid credit pack identifier: {credit_pack_identifier}")
-        #     return False, 0, credit_pack.current_credit_balance
-        # Check if the requesting PastelID is authorized to use the credit pack
-        # if not credit_pack.is_authorized(requesting_pastelid):
-        #     logger.warning(f"Unauthorized PastelID: {requesting_pastelid}")
-        #     return False, 0, credit_pack.current_credit_balance
+        if not validate_pastel_txid_string(credit_pack_ticket_pastel_txid):
+            logger.error(f"Invalid PastelID: {credit_pack_ticket_pastel_txid}")
+            return False, 0, 0
+        credit_pack_purchase_request_response_object = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_pastel_txid)
+        credit_pack_purchase_request_object = await get_credit_pack_purchase_request_from_response(credit_pack_purchase_request_response_object)
+        if credit_pack_purchase_request_object:
+            list_of_authorized_pastelids_allowed_to_use_credit_pack = json.dumps(credit_pack_purchase_request_object.list_of_authorized_pastelids_allowed_to_use_credit_pack)
+            # Check if the requesting PastelID is authorized to use the credit pack
+            if requesting_pastelid not in list_of_authorized_pastelids_allowed_to_use_credit_pack:
+                logger.warning(f"Unauthorized PastelID: {requesting_pastelid}")
+                return False, 0, 0
         # # Retrieve the model menu
         model_menu = await get_inference_model_menu()
         # Check if the requested model exists in the model menu
@@ -2893,17 +2910,13 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         if detected_data_type == "txt":
             input_data = input_data_binary.decode("utf-8")
         proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, input_data)
-        # TODO: Remove this placeholder code and replace with actual credit pack ticket
-        # # Check if the credit pack has sufficient credits for the request
-        # if not credit_pack.has_sufficient_credits(proposed_cost_in_credits):
-        #     logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {credit_pack.current_credit_balance}")
-        #     return False, proposed_cost_in_credits, credit_pack.current_credit_balance
+        # Check if the credit pack has sufficient credits for the request
+        current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_purchase_request_response_object, burn_address)
+        if not proposed_cost_in_credits >= current_credit_balance:
+            logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {current_credit_balance}")
+            return False, proposed_cost_in_credits, current_credit_balance
         # Calculate the remaining credits after the request
-        # remaining_credits_after_request = credit_pack.current_credit_balance - proposed_cost_in_credits
-        # if remaining_credits_after_request < 0:
-        #     logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {credit_pack.current_credit_balance}")
-        #     return False, proposed_cost_in_credits, credit_pack.current_credit_balance
-        remaining_credits_after_request = 1000
+        remaining_credits_after_request = current_credit_balance - proposed_cost_in_credits
         return True, proposed_cost_in_credits, remaining_credits_after_request
     except Exception as e:
         logger.error(f"Error validating inference API usage request: {str(e)}")
@@ -2920,15 +2933,11 @@ async def process_inference_api_usage_request(inference_api_usage_request: db_co
         log_action_with_payload("Received", "inference API usage request", inference_api_usage_request_dict)
     # Save the inference API usage request
     saved_request = await save_inference_api_usage_request(inference_api_usage_request)
-    credit_pack_identifier = inference_api_usage_request.credit_pack_identifier
-    # current_dir = os.path.dirname(os.path.abspath(__file__))
-    # credit_pack_json_file_path = os.path.join(current_dir, CREDIT_PACK_FILE) 
-    # credit_pack = InferenceCreditPackMockup.load_from_json(credit_pack_json_file_path)
-    # TODO: Remove this placeholder code and replace with actual credit pack ticket
-    # if credit_pack.credit_pack_identifier == credit_pack_identifier:
-    #     credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
+    credit_pack_ticket_pastel_txid = inference_api_usage_request.credit_pack_ticket_pastel_txid
+    credit_pack_purchase_request_response_object = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_pastel_txid)
+    # credit_pack_purchase_request_object = await get_credit_pack_purchase_request_from_response(credit_pack_purchase_request_response_object)
+    credit_usage_tracking_psl_address = credit_pack_purchase_request_response_object.credit_usage_tracking_psl_address
     # Create and save the InferenceAPIUsageResponse
-    credit_usage_tracking_psl_address = "44oSueBgdMaAnGxrbTNZwQeDnxvPJg4dGAR3"
     inference_response = await create_and_save_inference_api_usage_response(saved_request, proposed_cost_in_credits, remaining_credits_after_request, credit_usage_tracking_psl_address)
     return inference_response
 
@@ -3653,7 +3662,7 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
             raise ValueError("Unauthorized access to inference output results")
         return inference_output_result
 
-async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address: str):
+async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack: db_code.CreditPackPurchaseRequestResponse, burn_address: str):
     """
     Determines the current credit balance of an inference credit pack based on the tracking transactions.
 
@@ -3666,11 +3675,9 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
         int: The number of confirmation transactions from the tracking address to the burn address.
     """
     global rpc_connection
-    # TODO: Remove this placeholder code and replace with actual credit pack ticket
-    # initial_credit_balance = credit_pack.initial_credit_balance
-    initial_credit_balance = 1000
-    # credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
-    credit_usage_tracking_psl_address = "44oSueBgdMaAnGxrbTNZwQeDnxvPJg4dGAR3"
+    credit_pack_purchase_request_object = await get_credit_pack_purchase_request_from_response(credit_pack)
+    initial_credit_balance = credit_pack_purchase_request_object.requested_initial_credits_in_credit_pack
+    credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
     # Get all transactions sent to the burn address
     transactions = await rpc_connection.listtransactions("*", 100000, 0, True)
     burn_address_transactions = [
@@ -3683,7 +3690,6 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     # Fetch and decode raw transactions in parallel using asyncio.gather
     decoded_tx_data_list = await asyncio.gather(*[get_and_decode_raw_transaction(txid) for txid in burn_address_txids])
     # Filter the tracking transactions to include only those sent from the credit_usage_tracking_psl_address
-
     tracking_transactions = []
     for decoded_tx_data in decoded_tx_data_list:
         decoded_tx_data_as_string = json.dumps(decoded_tx_data)
