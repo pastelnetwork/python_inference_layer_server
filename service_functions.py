@@ -849,7 +849,7 @@ async def process_broadcast_messages(message, db_session):
         usage_request = db_code.InferenceAPIUsageRequest(
             inference_request_id=response_data['inference_request_id'],
             requesting_pastelid=response_data['requesting_pastelid'],
-            credit_pack_identifier=response_data['credit_pack_identifier'],
+            credit_pack_ticket_pastel_txid=response_data['credit_pack_ticket_pastel_txid'],
             requested_model_canonical_string=response_data['requested_model_canonical_string'],
             model_inference_type_string=response_data['model_inference_type_string'],
             model_parameters_json=response_data['model_parameters_json'],
@@ -1156,7 +1156,7 @@ async def get_credit_pack_purchase_request_response(sha3_256_hash_of_credit_pack
         logger.error(f"Error getting credit pack purchase request response: {str(e)}")
         raise
 
-def get_credit_pack_purchase_request_from_response(response: db_code.CreditPackPurchaseRequestResponse) -> Optional[db_code.CreditPackPurchaseRequest]:
+async def get_credit_pack_purchase_request_from_response(response: db_code.CreditPackPurchaseRequestResponse) -> Optional[db_code.CreditPackPurchaseRequest]:
     try:
         async with db_code.Session() as db_session:
             result = await db_session.exec(
@@ -1373,6 +1373,18 @@ async def check_credit_pack_purchase_request_status(credit_pack_purchase_request
                         return "completed"
                     else:
                         return "failed"
+                    
+def transform_credit_pack_purchase_request_response(result: dict) -> dict:
+    transformed_result = result.copy()
+    fields_to_convert = [
+        "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms",
+        "list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash",
+        "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json"
+    ]
+    for field in fields_to_convert:
+        if field in transformed_result:
+            transformed_result[field] = json.dumps(transformed_result[field])
+    return transformed_result                    
 
 async def calculate_preliminary_psl_price_per_credit():
     try:
@@ -1431,7 +1443,7 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
 async def save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse, txid: str) -> None:
     try:
         mapping = db_code.CreditPackPurchaseRequestResponseTxidMapping(
-            credit_pack_purchase_request_response_id=credit_pack_purchase_request_response.id,
+            sha3_256_hash_of_price_agreement_request_fields=credit_pack_purchase_request_response.sha3_256_hash_of_price_agreement_request_fields,
             pastel_api_credit_pack_ticket_registration_txid=txid
         )
         async with db_code.Session() as db_session:
@@ -1464,12 +1476,18 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
         credit_pack_purchase_request_response = await retrieve_credit_pack_ticket_from_blockchain_using_txid(txid)
         if credit_pack_purchase_request_response is not None:
             # Save the retrieved ticket to the local database for future reference
-            async with db_code.Session() as db_session:
-                db_session.add(credit_pack_purchase_request_response)
-                await db_session.commit()
-                await db_session.refresh(credit_pack_purchase_request_response)
+            try:
+                async with db_code.Session() as db_session:
+                    db_session.add(credit_pack_purchase_request_response)
+                    await db_session.commit()
+                    await db_session.refresh(credit_pack_purchase_request_response)
+            except Exception as e:
+                logger.error(f"Error saving retrieved credit pack ticket to the local database: {str(e)}")
             # Save the txid mapping for the retrieved ticket
-            await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, txid)
+            try:
+                await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, txid)
+            except Exception as e:
+                logger.error(f"Error saving txid mapping for retrieved credit pack ticket: {str(e)}")
         else:
             raise ValueError(f"Credit pack ticket not found for txid: {txid}")
         return credit_pack_purchase_request_response
@@ -1512,11 +1530,8 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
             if decoded_reconstructed_file_data == credit_pack_purchase_request_response_json:
                 logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
                 # Save the retrieved ticket to the local database
-                credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(credit_pack_purchase_request_response_json)
-                async with db_code.Session() as db_session:
-                    db_session.add(credit_pack_purchase_request_response)
-                    await db_session.commit()
-                    await db_session.refresh(credit_pack_purchase_request_response)
+                credit_pack_purchase_request_response_json_transformed = transform_credit_pack_purchase_request_response(json.loads(credit_pack_purchase_request_response_json))
+                credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_json_transformed)
                 # Save the txid mapping for the stored ticket
                 await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, credit_pack_ticket_txid)
             else:
@@ -1556,7 +1571,7 @@ async def process_credit_purchase_initial_request(credit_pack_purchase_request: 
         credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestPreliminaryPriceQuote(
             sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_purchase_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
             credit_usage_tracking_psl_address=credit_pack_purchase_request.credit_usage_tracking_psl_address,
-            credit_pack_purchase_request_response_fields_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(credit_pack_purchase_request),
+            credit_pack_purchase_request_fields_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(credit_pack_purchase_request),
             preliminary_quoted_price_per_credit_in_psl=preliminary_quoted_price_per_credit_in_psl,
             preliminary_total_cost_of_credit_pack_in_psl=preliminary_total_cost_of_credit_pack_in_psl,
             preliminary_price_quote_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
@@ -1588,7 +1603,7 @@ async def process_credit_purchase_initial_request(credit_pack_purchase_request: 
 async def generate_credit_pack_request_rejection_message(credit_pack_request: db_code.CreditPackPurchaseRequest, validation_errors: List[str]) -> db_code.CreditPackPurchaseRequestRejection:
     rejection_message = db_code.CreditPackPurchaseRequestRejection(
         sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
-        credit_pack_purchase_request_response_fields_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(credit_pack_request),
+        credit_pack_purchase_request_fields_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(credit_pack_request),
         rejection_reason_string=", ".join(validation_errors),
         rejection_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
         rejection_pastel_block_height=await get_current_pastel_block_height_func(),
@@ -1747,14 +1762,14 @@ async def process_credit_pack_price_agreement_request(price_agreement_request: d
         # Create the response without the hash and signature fields
         response = db_code.CreditPackPurchasePriceAgreementRequestResponse(
             sha3_256_hash_of_price_agreement_request_fields=price_agreement_request.sha3_256_hash_of_price_agreement_request_fields,
-            credit_pack_purchase_request_response_fields_json=price_agreement_request.credit_pack_purchase_request_response_fields_json,
+            credit_pack_purchase_request_fields_json=price_agreement_request.credit_pack_purchase_request_fields_json,
             agree_with_proposed_price=agree_with_proposed_price,
             credit_usage_tracking_psl_address=price_agreement_request.credit_usage_tracking_psl_address,
             proposed_psl_price_per_credit=price_agreement_request.proposed_psl_price_per_credit,
             proposed_price_agreement_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             proposed_price_agreement_response_pastel_block_height=await get_current_pastel_block_height_func(),
             proposed_price_agreement_response_message_version_string="1.0",
-            responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json=await sign_message_with_pastelid_func(MY_PASTELID, price_agreement_request.credit_pack_purchase_request_response_fields_json, LOCAL_PASTEL_ID_PASSPHRASE),
+            responding_supernode_signature_on_credit_pack_purchase_request_fields_json=await sign_message_with_pastelid_func(MY_PASTELID, price_agreement_request.credit_pack_purchase_request_fields_json, LOCAL_PASTEL_ID_PASSPHRASE),
             responding_supernode_pastelid=MY_PASTELID,
             sha3_256_hash_of_price_agreement_request_response_fields="",
             responding_supernode_signature_on_price_agreement_request_response_hash=""
@@ -1795,7 +1810,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
         price_agreement_request = db_code.CreditPackPurchasePriceAgreementRequest(
             sha3_256_hash_of_credit_pack_purchase_request_response_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields,
             supernode_requesting_price_agreement_pastelid=MY_PASTELID,
-            credit_pack_purchase_request_response_fields_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(preliminary_price_quote_response),
+            credit_pack_purchase_request_fields_json=await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(preliminary_price_quote_response),
             credit_usage_tracking_psl_address=preliminary_price_quote_response.credit_usage_tracking_psl_address,
             proposed_psl_price_per_credit=preliminary_price_quote_response.preliminary_quoted_price_per_credit_in_psl,
             price_agreement_request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
@@ -1834,7 +1849,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             logger.info("Responding to end user with termination message...")
             termination_message = db_code.CreditPackPurchaseRequestResponseTermination(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
-                credit_pack_purchase_request_response_fields_json=preliminary_price_quote_response.credit_pack_purchase_request_response_fields_json,
+                credit_pack_purchase_request_fields_json=preliminary_price_quote_response.credit_pack_purchase_request_fields_json,
                 termination_reason_string="Not enough supernodes responded with valid price agreement responses",
                 termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
@@ -1864,7 +1879,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             logger.info("Responding to end user with termination message...")
             termination_message = db_code.CreditPackPurchaseRequestResponseTermination(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
-                credit_pack_purchase_request_response_fields_json=preliminary_price_quote_response.credit_pack_purchase_request_response_fields_json,
+                credit_pack_purchase_request_fields_json=preliminary_price_quote_response.credit_pack_purchase_request_fields_json,
                 termination_reason_string="Not enough supernodes agreed to the proposed pricing",
                 termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
@@ -1887,21 +1902,21 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
         logger.info(f"Enough supernodes agreed to the proposed pricing; {len(list_of_agreeing_supernodes)} supernodes agreed to the proposed pricing, achieving a voting percentage of {supernode_price_agreement_voting_percentage:.2%}, more than the required minimum percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:.2%}")
         # Aggregate the signatures from the agreeing supernodes:
         list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash = []
-        list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json = []
+        list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json = []
         for response in valid_price_agreement_request_responses:
             if response.agree_with_proposed_price:
                 list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash.append(
                     response.responding_supernode_signature_on_price_agreement_request_response_hash
                 )
-                list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json.append(
-                    response.responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json
+                list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json.append(
+                    response.responding_supernode_signature_on_credit_pack_purchase_request_fields_json
                 )
-        credit_request_response_dict = json.loads(preliminary_price_quote_response.credit_pack_purchase_request_response_fields_json)
+        credit_request_response_dict = json.loads(preliminary_price_quote_response.credit_pack_purchase_request_fields_json)
         requested_initial_credits_in_credit_pack = credit_request_response_dict['requested_initial_credits_in_credit_pack']
         # Create the credit pack purchase request response
         credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(
             sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
-            credit_pack_purchase_request_response_fields_json=preliminary_price_quote_response.credit_pack_purchase_request_response_fields_json,
+            credit_pack_purchase_request_fields_json=preliminary_price_quote_response.credit_pack_purchase_request_fields_json,
             psl_cost_per_credit=preliminary_price_quote_response.preliminary_quoted_price_per_credit_in_psl,
             proposed_total_cost_of_credit_pack_in_psl=requested_initial_credits_in_credit_pack*preliminary_price_quote_response.preliminary_quoted_price_per_credit_in_psl,
             credit_usage_tracking_psl_address=preliminary_price_quote_response.credit_usage_tracking_psl_address,
@@ -1911,7 +1926,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             responding_supernode_pastelid=MY_PASTELID,
             list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms=list_of_agreeing_supernodes,
             list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash=list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash,
-            list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json=list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_response_fields_json,
+            list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json=list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json,
             sha3_256_hash_of_credit_pack_purchase_request_response_fields="",
             responding_supernode_signature_on_credit_pack_purchase_request_response_hash=""
         )
@@ -1965,7 +1980,7 @@ async def get_credit_purchase_request_status(status_request: db_code.CreditPackR
 async def process_credit_pack_purchase_request_final_response_announcement(response: db_code.CreditPackPurchaseRequestResponse) -> None:
     try:
         # Validate the response fields
-        if not response.sha3_256_hash_of_credit_pack_purchase_request_fields or not response.credit_pack_purchase_request_response_fields_json:
+        if not response.sha3_256_hash_of_credit_pack_purchase_request_fields or not response.credit_pack_purchase_request_fields_json:
             raise ValueError("Invalid final response announcement")
         # Save the final response to the db
         await save_credit_pack_purchase_request_final_response(response)
@@ -4049,8 +4064,8 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
                 for signature_field_name in signature_field_names:
                     if signature_field_name == "responding_supernode_signature_on_price_agreement_request_response_hash":
                         message_to_verify = getattr(model_instance, "sha3_256_hash_of_price_agreement_request_response_fields")
-                    elif signature_field_name == "responding_supernode_signature_on_credit_pack_purchase_request_response_fields_json":
-                        message_to_verify = getattr(model_instance, "credit_pack_purchase_request_response_fields_json")
+                    elif signature_field_name == "responding_supernode_signature_on_credit_pack_purchase_request_fields_json":
+                        message_to_verify = getattr(model_instance, "credit_pack_purchase_request_fields_json")
                     else:
                         continue
                     signature = getattr(model_instance, signature_field_name)
