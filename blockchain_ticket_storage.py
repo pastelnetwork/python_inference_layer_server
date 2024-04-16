@@ -406,8 +406,12 @@ async def store_data_in_blockchain(input_data):
         # Sign the transaction
         unsigned_tx = packtx(raw_transaction)
         signed_tx = await rpc_connection.signrawtransaction(hexlify(unsigned_tx).decode('utf-8'))
+        # Extract the signed transaction hex
+        signed_tx_hex = signed_tx['hex']
+        # Decode the signed transaction hex to get the updated transaction object
+        decoded_tx = await rpc_connection.decoderawtransaction(signed_tx_hex)
         # Update the script_sig for each input in the raw_transaction
-        for i, txin in enumerate(signed_tx['vin']):
+        for i, txin in enumerate(decoded_tx['vin']):
             script_sig = unhexlify(txin['scriptSig']['hex'])
             raw_transaction.vin[i].script_sig = script_sig
         final_tx = packtx(raw_transaction)
