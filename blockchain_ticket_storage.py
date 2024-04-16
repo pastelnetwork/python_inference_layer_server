@@ -403,16 +403,21 @@ async def store_data_in_blockchain(input_data):
         txouts.append([change, bytes([opcodes.OP_DUP]) + bytes([opcodes.OP_HASH160]) + pushdata(addr2bytes(change_address)) + bytes([opcodes.OP_EQUALVERIFY]) + bytes([opcodes.OP_CHECKSIG])])
         logger.info(f"Data length: {len(input_data)} bytes; Compressed data length: {len(compressed_data):,} bytes; Number of multisig outputs: {len(txouts):,}; Total size of multisig outputs in bytes: {sum(len(txout[1]) for txout in txouts):,}")
         raw_transaction.vout = txouts        
+        # Sign the transaction
+        unsigned_tx = packtx(raw_transaction)
+        signed_tx = await rpc_connection.signrawtransaction(hexlify(unsigned_tx).decode('utf-8'))
+        # Update the script_sig for each input in the raw_transaction
+        for i, txin in enumerate(signed_tx['vin']):
+            script_sig = unhexlify(txin['scriptSig']['hex'])
+            raw_transaction.vin[i].script_sig = script_sig
         final_tx = packtx(raw_transaction)
-        signed_tx = await rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
-        logger.info(f"Signed transaction: {signed_tx}")
-        final_signed_transaction_size_in_bytes = len(signed_tx['hex'])/2
+        final_signed_transaction_size_in_bytes = len(final_tx) / 2
         logger.info(f"Final signed transaction size: {final_signed_transaction_size_in_bytes:,} bytes; Overall expansion factor versus compressed data size: {final_signed_transaction_size_in_bytes/len(compressed_data):.2f}")
-        fee = round(Decimal(len(signed_tx['hex'])/1000) * FEEPERKB, 5)
+        fee = round(Decimal(len(final_tx)/1000) * FEEPERKB, 5)
         assert(signed_tx['complete'])
-        hex_signed_transaction = signed_tx['hex']
+        hex_signed_transaction = hexlify(final_tx).decode('utf-8')
         logger.info(f"Sending data transaction to address: {receiving_address}")
-        logger.info(f"Size: {len(hex_signed_transaction)/2}  Fee: {fee}")   
+        logger.info(f"Size: {len(final_tx)/2}  Fee: {fee}")
         send_raw_transaction_result = await rpc_connection.sendrawtransaction(hex_signed_transaction)
         blockchain_transaction_id = send_raw_transaction_result
         logger.info(f"Transaction ID: {blockchain_transaction_id}")
