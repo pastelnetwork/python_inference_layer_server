@@ -676,6 +676,13 @@ async def check_psl_address_balance_alternative_func(address_to_check):
     # Calculate the sum of the 'amount' column for the filtered DataFrame
     balance_at_address = address_amounts_df_filtered['amount'].sum()
     return balance_at_address
+        
+async def create_and_fund_new_psl_credit_tracking_address(amount_of_psl_to_fund_address_with: float):
+    global rpc_connection
+    new_credit_tracking_address = await rpc_connection.getnewaddress()
+    txid = await send_to_address_func(new_credit_tracking_address, amount_of_psl_to_fund_address_with, comment="Funding new credit tracking address ", comment_to="", subtract_fee_from_amount=False)
+    logger.info(f"Funded new credit tracking address {new_credit_tracking_address} with {amount_of_psl_to_fund_address_with} PSL. TXID: {txid}")
+    return new_credit_tracking_address, txid
 
 async def check_psl_address_balance_func(address_to_check):
     global rpc_connection
@@ -1420,8 +1427,9 @@ class PastelMessagingClient:
             response = await client.get(f"{supernode_url}/get_credit_pack_ticket_from_txid", params=params)
             response.raise_for_status()
             result = response.json()
-            log_action_with_payload("receiving", "credit pack ticket from Supernode", result)
-            return CreditPackPurchaseRequestResponse.model_validate(result)
+            result_transformed = transform_credit_pack_purchase_request_response(result)
+            log_action_with_payload("receiving", "credit pack ticket from Supernode", result_transformed)
+            return CreditPackPurchaseRequestResponse.model_validate(result_transformed)
 
     async def credit_pack_ticket_initial_purchase_request(self, supernode_url: str, credit_pack_request: CreditPackPurchaseRequest) -> Union[CreditPackPurchaseRequestPreliminaryPriceQuote, CreditPackPurchaseRequestRejection]:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
@@ -2057,7 +2065,7 @@ async def handle_credit_pack_ticket_end_to_end(
     )
     credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_request)
     credit_pack_request.requesting_end_user_pastelid_signature_on_request_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields, MY_PASTELID_PASSPHRASE)
-    print(f"Credit pack purchase request data:\n {credit_pack_request}")
+    # print(f"Credit pack purchase request data:\n {credit_pack_request}")
     # Send the credit pack request to the highest-ranked supernode
     closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(1, MY_LOCAL_PASTELID, supernode_list_df)
     highest_ranked_supernode_url = closest_supernodes[0][0]
@@ -2140,6 +2148,16 @@ async def handle_credit_pack_ticket_end_to_end(
         return credit_pack_storage_retry_request_response
     else:
         return credit_pack_purchase_request_confirmation_response
+
+async def get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid: str):
+    # Create messaging client to use:
+    messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
+    # Get the closest Supernode URL
+    supernode_list_df, supernode_list_json = await check_supernode_list_func()
+    supernode_url, _ = await get_closest_supernode_to_pastelid_url(MY_LOCAL_PASTELID, supernode_list_df)
+    logger.info(f"Getting credit pack ticket data from Supernode URL: {supernode_url}...")
+    credit_pack_data_object = await messaging_client.get_credit_pack_ticket_from_txid(supernode_url, credit_pack_ticket_pastel_txid)
+    return credit_pack_data_object
 
 async def handle_inference_request_end_to_end(
     credit_pack_ticket_pastel_txid: str,
@@ -2271,8 +2289,9 @@ async def main():
         
     use_test_messaging_functionality = 0
     use_test_credit_pack_ticket_functionality = 1
+    use_test_credit_pack_ticket_usage = 0
     use_test_inference_request_functionality = 0
-    use_test_llm_text_completion = 1
+    use_test_llm_text_completion = 0
     use_test_image_generation = 0
 
     if use_test_messaging_functionality:
@@ -2287,7 +2306,8 @@ async def main():
     if use_test_credit_pack_ticket_functionality:
         # Test credit pack ticket functionality
         number_of_credits = 150
-        credit_usage_tracking_psl_address = LOCAL_CREDIT_TRACKING_PSL_ADDRESS
+        amount_to_fund_credit_tracking_address = 100.0
+        credit_usage_tracking_psl_address, _ = await create_and_fund_new_psl_credit_tracking_address(amount_to_fund_credit_tracking_address)
         credit_pack_purchase_request_confirmation_response = await handle_credit_pack_ticket_end_to_end(
             number_of_credits,
             credit_usage_tracking_psl_address,
@@ -2299,8 +2319,19 @@ async def main():
         else:
             logger.error("Credit pack ticket storage failed!")
 
+    credit_pack_ticket_pastel_txid = "569503ba7ff38e072f63d3ddb6a43fc843f4c9fe0ce9084fa035910adc9edb75" # https://explorer-devnet.pastel.network/tx/569503ba7ff38e072f63d3ddb6a43fc843f4c9fe0ce9084fa035910adc9edb75
+    if use_test_credit_pack_ticket_usage:
+        start_time = time.time()
+        credit_ticket_object = await get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid)
+        credit_pack_purchase_request_dict = json.loads(credit_ticket_object.credit_pack_purchase_request_fields_json)
+        initial_credit_pack_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
+        logger.info(f"Credit pack ticket data retrieved with initial balance {initial_credit_pack_balance}")
+        logger.info(f"Corresponding credit pack request dict: {credit_pack_purchase_request_dict}")
+        end_time = time.time()
+        duration_in_seconds = (end_time - start_time)
+        logger.info(f"Total time taken for credit pack ticket lookup: {round(duration_in_seconds, 2)} seconds")
+                
     if use_test_inference_request_functionality:
-        credit_pack_ticket_pastel_txid = "569503ba7ff38e072f63d3ddb6a43fc843f4c9fe0ce9084fa035910adc9edb75" # https://explorer-devnet.pastel.network/tx/569503ba7ff38e072f63d3ddb6a43fc843f4c9fe0ce9084fa035910adc9edb75
         if use_test_llm_text_completion:
             start_time = time.time()
             input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "

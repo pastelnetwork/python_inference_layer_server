@@ -396,7 +396,7 @@ class CreditPackPurchasePriceAgreementRequestResponse(SQLModel, table=True):
     sha3_256_hash_of_price_agreement_request_fields: str = Field(primary_key=True, index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
     agree_with_proposed_price: bool
-    credit_usage_tracking_psl_address: str = Field(index=True)
+    credit_usage_tracking_psl_address: str = Field(unique=True,index=True)
     proposed_psl_price_per_credit: float
     proposed_price_agreement_response_timestamp_utc_iso_string: str
     proposed_price_agreement_response_pastel_block_height: int

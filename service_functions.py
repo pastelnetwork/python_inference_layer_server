@@ -1155,7 +1155,18 @@ async def get_credit_pack_purchase_request_response(sha3_256_hash_of_credit_pack
     except Exception as e:
         logger.error(f"Error getting credit pack purchase request response: {str(e)}")
         raise
-
+    
+async def get_credit_pack_purchase_request_response_from_request_hash(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> db_code.CreditPackPurchaseRequestResponse:
+    try:
+        async with db_code.Session() as db_session:
+            result = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestResponse).where(db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
+            )
+            return result.one_or_none()
+    except Exception as e:
+        logger.error(f"Error getting credit pack purchase request response: {str(e)}")
+        raise
+    
 async def get_credit_pack_purchase_request_from_response(response: db_code.CreditPackPurchaseRequestResponse) -> Optional[db_code.CreditPackPurchaseRequest]:
     try:
         async with db_code.Session() as db_session:
@@ -1468,9 +1479,10 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
         async with db_code.Session() as db_session:
             mapping = await db_session.exec(
                 select(db_code.CreditPackPurchaseRequestResponseTxidMapping).where(db_code.CreditPackPurchaseRequestResponseTxidMapping.pastel_api_credit_pack_ticket_registration_txid == txid)
-            ).one_or_none()
-            if mapping is not None:
-                credit_pack_purchase_request_response = await db_session.get(db_code.CreditPackPurchaseRequestResponse, mapping.credit_pack_purchase_request_response_id)
+            )
+            mapping_result = mapping.one_or_none()
+            if mapping_result is not None:
+                credit_pack_purchase_request_response = await get_credit_pack_purchase_request_response_from_request_hash(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
                 return credit_pack_purchase_request_response
         # If the ticket is not found in the local database, retrieve it from the blockchain
         credit_pack_purchase_request_response = await retrieve_credit_pack_ticket_from_blockchain_using_txid(txid)
@@ -1555,6 +1567,18 @@ async def check_original_supernode_storage_confirmation(sha3_256_hash_of_credit_
             select(db_code.CreditPackPurchaseRequestConfirmationResponse).where(db_code.CreditPackPurchaseRequestConfirmationResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == sha3_256_hash_of_credit_pack_purchase_request_response_fields)
         )
         return result.one_or_none() is not None
+    
+async def check_if_credit_usage_tracking_psl_address_has_already_been_used_for_a_credit_pack(credit_usage_tracking_psl_address: str):
+    async with db_code.Session() as db:
+        result = await db.exec(
+            select(db_code.CreditPackPurchaseRequestResponse).where(db_code.CreditPackPurchaseRequestResponse.credit_usage_tracking_psl_address == credit_usage_tracking_psl_address)
+        )
+        credit_pack_purchase_request_response = result.one_or_none()
+        if credit_pack_purchase_request_response is not None:
+            credit_tracking_address_already_used = True
+        else:
+            credit_tracking_address_already_used = False
+        return credit_tracking_address_already_used, credit_pack_purchase_request_response
 
 async def process_credit_purchase_initial_request(credit_pack_purchase_request: db_code.CreditPackPurchaseRequest) -> db_code.CreditPackPurchaseRequestPreliminaryPriceQuote:
     try:
@@ -1563,6 +1587,12 @@ async def process_credit_purchase_initial_request(credit_pack_purchase_request: 
         if request_validation_errors:
             rejection_message = await generate_credit_pack_request_rejection_message(credit_pack_purchase_request, request_validation_errors)
             logger.error(f"Invalid credit purchase request: {', '.join(request_validation_errors)}")
+            return rejection_message
+        # Check if credit_usage_tracking_psl_address has already been used for an existing credit pack at any time:
+        credit_tracking_address_already_used, credit_pack_purchase_request_response = await check_if_credit_usage_tracking_psl_address_has_already_been_used_for_a_credit_pack(credit_pack_purchase_request.credit_usage_tracking_psl_address)
+        if credit_tracking_address_already_used:
+            rejection_message = f"The specified credit tracking address of {credit_pack_purchase_request.credit_usage_tracking_psl_address} has already been used for a credit pack purchase (with sha3-256 hash of credit request fields of {credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_fields})"
+            logger.error(rejection_message)
             return rejection_message
         # Determine the preliminary price quote
         preliminary_quoted_price_per_credit_in_psl = await calculate_preliminary_psl_price_per_credit()
@@ -1958,10 +1988,6 @@ async def get_credit_purchase_request_status(status_request: db_code.CreditPackR
         # Validate the request fields
         if not status_request.sha3_256_hash_of_credit_pack_purchase_request_fields or not status_request.requesting_end_user_pastelid:
             raise ValueError("Invalid status check request")
-        status_request_validation_errors = await validate_credit_pack_ticket_message_data_func(status_request)
-        if status_request_validation_errors:
-            logger.error(f"Invalid status check request: {', '.join(status_request_validation_errors)}")
-            raise ValueError(f"Invalid status check request: {', '.join(status_request_validation_errors)}")
         await save_credit_pack_purchase_request_status_check(status_request)
         # Retrieve the credit pack purchase request
         credit_pack_purchase_request = await get_credit_pack_purchase_request(status_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
@@ -2863,7 +2889,7 @@ def validate_pastel_txid_string(input_string: str):
 
 async def validate_inference_api_usage_request(inference_api_usage_request: db_code.InferenceAPIUsageRequest) -> Tuple[bool, float, float]:
     try:
-        validation_errors = await validate_inference_request_message_data_func()
+        validation_errors = await validate_inference_request_message_data_func(inference_api_usage_request)
         if validation_errors:
             raise ValueError(f"Invalid inference request message: {', '.join(validation_errors)}")        
         requesting_pastelid = inference_api_usage_request.requesting_pastelid
