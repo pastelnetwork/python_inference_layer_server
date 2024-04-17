@@ -804,10 +804,10 @@ async def retrieve_inference_output_results_endpoint(
     except Exception as e:
         logger.error(f"Error retrieving inference output results: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving inference output results: {str(e)}")
-    
+
 
 @router.post("/audit_inference_request_response", response_model=db.InferenceAPIUsageResponse)
-async def audit_inference_request_result_endpoint(
+async def audit_inference_request_response_endpoint(
     inference_response_id: str = Body(..., description="The inference response ID"),
     pastel_id: str = Body(..., description="The PastelID of the requester"),
     signature: str = Body(..., description="The signature of the PastelID on the inference_response_id"),
@@ -822,12 +822,38 @@ async def audit_inference_request_result_endpoint(
         is_valid_signature = await service_functions.verify_message_with_pastelid_func(pastel_id, inference_response_id, signature)
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        request = await service_functions.get_inference_api_usage_request_for_audit(result.inference_request_id)
+        api_usage_response = await service_functions.get_inference_api_usage_response_for_audit(result.inference_request_id)
         # Verify that the PastelID matches the one in the response
-        if request.requesting_pastelid != pastel_id:
+        if api_usage_response.requesting_pastelid != pastel_id:
             raise HTTPException(status_code=403, detail="PastelID does not match the one in the inference request")
         # Return the InferenceAPIOutputResult as the API response
-        return result
+        return api_usage_response
+    except Exception as e:
+        logger.error(f"Error auditing inference request result: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error auditing inference request result: {str(e)}")
+    
+    
+@router.post("/audit_inference_request_result", response_model=db.InferenceAPIOutputResult)
+async def audit_inference_request_result_endpoint(
+    inference_response_id: str = Body(..., description="The inference response ID"),
+    pastel_id: str = Body(..., description="The PastelID of the requester"),
+    signature: str = Body(..., description="The signature of the PastelID on the inference_response_id"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        # Retrieve the InferenceAPIOutputResult from the local database
+        api_usage_result = await service_functions.get_inference_api_usage_result_for_audit(inference_response_id)
+        if api_usage_result is None:
+            raise HTTPException(status_code=404, detail="Inference result not found")
+        # Verify the signature
+        is_valid_signature = await service_functions.verify_message_with_pastelid_func(pastel_id, inference_response_id, signature)
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        # Verify that the PastelID matches the one in the response
+        if api_usage_result.requesting_pastelid != pastel_id:
+            raise HTTPException(status_code=403, detail="PastelID does not match the one in the inference request")
+        # Return the InferenceAPIOutputResult as the API response
+        return api_usage_result
     except Exception as e:
         logger.error(f"Error auditing inference request result: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error auditing inference request result: {str(e)}")
