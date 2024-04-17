@@ -591,11 +591,12 @@ async def list_sn_messages_func():
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
     async with db_code.Session() as db:
         # Retrieve messages from the database that meet the timestamp criteria
-        db_messages = db.exec(
+        query = await db.exec(
             select(db_code.Message)
             .where(db_code.Message.timestamp >= datetime_cutoff_to_ignore_obsolete_messages)
             .order_by(db_code.Message.timestamp.desc())
-        ).all()
+        )
+        db_messages = query.all()
         existing_messages = {(message.sending_sn_pastelid, message.receiving_sn_pastelid, message.timestamp) for message in db_messages}
     # Retrieve new messages from the RPC interface
     new_messages = await rpc_connection.masternode('message', 'list')
@@ -1111,7 +1112,8 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
 
 async def process_received_user_message(supernode_user_message: db_code.SupernodeUserMessage):
     async with db_code.Session() as db:
-        user_message = db.exec(select(db_code.UserMessage).where(db_code.UserMessage.id == supernode_user_message.user_message_id)).one_or_none()
+        query = await db.exec(select(db_code.UserMessage).where(db_code.UserMessage.id == supernode_user_message.user_message_id))
+        user_message = query.one_or_none()
         if user_message:
             verification_status = await verify_message_with_pastelid_func(user_message.from_pastelid, user_message.message_body, user_message.message_signature)
             if verification_status == 'OK':
@@ -1124,7 +1126,8 @@ async def process_received_user_message(supernode_user_message: db_code.Supernod
 
 async def get_user_messages_for_pastelid(pastelid: str) -> List[db_code.UserMessage]:
     async with db_code.Session() as db:
-        user_messages = db.exec(select(db_code.UserMessage).where((db_code.UserMessage.from_pastelid == pastelid) | (db_code.UserMessage.to_pastelid == pastelid))).all()
+        query = await db.exec(select(db_code.UserMessage).where((db_code.UserMessage.from_pastelid == pastelid) | (db_code.UserMessage.to_pastelid == pastelid)))
+        user_messages = query.all()
         return user_messages
             
 #________________________________________________________________________________________________________________            
@@ -3703,18 +3706,19 @@ async def execute_inference_request(inference_request_id: str) -> None:
     try:
         # Retrieve the inference API usage request from the database
         async with db_code.Session() as db:
-            inference_request = db.exec(
+            query = await db.exec(
                 select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_request_id)
-            ).one_or_none()
+            )
+            inference_request = query.one_or_none()
         if inference_request is None:
             logger.warning(f"Invalid inference request ID: {inference_request_id}")
             return
         # Retrieve the inference API usage request response from the database
         async with db_code.Session() as db:
-            inference_response = db.exec(
+            query = await db.exec(
                 select(db_code.InferenceAPIUsageResponse).where(db_code.InferenceAPIUsageResponse.inference_request_id == inference_request_id)
-            ).one_or_none()
-
+            )
+            inference_response = query.one_or_none()
         if inference_request.requested_model_canonical_string.startswith("stability-"):
             output_results, output_results_file_type_strings = await submit_inference_request_to_stability_api(inference_request)
         elif inference_request.requested_model_canonical_string.startswith("openai-"):
@@ -3757,15 +3761,17 @@ async def check_status_of_inference_request_results(inference_response_id: str) 
 async def get_inference_output_results_and_verify_authorization(inference_response_id: str, requesting_pastelid: str) -> db_code.InferenceAPIOutputResult:
     async with db_code.Session() as db_session:
         # Retrieve the inference output result
-        inference_output_result = db_session.exec(
+        query = await db_session.exec(
             select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_response_id == inference_response_id)
-        ).one_or_none()
+        )
+        inference_output_result = query.one_or_none()
         if inference_output_result is None:
             raise ValueError("Inference output results not found")
         # Retrieve the inference request to verify requesting PastelID
-        inference_request = db_session.exec(
+        query = await db_session.exec(
             select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_output_result.inference_request_id)
-        ).one_or_none()
+        )
+        inference_request = query.one_or_none()
         if inference_request is None or inference_request.requesting_pastelid != requesting_pastelid:
             raise ValueError("Unauthorized access to inference output results")
         return inference_output_result
@@ -3829,7 +3835,7 @@ async def update_inference_sn_reputation_score(supernode_pastelid: str, reputati
 
 async def get_inference_api_usage_request_for_audit(inference_request_id: str) -> db_code.InferenceAPIUsageRequest:
     async with db_code.Session() as db_session:
-        query = db_session.exec(
+        query = await db_session.exec(
             select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_request_id)
         )
         result = query.one_or_none()
@@ -3837,7 +3843,7 @@ async def get_inference_api_usage_request_for_audit(inference_request_id: str) -
         
 async def get_inference_api_usage_response_for_audit(inference_response_id: str) -> db_code.InferenceAPIUsageResponse:
     async with db_code.Session() as db_session:
-        query = db_session.exec(
+        query = await db_session.exec(
             select(db_code.InferenceAPIUsageResponse).where(db_code.InferenceAPIUsageResponse.inference_response_id == inference_response_id)
         )
         result = query.one_or_none()
@@ -3845,7 +3851,7 @@ async def get_inference_api_usage_response_for_audit(inference_response_id: str)
 
 async def get_inference_api_usage_result_for_audit(inference_response_id: str) -> db_code.InferenceAPIOutputResult:
     async with db_code.Session() as db_session:
-        query = db_session.exec(
+        query = await db_session.exec(
             select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_response_id == inference_response_id)
         )
         result = query.one_or_none()
