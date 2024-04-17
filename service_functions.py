@@ -529,6 +529,7 @@ async def check_supernode_list_func():
     masternode_list_full_df['lastpaidblock'] = masternode_list_full_df['lastpaidblock'].astype(int)
     masternode_list_full_df['activedays'] = [float(x)/86400.0 for x in masternode_list_full_df['activeseconds'].values.tolist()]
     masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int)
+    masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['supernode_status'].isin(['ENABLED', 'PRE_ENABLED'])]
     masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['ipaddress:port'] != '154.38.164.75:29933'] #TODO: Remove this
     masternode_list_full_df__json = masternode_list_full_df.to_json(orient='index')
     return masternode_list_full_df, masternode_list_full_df__json
@@ -869,7 +870,6 @@ async def process_broadcast_messages(message, db_session):
                     credit_usage_tracking_psl_address=response_data['credit_usage_tracking_psl_address'],
                     request_confirmation_message_amount_in_patoshis=response_data['request_confirmation_message_amount_in_patoshis'],
                     max_block_height_to_include_confirmation_transaction=response_data['max_block_height_to_include_confirmation_transaction'],
-                    supernode_pastelid_and_signature_on_inference_response_id=response_data['supernode_pastelid_and_signature_on_inference_response_id']
                 )
                 await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing
                 await retry_on_database_locked(db_session.add, usage_request)
@@ -901,8 +901,8 @@ async def monitor_new_messages():
         try:
             async with db_code.Session() as db:
                 if last_processed_timestamp is None:
-                    result = await db.exec(select(db_code.Message.timestamp).order_by(db_code.Message.timestamp.desc()).limit(1))
-                    last_processed_timestamp_raw = result.one_or_none()
+                    query = await db.exec(select(db_code.Message.timestamp).order_by(db_code.Message.timestamp.desc()).limit(1))
+                    last_processed_timestamp_raw = query.one_or_none()
                     if last_processed_timestamp_raw is None:
                         last_processed_timestamp = pd.Timestamp.min
                     else:
@@ -912,27 +912,27 @@ async def monitor_new_messages():
                     new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
                     if not new_messages_df.empty:
                         for _, message in new_messages_df.iterrows():
-                            result = await db.exec(
+                            query = await db.exec(
                                 select(db_code.Message).where(
                                     db_code.Message.sending_sn_pastelid == message['sending_sn_pastelid'],
                                     db_code.Message.receiving_sn_pastelid == message['receiving_sn_pastelid'],
                                     db_code.Message.timestamp == message['timestamp']
                                 )
                             )
-                            existing_message = result.one_or_none()
+                            existing_message = query.one_or_none()
                             if existing_message:
                                 continue
-                            log_action_with_payload("Received new", "message", result)
+                            log_action_with_payload("received new", "message", existing_message)
                             last_processed_timestamp = message['timestamp']
                             sending_sn_pastelid = message['sending_sn_pastelid']
                             receiving_sn_pastelid = message['receiving_sn_pastelid']
                             message_size_bytes = len(message['message_body'].encode('utf-8'))
                             await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before updating metadata                            
                             # Update MessageSenderMetadata
-                            result = await db.exec(
+                            query = await db.exec(
                                 select(db_code.MessageSenderMetadata).where(db_code.MessageSenderMetadata.sending_sn_pastelid == sending_sn_pastelid)
                             )
-                            sender_metadata = result.one_or_none()
+                            sender_metadata = query.one_or_none()
                             if sender_metadata:
                                 sender_metadata.total_messages_sent += 1
                                 sender_metadata.total_data_sent_bytes += message_size_bytes
@@ -948,10 +948,10 @@ async def monitor_new_messages():
                                 )
                                 db.add(sender_metadata)
                             # Update MessageReceiverMetadata
-                            result = await db.exec(
+                            query = await db.exec(
                                 select(db_code.MessageReceiverMetadata).where(db_code.MessageReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid)
                             )
-                            receiver_metadata = result.one_or_none()
+                            receiver_metadata = query.one_or_none()
                             if receiver_metadata:
                                 receiver_metadata.total_messages_received += 1
                                 receiver_metadata.total_data_received_bytes += message_size_bytes
@@ -965,13 +965,13 @@ async def monitor_new_messages():
                                 )
                                 db.add(receiver_metadata)
                             # Update MessageSenderReceiverMetadata
-                            result = await db.exec(
+                            query = await db.exec(
                                 select(db_code.MessageSenderReceiverMetadata).where(
                                     db_code.MessageSenderReceiverMetadata.sending_sn_pastelid == sending_sn_pastelid,
                                     db_code.MessageSenderReceiverMetadata.receiving_sn_pastelid == receiving_sn_pastelid
                                 )
                             )
-                            sender_receiver_metadata = result.one_or_none()
+                            sender_receiver_metadata = query.one_or_none()
                             if sender_receiver_metadata:
                                 sender_receiver_metadata.total_messages += 1
                                 sender_receiver_metadata.total_data_bytes += message_size_bytes
@@ -1000,16 +1000,16 @@ async def monitor_new_messages():
                             await retry_on_database_locked(db.add_all, new_messages)
                             await retry_on_database_locked(db.commit)  # Commit the transaction for adding new messages
                             # Update overall MessageMetadata
-                            result = await db.exec(
+                            query = await db.exec(
                                 select(
                                     func.count(db_code.Message.id),
                                     func.count(func.distinct(db_code.Message.sending_sn_pastelid)),
                                     func.count(func.distinct(db_code.Message.receiving_sn_pastelid))
                                 )
                             )
-                            total_messages, total_senders, total_receivers = result.one()
-                            result = await db.exec(select(db_code.MessageMetadata).order_by(db_code.MessageMetadata.timestamp.desc()).limit(1))
-                            message_metadata = result.one_or_none()
+                            total_messages, total_senders, total_receivers = query.one()
+                            query = await db.exec(select(db_code.MessageMetadata).order_by(db_code.MessageMetadata.timestamp.desc()).limit(1))
+                            message_metadata = query.one_or_none()
                             if message_metadata:
                                 message_metadata.total_messages = total_messages
                                 message_metadata.total_senders = total_senders
