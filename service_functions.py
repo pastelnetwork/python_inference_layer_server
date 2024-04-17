@@ -478,20 +478,6 @@ async def verify_challenge_signature(pastelid: str, signature: str, challenge_id
         return True
     else:
         return False
-    
-async def verify_challenge_signature_from_inference_request_id(inference_request_id: str, challenge_signature: str, challenge_id: str) -> bool:
-    # Retrieve the inference API usage request from the database
-    async with db_code.Session() as db:
-        result = await db.exec(
-            select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_request_id)
-        )
-        inference_request = result.one_or_none()
-    if inference_request:
-        requesting_pastelid = inference_request.requesting_pastelid
-        is_valid_signature = await verify_challenge_signature(requesting_pastelid, challenge_signature, challenge_id)
-        return is_valid_signature
-    else:
-        return False
 
 async def check_masternode_top_func():
     global rpc_connection
@@ -1994,13 +1980,44 @@ async def get_credit_purchase_request_status(status_request: db_code.CreditPackR
         await save_credit_pack_purchase_request_status_check(status_request)
         # Retrieve the credit pack purchase request
         credit_pack_purchase_request = await get_credit_pack_purchase_request(status_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
+        # Retrieve the credit pack purchase request response
+        credit_pack_purchase_request_response = await get_credit_pack_purchase_request_response_from_request_hash(status_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
         # Check the status of the credit pack purchase request
         status = await check_credit_pack_purchase_request_status(credit_pack_purchase_request)
+        # Determine the status details based on the status
+        if status == "pending":
+            status_details = "Waiting for the credit pack purchase request to be processed"
+        elif status == "approved":
+            status_details = "Credit pack purchase request has been approved, waiting for confirmation"
+        elif status == "confirmed":
+            status_details = "Credit pack purchase has been confirmed, waiting for completion"
+        elif status == "completed":
+            status_details = "Credit pack purchase has been completed successfully"
+        elif status == "failed":
+            status_details = "Credit pack purchase has failed"
+        else:
+            status_details = "Unknown status"
         # Create the response
         response = db_code.CreditPackPurchaseRequestStatus(
             sha3_256_hash_of_credit_pack_purchase_request_fields=status_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
-            status=status
+            sha3_256_hash_of_credit_pack_purchase_request_response_fields=credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields if credit_pack_purchase_request_response else "",
+            status=status,
+            status_details=status_details,
+            status_update_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+            status_update_pastel_block_height=await get_current_pastel_block_height_func(),
+            credit_purchase_request_status_message_version_string="1.0",
+            responding_supernode_pastelid=credit_pack_purchase_request_response.responding_supernode_pastelid if credit_pack_purchase_request_response else MY_PASTELID,
+            sha3_256_hash_of_credit_pack_purchase_request_status_fields="",
+            responding_supernode_signature_on_credit_pack_purchase_request_status_hash=""
         )
+        # Generate the hash and signature fields
+        response.sha3_256_hash_of_credit_pack_purchase_request_status_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(response)
+        response.responding_supernode_signature_on_credit_pack_purchase_request_status_hash = await sign_message_with_pastelid_func(
+            MY_PASTELID,
+            response.sha3_256_hash_of_credit_pack_purchase_request_status_fields,
+            LOCAL_PASTEL_ID_PASSPHRASE
+        )
+        await save_credit_pack_purchase_request_status_check(response)
         return response
     except Exception as e:
         logger.error(f"Error getting credit purchase request status: {str(e)}")
@@ -2956,7 +2973,7 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, input_data)
         # Check if the credit pack has sufficient credits for the request
         current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_purchase_request_response_object, burn_address)
-        if not proposed_cost_in_credits >= current_credit_balance:
+        if proposed_cost_in_credits >= current_credit_balance:
             logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {current_credit_balance}")
             return False, proposed_cost_in_credits, current_credit_balance
         # Calculate the remaining credits after the request
@@ -4103,6 +4120,7 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
             else:
                 validation_errors.append(f"Corresponding pastelid field {first_pastelid} not found for signature fields {signature_field_names}")
     else:
+        # Validate pastelid signature fields
         last_signature_field_name = None
         last_hash_field_name = None
         for field_name in model_instance.__fields__:
@@ -4117,16 +4135,30 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
         if last_signature_field_name and last_hash_field_name:
             signature_field_name = last_signature_field_name
             hash_field_name = last_hash_field_name
-            if hasattr(model_instance, first_pastelid):
-                pastelid = getattr(model_instance, first_pastelid)
-                message_to_verify = getattr(model_instance, hash_field_name)
-                signature = getattr(model_instance, signature_field_name)
+            if first_pastelid == last_signature_field_name:
+                first_pastelid = "NA"
+            if hasattr(model_instance, first_pastelid) or first_pastelid == "NA":
+                if first_pastelid == "NA":
+                    pastelid_and_signature_combined_field_name = last_signature_field_name
+                    pastelid_and_signature_combined_field_json = getattr(model_instance, pastelid_and_signature_combined_field_name)
+                    pastelid_and_signature_combined_field_dict = json.loads(pastelid_and_signature_combined_field_json)
+                    pastelid_and_signature_combined_field_dict_keys = pastelid_and_signature_combined_field_dict.keys()
+                    for current_key in pastelid_and_signature_combined_field_dict_keys:
+                        if "pastelid" in current_key:
+                            pastelid = pastelid_and_signature_combined_field_dict[current_key]
+                        if "signature" in current_key:
+                            signature = pastelid_and_signature_combined_field_dict[current_key]
+                    message_to_verify = getattr(model_instance, hash_field_name)
+                else:
+                    pastelid = getattr(model_instance, first_pastelid)
+                    message_to_verify = getattr(model_instance, hash_field_name)
+                    signature = getattr(model_instance, signature_field_name)
                 verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
                 if verification_result != 'OK':
                     validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
             else:
                 validation_errors.append(f"Corresponding pastelid field {first_pastelid} not found for signature field {signature_field_name}")
-    return validation_errors
+        return validation_errors
 
 async def validate_inference_request_message_data_func(model_instance: SQLModel):
     validation_errors = await validate_credit_pack_ticket_message_data_func(model_instance)
@@ -4191,8 +4223,6 @@ elif rpc_port == '19932':
     burn_address = 'tPpasteLBurnAddressXXXXXXXXXXX3wy7u'
 elif rpc_port == '29932':
     burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
-
-users_credit_tracking_psl_address = '44oSueBgdMaAnGxrbTNZwQeDnxvPJg4dGAR3'
 
 encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
 decrypt_sensitive_fields()

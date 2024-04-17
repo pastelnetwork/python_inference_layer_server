@@ -220,8 +220,8 @@ async def select_txins(value, number_of_utxos_to_review=10):
         reviewed_utxos += 1
         if reviewed_utxos >= number_of_utxos_to_review:
             break  # Stop reviewing UTXOs if the limit is reached
-    # Sort the valid UTXOs by the amount to prioritize smaller amounts
-    valid_unspent.sort(key=lambda x: x['amount'])
+    # Sort the valid UTXOs by the amount to prioritize larger amounts
+    valid_unspent.sort(key=lambda x: x['amount'], reverse=True)
     selected_txins = []
     total_amount = 0
     for tx in valid_unspent:
@@ -443,7 +443,9 @@ async def retrieve_data_from_blockchain(txid):
         reconstructed_combined_data = unhexlify(encoded_hex_data)
         reconstructed_combined_data_cleaned = reconstructed_combined_data.decode('utf-8').replace("A", "").rstrip("\x00")
         if len(reconstructed_combined_data_cleaned) % 2 != 0:
-            reconstructed_combined_data_cleaned = reconstructed_combined_data_cleaned + "0"
+            reconstructed_combined_data_cleaned = reconstructed_combined_data_cleaned.replace("!","")
+        if len(reconstructed_combined_data_cleaned) % 2 != 0:
+            reconstructed_combined_data_cleaned = reconstructed_combined_data_cleaned[:-1]  # Remove any trailing characters
         data_buffer = unhexlify(reconstructed_combined_data_cleaned)
         # Extract the identifier
         identifier_padded = data_buffer[:32]

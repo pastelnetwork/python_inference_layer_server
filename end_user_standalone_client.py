@@ -34,7 +34,6 @@ MESSAGING_TIMEOUT_IN_SECONDS = config.get("MESSAGING_TIMEOUT_IN_SECONDS", defaul
 MY_LOCAL_PASTELID = config.get("MY_LOCAL_PASTELID", cast=str)
 # MY_PASTELID_PASSPHRASE = config.get("MY_PASTELID_PASSPHRASE", cast=str)
 MY_PASTELID_PASSPHRASE = "5QcX9nX67buxyeC"
-LOCAL_CREDIT_TRACKING_PSL_ADDRESS = config.get("LOCAL_CREDIT_TRACKING_PSL_ADDRESS", cast=str)
 MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
 MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS = config.get("MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS", default=1, cast=int)
 TARGET_VALUE_PER_CREDIT_IN_USD = config.get("TARGET_VALUE_PER_CREDIT_IN_USD", default=0.1, cast=float)
@@ -382,10 +381,24 @@ async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel
     if last_signature_field_name and last_hash_field_name:
         signature_field_name = last_signature_field_name
         hash_field_name = last_hash_field_name
-        if hasattr(model_instance, first_pastelid):
-            pastelid = getattr(model_instance, first_pastelid)
-            message_to_verify = getattr(model_instance, hash_field_name)
-            signature = getattr(model_instance, signature_field_name)
+        if first_pastelid == last_signature_field_name:
+            first_pastelid = "NA"
+        if hasattr(model_instance, first_pastelid) or first_pastelid == "NA":
+            if first_pastelid == "NA":
+                pastelid_and_signature_combined_field_name = last_signature_field_name
+                pastelid_and_signature_combined_field_json = getattr(model_instance, pastelid_and_signature_combined_field_name)
+                pastelid_and_signature_combined_field_dict = json.loads(pastelid_and_signature_combined_field_json)
+                pastelid_and_signature_combined_field_dict_keys = pastelid_and_signature_combined_field_dict.keys()
+                for current_key in pastelid_and_signature_combined_field_dict_keys:
+                    if "pastelid" in current_key:
+                        pastelid = pastelid_and_signature_combined_field_dict[current_key]
+                    if "signature" in current_key:
+                        signature = pastelid_and_signature_combined_field_dict[current_key]
+                message_to_verify = getattr(model_instance, hash_field_name)
+            else:
+                pastelid = getattr(model_instance, first_pastelid)
+                message_to_verify = getattr(model_instance, hash_field_name)
+                signature = getattr(model_instance, signature_field_name)
             verification_result = await verify_message_with_pastelid_func(pastelid, message_to_verify, signature)
             if verification_result != 'OK':
                 validation_errors.append(f"Pastelid signature in field {signature_field_name} failed verification")
@@ -1331,11 +1344,13 @@ class InferenceAPIOutputResult(SQLModel, table=True):
         
 class InferenceConfirmation(SQLModel):
     inference_request_id: str
+    requesting_pastelid: str
     confirmation_transaction: dict
     class Config:
         json_schema_extra = {
             "example": {
                 "inference_request_id": "0x1234...",
+                "requesting_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "confirmation_transaction": {
                     "txid": "0x5678...",
                     "amount": 1000,
@@ -1497,6 +1512,11 @@ class PastelMessagingClient:
         else:
             logger.warning(f"Preliminary price quote exceeds the maximum acceptable price or the price difference from the estimated fair price is too high! Quoted price: {quoted_price_per_credit} PSL per credit, {quoted_total_price} PSL total, maximum price: {maximum_per_credit_price_in_psl} PSL per credit, {maximum_total_credit_pack_price_in_psl} PSL total. The price difference from the estimated fair market price is {100*price_difference_percentage:.2f}%, which exceeds the allowed maximum of {100*MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING:.2f}%.")
             return False
+        
+    async def internal_estimate_of_credit_pack_ticket_cost_in_psl(self, desired_number_of_credits: float, price_cushion_pct: float):
+        estimated_price_per_credit = await estimated_market_price_of_inference_credits_in_psl_terms()
+        estimated_total_cost_of_ticket = round(desired_number_of_credits * estimated_price_per_credit * (1 + price_cushion_pct), 2)
+        return estimated_total_cost_of_ticket
         
     async def credit_pack_ticket_preliminary_price_quote_response(
         self,
@@ -2208,11 +2228,6 @@ async def handle_inference_request_end_to_end(
     inference_response_id = usage_request_response_dict["inference_response_id"]
     proposed_cost_in_credits = float(usage_request_response_dict["proposed_cost_of_request_in_inference_credits"])
     credit_usage_tracking_psl_address = usage_request_response_dict["credit_usage_tracking_psl_address"]
-    try:
-        assert(credit_usage_tracking_psl_address == LOCAL_CREDIT_TRACKING_PSL_ADDRESS)
-    except AssertionError:
-        logger.error(f"Error! Inference request response has a different tracking address than the local tracking address used in the request: {credit_usage_tracking_psl_address} vs {LOCAL_CREDIT_TRACKING_PSL_ADDRESS}")
-        return None, None, None
     credit_usage_tracking_amount_in_psl = float(usage_request_response_dict["request_confirmation_message_amount_in_patoshis"])/(10**5) # Divide by number of Patoshis per PSL
     # Check if tracking address contains enough PSL to send tracking amount:
     tracking_address_balance = await check_psl_address_balance_alternative_func(credit_usage_tracking_psl_address)
@@ -2227,6 +2242,7 @@ async def handle_inference_request_end_to_end(
         if txid_looks_valid: # Prepare the inference confirmation
             confirmation_data = InferenceConfirmation(
                 inference_request_id=inference_request_id,
+                requesting_pastelid=MY_LOCAL_PASTELID,
                 confirmation_transaction={"txid": tracking_transaction_txid}
             )
             confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data) # Send the inference confirmation
@@ -2285,9 +2301,9 @@ async def main():
         
     use_test_messaging_functionality = 0
     use_test_credit_pack_ticket_functionality = 1
-    use_test_credit_pack_ticket_usage = 0
-    use_test_inference_request_functionality = 0
-    use_test_llm_text_completion = 0
+    use_test_credit_pack_ticket_usage = 1
+    use_test_inference_request_functionality = 1
+    use_test_llm_text_completion = 1
     use_test_image_generation = 0
 
     if use_test_messaging_functionality:
@@ -2301,11 +2317,19 @@ async def main():
 
     if use_test_credit_pack_ticket_functionality:
         # Test credit pack ticket functionality
-        number_of_credits = 150
-        amount_to_fund_credit_tracking_address = 100.0
+        desired_number_of_credits = 1500
+        amount_of_psl_for_tracking_transactions = 10.0
+        credit_price_cushion_percentage = 0.15
+        maximum_total_amount_of_psl_to_fund_in_new_tracking_address = 100000.0
+        messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
+        estimated_total_cost_in_psl_for_credit_pack = await messaging_client.internal_estimate_of_credit_pack_ticket_cost_in_psl(desired_number_of_credits, credit_price_cushion_percentage)
+        if estimated_total_cost_in_psl_for_credit_pack > maximum_total_amount_of_psl_to_fund_in_new_tracking_address:
+            logger.error(f"Estimated total cost of credit pack exceeds the maximum allowed amount of {maximum_total_amount_of_psl_to_fund_in_new_tracking_address} PSL")
+            raise ValueError(f"Estimated total cost of credit pack exceeds the maximum allowed amount of {maximum_total_amount_of_psl_to_fund_in_new_tracking_address} PSL")
+        amount_to_fund_credit_tracking_address = round(amount_of_psl_for_tracking_transactions + estimated_total_cost_in_psl_for_credit_pack, 2)
         credit_usage_tracking_psl_address, _ = await create_and_fund_new_psl_credit_tracking_address(amount_to_fund_credit_tracking_address)
         credit_pack_purchase_request_confirmation_response = await handle_credit_pack_ticket_end_to_end(
-            number_of_credits,
+            desired_number_of_credits,
             credit_usage_tracking_psl_address,
             burn_address,
         )
@@ -2315,7 +2339,11 @@ async def main():
         else:
             logger.error("Credit pack ticket storage failed!")
 
-    credit_pack_ticket_pastel_txid = "569503ba7ff38e072f63d3ddb6a43fc843f4c9fe0ce9084fa035910adc9edb75" # https://explorer-devnet.pastel.network/tx/569503ba7ff38e072f63d3ddb6a43fc843f4c9fe0ce9084fa035910adc9edb75
+    credit_pack_ticket_pastel_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
+    logger.info(f"Selected credit pack ticket transaction ID: {credit_pack_ticket_pastel_txid}; corresponding psl tracking address: {credit_usage_tracking_psl_address}") # Each credit pack ticket has a corresponding UNIQUE tracking PSL address!
+    
+    # TODO: Add all credit pack tickets we create to local client database and make function that can automatically select the credit pack ticket with the largest remaining balance of credits and its corresponding psl tracking address.
+    
     if use_test_credit_pack_ticket_usage:
         start_time = time.time()
         credit_ticket_object = await get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid)
@@ -2333,8 +2361,8 @@ async def main():
             input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
             # input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
             # input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
-            requested_model_canonical_string = "mistralapi-mistral-large-latest" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
-            # requested_model_canonical_string = "groq-mixtral-8x7b-32768" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
+            # requested_model_canonical_string = "mistralapi-mistral-large-latest" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
+            requested_model_canonical_string = "groq-mixtral-8x7b-32768" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
             model_inference_type_string = "text_completion" # "embedding"        
             # model_parameters = {"number_of_tokens_to_generate": 200, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
             model_parameters = {"number_of_tokens_to_generate": 1000, "number_of_completions_to_generate": 1}

@@ -758,11 +758,13 @@ class InferenceAPIOutputResult(SQLModel, table=True):
         
 class InferenceConfirmation(SQLModel):
     inference_request_id: str
+    requesting_pastelid: str
     confirmation_transaction: dict
     class Config:
         json_schema_extra = {
             "example": {
                 "inference_request_id": "0x1234...",
+                "requesting_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "confirmation_transaction": {
                     "txid": "0x5678...",
                     "amount": 1000,
