@@ -402,7 +402,7 @@ async def calculate_xor_distance(pastelid1: str, pastelid2: str) -> int:
 def check_if_pastelid_is_valid_func(input_string: str) -> bool:
     # Define the regex pattern to match the conditions:
     # Starts with 'jX'; Followed by characters that are only alphanumeric and are shown in the example;
-    pattern = r'^jX[A-Za-z0-9]{108}$'
+    pattern = r'^jX[A-Za-z0-9]{84}$'
     if re.match(pattern, input_string):
         return True
     else:
@@ -2274,7 +2274,7 @@ async def main():
 
     if use_test_credit_pack_ticket_functionality:
         # Test credit pack ticket functionality
-        number_of_credits = 15000
+        number_of_credits = 150
         credit_usage_tracking_psl_address = LOCAL_CREDIT_TRACKING_PSL_ADDRESS
         credit_pack_purchase_request_confirmation_response = await handle_credit_pack_ticket_end_to_end(
             number_of_credits,
@@ -2288,7 +2288,7 @@ async def main():
             logger.error("Credit pack ticket storage failed!")
 
     if use_test_inference_request_functionality:
-        credit_pack_ticket_pastel_txid = "3c8c8d4105263e3c5140e586fb32e242233fd804bea3b1d2ce43dcc53caac6f7" # https://explorer-devnet.pastel.network/tx/3c8c8d4105263e3c5140e586fb32e242233fd804bea3b1d2ce43dcc53caac6f7
+        credit_pack_ticket_pastel_txid = "569503ba7ff38e072f63d3ddb6a43fc843f4c9fe0ce9084fa035910adc9edb75" # https://explorer-devnet.pastel.network/tx/569503ba7ff38e072f63d3ddb6a43fc843f4c9fe0ce9084fa035910adc9edb75
         if use_test_llm_text_completion:
             start_time = time.time()
             input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
