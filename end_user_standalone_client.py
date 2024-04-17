@@ -1725,7 +1725,7 @@ class PastelMessagingClient:
         challenge_signature = challenge_result["signature"]
         payload = confirmation_data.model_dump()
         log_action_with_payload("sending", "inference confirmation", payload)
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*4)) as client:
             response = await client.post(
                 f"{supernode_url}/confirm_inference_request",
                 json={

@@ -738,14 +738,14 @@ async def confirm_inference_request_endpoint(
     rpc_connection=Depends(get_rpc_connection),
 ):
     try:
-        is_valid_signature = await service_functions.verify_challenge_signature(
-            inference_confirmation.requesting_pastelid, challenge_signature, challenge_id
-        )        
+        is_valid_signature = await service_functions.verify_challenge_signature_from_inference_request_id(
+            inference_confirmation.inference_request_id, challenge_signature, challenge_id
+        )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         # Process the inference confirmation
         is_processed = await service_functions.process_inference_confirmation(
-            inference_confirmation.inference_request_id, inference_confirmation.confirmation_transaction
+            inference_confirmation.inference_request_id, inference_confirmation
         )
         if is_processed:
             logger.info(f"Inference request {inference_confirmation.inference_request_id} confirmed successfully")

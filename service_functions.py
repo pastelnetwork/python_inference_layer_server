@@ -479,6 +479,20 @@ async def verify_challenge_signature(pastelid: str, signature: str, challenge_id
     else:
         return False
 
+async def verify_challenge_signature_from_inference_request_id(inference_request_id: str, challenge_signature: str, challenge_id: str) -> bool:
+    # Retrieve the inference API usage request from the database
+    async with db_code.Session() as db:
+        result = await db.exec(
+            select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_request_id)
+        )
+        inference_request = result.one_or_none()
+    if inference_request:
+        requesting_pastelid = inference_request.requesting_pastelid
+        is_valid_signature = await verify_challenge_signature(requesting_pastelid, challenge_signature, challenge_id)
+        return is_valid_signature
+    else:
+        return False
+
 async def check_masternode_top_func():
     global rpc_connection
     masternode_top_command_output = await rpc_connection.masternode('top')
@@ -2602,8 +2616,8 @@ async def test_claude_api_key():
 async def save_inference_api_usage_request(inference_request_model: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageRequest:
     async with db_code.Session() as db_session:
         db_session.add(inference_request_model)
-        db_session.commit()
-        db_session.refresh(inference_request_model)
+        await db_session.commit()
+        await db_session.refresh(inference_request_model)
     return inference_request_model
 
 def get_tokenizer(model_name: str):
@@ -3025,8 +3039,8 @@ async def create_and_save_inference_api_usage_response(saved_request: db_code.In
     # Save the InferenceAPIUsageResponse to the database
     async with db_code.Session() as db_session:
         db_session.add(inference_response)
-        db_session.commit()
-        db_session.refresh(inference_response)
+        await db_session.commit()
+        await db_session.refresh(inference_response)
     return inference_response
 
 async def check_burn_address_for_tracking_transaction(
@@ -3100,7 +3114,7 @@ async def check_burn_address_for_tracking_transaction(
     logger.info(f"Transaction not found or did not match the criteria after {max_retries} attempts.")
     return False, False, None, None, total_amount_to_burn_address
 
-async def process_inference_confirmation(inference_request_id: str, confirmation_transaction: db_code.InferenceConfirmation) -> bool:
+async def process_inference_confirmation(inference_request_id: str, inference_confirmation: db_code.InferenceConfirmation) -> bool:
     try:
         # Retrieve the inference API usage request from the database
         async with db_code.Session() as db:
@@ -3122,13 +3136,13 @@ async def process_inference_confirmation(inference_request_id: str, confirmation
         if not burn_address_already_imported:
             await import_address_func(burn_address, "burn_address", True)        
         # Check burn address for tracking transaction:
-        confirmation_transaction_txid = confirmation_transaction.confirmation_transaction['txid']
+        confirmation_transaction_txid = inference_confirmation.confirmation_transaction['txid']
         credit_usage_tracking_amount_in_psl = float(inference_response.request_confirmation_message_amount_in_patoshis)/(10**5) # Divide by number of Patoshis per PSL
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(burn_address, inference_response.credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, confirmation_transaction_txid, inference_response.max_block_height_to_include_confirmation_transaction)
         if matching_transaction_found:
             logger.info(f"Found correct inference request confirmation tracking transaction in burn address (with {num_confirmations} confirmation blocks so far)! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};") 
-            credit_pack = ""
-            computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack, burn_address)
+            credit_pack_object = get_credit_pack_from_inference_request_id(inference_request_id)
+            computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_object, burn_address)
             logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address} tracking transactions from tracking address to burn address.")       
             # Update the inference request status to "confirmed"
             inference_request.status = "confirmed"
@@ -3696,16 +3710,21 @@ async def execute_inference_request(inference_request_id: str) -> None:
         raise
 
 async def check_status_of_inference_request_results(inference_response_id: str) -> bool:
-    async with db_code.Session() as db_session:
-        # Retrieve the inference output result
-        inference_output_result = db_session.exec(
-            select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_response_id == inference_response_id)
-        ).one_or_none()
-        if inference_output_result is None:
-            return False
-        else:
-            return True
-    
+    try:
+        async with db_code.Session() as db_session:
+            # Retrieve the inference output result
+            result = await db_session.exec(
+                select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_response_id == inference_response_id)
+            )
+            inference_output_result = result.one_or_none()
+            if inference_output_result is None:
+                return False
+            else:
+                return True
+    except Exception as e:
+        logger.error(f"Error checking status of inference request results: {str(e)}")
+        raise
+
 async def get_inference_output_results_and_verify_authorization(inference_response_id: str, requesting_pastelid: str) -> db_code.InferenceAPIOutputResult:
     async with db_code.Session() as db_session:
         # Retrieve the inference output result
@@ -3778,7 +3797,7 @@ async def update_inference_sn_reputation_score(supernode_pastelid: str, reputati
     except Exception as e:
         logger.error(f"Error updating inference SN reputation score: {str(e)}")
         raise
-    
+
 async def get_inference_api_usage_request_for_audit(inference_request_id: str) -> db_code.InferenceAPIUsageRequest:
     async with db_code.Session() as db_session:
         result = db_session.exec(
@@ -3799,6 +3818,13 @@ async def get_inference_api_usage_result_for_audit(inference_response_id: str) -
             select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_response_id == inference_response_id)
         ).one_or_none()
         return result
+    
+async def get_credit_pack_from_inference_request_id(inference_request_id: str) -> db_code.CreditPackPurchaseRequestResponse:
+    inference_request_object = await get_inference_api_usage_request_for_audit(inference_request_id)
+    credit_pack_ticket_pastel_txid = inference_request_object.credit_pack_ticket_pastel_txid
+    credit_pack_object = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_pastel_txid)
+    return credit_pack_object
+
 # ________________________________________________________________________________________________________________________________
 
 # Blockchain ticket related functions:
