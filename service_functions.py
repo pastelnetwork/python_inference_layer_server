@@ -12,6 +12,7 @@ import uuid
 import random
 import re
 import sys
+import traceback
 import html
 import warnings
 import pytz
@@ -520,12 +521,15 @@ async def check_supernode_list_func():
             masternode_list_full_df.loc[current_row[0], 'extAddress'] = current_extra['extAddress']
             masternode_list_full_df.loc[current_row[0], 'extP2P'] = current_extra['extP2P']
             masternode_list_full_df.loc[current_row[0], 'extKey'] = current_extra['extKey']
+    masternode_list_full_df['lastseentime'] = pd.to_numeric(masternode_list_full_df['lastseentime'], downcast='integer')            
+    masternode_list_full_df['lastpaidtime'] = pd.to_numeric(masternode_list_full_df['lastpaidtime'], downcast='integer')            
     masternode_list_full_df['lastseentime'] = pd.to_datetime(masternode_list_full_df['lastseentime'], unit='s')
     masternode_list_full_df['lastpaidtime'] = pd.to_datetime(masternode_list_full_df['lastpaidtime'], unit='s')
     masternode_list_full_df['activeseconds'] = masternode_list_full_df['activeseconds'].astype(int)
     masternode_list_full_df['lastpaidblock'] = masternode_list_full_df['lastpaidblock'].astype(int)
     masternode_list_full_df['activedays'] = [float(x)/86400.0 for x in masternode_list_full_df['activeseconds'].values.tolist()]
     masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int)
+    masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['ipaddress:port'] != '154.38.164.75:29933'] #TODO: Remove this
     masternode_list_full_df__json = masternode_list_full_df.to_json(orient='index')
     return masternode_list_full_df, masternode_list_full_df__json
     
@@ -1024,6 +1028,7 @@ async def monitor_new_messages():
                 await asyncio.sleep(5)
         except Exception as e:
             logger.error(f"Error while monitoring new messages: {str(e)}")
+            traceback.print_exc()
             await asyncio.sleep(5)
         finally:
             await asyncio.sleep(5)            
@@ -1411,6 +1416,7 @@ async def calculate_preliminary_psl_price_per_credit():
         return rounded_cost_per_credit_psl
     except (ValueError, ZeroDivisionError) as e:
         logger.error(f"Error calculating preliminary price per credit: {str(e)}")
+        traceback.print_exc()
         raise
 
 async def determine_agreement_with_proposed_price(proposed_psl_price_per_credit: float) -> bool:
@@ -1429,6 +1435,7 @@ async def determine_agreement_with_proposed_price(proposed_psl_price_per_credit:
         return agree_with_proposed_price
     except Exception as e:
         logger.error(f"Error determining agreement with proposed price: {str(e)}")
+        traceback.print_exc()        
         raise
     
 async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: str, total_cost_in_psl: float, request_response_pastel_block_height: int) -> Tuple[bool, int]:
@@ -1449,6 +1456,7 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
         return matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address
     except Exception as e:
         logger.error(f"Error checking burn transaction: {str(e)}")
+        traceback.print_exc()
         raise
     
 async def save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse, txid: str) -> None:
@@ -1505,6 +1513,7 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
         return credit_pack_purchase_request_response
     except Exception as e:
         logger.error(f"Error retrieving credit pack ticket using txid: {txid}. Error: {str(e)}")
+        traceback.print_exc()        
         raise
 
 async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json: str) -> str:
@@ -1562,6 +1571,7 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
     except Exception as e:
         storage_validation_error_string = f"Error storing credit pack ticket: {str(e)}"
         logger.error(storage_validation_error_string)
+        traceback.print_exc()
         return credit_pack_ticket_txid, storage_validation_error_string
 
 async def check_original_supernode_storage_confirmation(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> bool:
@@ -1631,6 +1641,7 @@ async def process_credit_purchase_initial_request(credit_pack_purchase_request: 
         return credit_pack_purchase_request_response
     except Exception as e:
         logger.error(f"Error processing credit purchase initial request: {str(e)}")
+        traceback.print_exc()
         raise
     
 async def generate_credit_pack_request_rejection_message(credit_pack_request: db_code.CreditPackPurchaseRequest, validation_errors: List[str]) -> db_code.CreditPackPurchaseRequestRejection:
@@ -1685,6 +1696,7 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
         return potentially_agreeing_supernodes
     except Exception as e:
         logger.error(f"Error selecting potentially agreeing supernodes: {str(e)}")
+        traceback.print_exc()
         raise
 
 async def send_price_agreement_request_to_supernodes(request: db_code.CreditPackPurchasePriceAgreementRequest, supernodes: List[str]) -> List[db_code.CreditPackPurchasePriceAgreementRequestResponse]:
@@ -1726,6 +1738,7 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             return price_agreement_request_responses
     except Exception as e:
         logger.error(f"Error sending price agreement request to supernodes: {str(e)}")
+        traceback.print_exc()
         raise
     
 async def request_and_sign_challenge(supernode_url: str) -> Dict[str, str]:
@@ -1781,6 +1794,7 @@ async def send_credit_pack_purchase_request_final_response_to_supernodes(respons
             return valid_responses
     except Exception as e:
         logger.error(f"Error sending final response announcement to supernodes: {str(e)}")
+        traceback.print_exc()
         raise    
 
 async def process_credit_pack_price_agreement_request(price_agreement_request: db_code.CreditPackPurchasePriceAgreementRequest) -> Union[db_code.CreditPackPurchasePriceAgreementRequestResponse, str]:
@@ -1823,6 +1837,7 @@ async def process_credit_pack_price_agreement_request(price_agreement_request: d
         return response
     except Exception as e:
         logger.error(f"Error processing credit pack price agreement request: {str(e)}")
+        traceback.print_exc()
         raise
             
 async def process_credit_purchase_preliminary_price_quote_response(preliminary_price_quote_response: db_code.CreditPackPurchaseRequestPreliminaryPriceQuoteResponse) -> Union[db_code.CreditPackPurchaseRequestResponse, db_code.CreditPackPurchaseRequestResponseTermination]:
@@ -1984,6 +1999,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
         return credit_pack_purchase_request_response
     except Exception as e:
         logger.error(f"Error processing credit purchase preliminary price quote response: {str(e)}")
+        traceback.print_exc()
         raise
 
 async def get_credit_purchase_request_status(status_request: db_code.CreditPackRequestStatusCheck) -> db_code.CreditPackPurchaseRequestStatus:
@@ -2035,6 +2051,7 @@ async def get_credit_purchase_request_status(status_request: db_code.CreditPackR
         return response
     except Exception as e:
         logger.error(f"Error getting credit purchase request status: {str(e)}")
+        traceback.print_exc()
         raise
     
 async def process_credit_pack_purchase_request_final_response_announcement(response: db_code.CreditPackPurchaseRequestResponse) -> None:
@@ -2085,6 +2102,7 @@ async def get_closest_agreeing_supernode_pastelid(end_user_pastelid: str, agreei
         return closest_supernode_pastelid
     except Exception as e:
         logger.error(f"Error getting closest agreeing supernode pastelid: {str(e)}")
+        traceback.print_exc()
         raise    
     
 async def send_credit_pack_storage_completion_announcement_to_supernodes(response: db_code.CreditPackPurchaseRequestConfirmationResponse, agreeing_supernode_pastelids: List[str]) -> List[httpx.Response]:
@@ -2125,6 +2143,7 @@ async def send_credit_pack_storage_completion_announcement_to_supernodes(respons
             return valid_responses
     except Exception as e:
         logger.error(f"Error sending storage completion announcement to supernodes: {str(e)}")
+        traceback.print_exc()
         raise
     
 async def process_credit_purchase_request_confirmation(confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> db_code.CreditPackPurchaseRequestConfirmationResponse:
@@ -2240,6 +2259,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
         return confirmation_response
     except Exception as e:
         logger.error(f"Error processing credit purchase request confirmation: {str(e)}")
+        traceback.print_exc()
         raise    
     
 async def process_credit_pack_purchase_completion_announcement(confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> None:
@@ -2255,6 +2275,7 @@ async def process_credit_pack_purchase_completion_announcement(confirmation: db_
         await save_credit_pack_purchase_completion_announcement(confirmation)
     except Exception as e:
         logger.error(f"Error processing credit pack purchase completion announcement: {str(e)}")
+        traceback.print_exc()
         raise
 
 async def process_credit_pack_storage_completion_announcement(completion_response: db_code.CreditPackPurchaseRequestConfirmationResponse) -> None:
@@ -2270,6 +2291,7 @@ async def process_credit_pack_storage_completion_announcement(completion_respons
         await save_credit_pack_storage_completion_announcement(completion_response)
     except Exception as e:
         logger.error(f"Error processing credit pack storage completion announcement: {str(e)}")
+        traceback.print_exc()
         raise
 
 async def process_credit_pack_storage_retry_request(storage_retry_request: db_code.CreditPackStorageRetryRequest) -> db_code.CreditPackStorageRetryRequestResponse:
@@ -2354,6 +2376,7 @@ async def process_credit_pack_storage_retry_request(storage_retry_request: db_co
         return retry_request_response_validation_errors
     except Exception as e:
         logger.error(f"Error processing credit pack storage retry request: {str(e)}")
+        traceback.print_exc()
         raise
                     
 async def process_credit_pack_storage_retry_completion_announcement(retry_completion_response: db_code.CreditPackStorageRetryRequestResponse) -> None:
@@ -2369,6 +2392,7 @@ async def process_credit_pack_storage_retry_completion_announcement(retry_comple
         await save_credit_pack_storage_retry_completion_announcement(retry_completion_response)
     except Exception as e:
         logger.error(f"Error processing credit pack storage retry completion announcement: {str(e)}")
+        traceback.print_exc()
         raise
     
     
@@ -2428,6 +2452,7 @@ async def get_inference_model_menu(use_verbose=0):
         return filtered_model_menu
     except Exception as e:
         logger.error(f"Error retrieving inference model menu: {str(e)}")
+        traceback.print_exc()
         raise
 
 def load_api_key_tests():
@@ -2995,6 +3020,7 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         return True, proposed_cost_in_credits, remaining_credits_after_request
     except Exception as e:
         logger.error(f"Error validating inference API usage request: {str(e)}")
+        traceback.print_exc()
         raise
     
 async def process_inference_api_usage_request(inference_api_usage_request: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageResponse: 
@@ -3141,7 +3167,7 @@ async def process_inference_confirmation(inference_request_id: str, inference_co
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(burn_address, inference_response.credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, confirmation_transaction_txid, inference_response.max_block_height_to_include_confirmation_transaction)
         if matching_transaction_found:
             logger.info(f"Found correct inference request confirmation tracking transaction in burn address (with {num_confirmations} confirmation blocks so far)! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};") 
-            credit_pack_object = get_credit_pack_from_inference_request_id(inference_request_id)
+            credit_pack_object = await get_credit_pack_from_inference_request_id(inference_request_id)
             computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_object, burn_address)
             logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address} tracking transactions from tracking address to burn address.")       
             # Update the inference request status to "confirmed"
@@ -3157,6 +3183,7 @@ async def process_inference_confirmation(inference_request_id: str, inference_co
             logger.error(f"Did not find correct inference request confirmation tracking transaction in burn address! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};") 
     except Exception as e:
         logger.error(f"Error processing inference confirmation: {str(e)}")
+        traceback.print_exc()
         raise
 
 async def save_inference_output_results(inference_request_id: str, inference_response_id: str, output_results: dict, output_results_file_type_strings: dict) -> None:
@@ -3187,6 +3214,7 @@ async def save_inference_output_results(inference_request_id: str, inference_res
             await db.refresh(inference_output_result)
     except Exception as e:
         logger.error(f"Error saving inference output results: {str(e)}")
+        traceback.print_exc()
         raise
 
 def get_claude3_model_name(model_name: str) -> str:
@@ -3707,6 +3735,7 @@ async def execute_inference_request(inference_request_id: str) -> None:
             await save_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results, output_results_file_type_strings)
     except Exception as e:
         logger.error(f"Error executing inference request: {str(e)}")
+        traceback.print_exc()
         raise
 
 async def check_status_of_inference_request_results(inference_response_id: str) -> bool:
@@ -3800,23 +3829,26 @@ async def update_inference_sn_reputation_score(supernode_pastelid: str, reputati
 
 async def get_inference_api_usage_request_for_audit(inference_request_id: str) -> db_code.InferenceAPIUsageRequest:
     async with db_code.Session() as db_session:
-        result = db_session.exec(
+        query = db_session.exec(
             select(db_code.InferenceAPIUsageRequest).where(db_code.InferenceAPIUsageRequest.inference_request_id == inference_request_id)
-        ).one_or_none()
+        )
+        result = query.one_or_none()
         return result
         
 async def get_inference_api_usage_response_for_audit(inference_response_id: str) -> db_code.InferenceAPIUsageResponse:
     async with db_code.Session() as db_session:
-        result = db_session.exec(
+        query = db_session.exec(
             select(db_code.InferenceAPIUsageResponse).where(db_code.InferenceAPIUsageResponse.inference_response_id == inference_response_id)
-        ).one_or_none()
+        )
+        result = query.one_or_none()
         return result
 
 async def get_inference_api_usage_result_for_audit(inference_response_id: str) -> db_code.InferenceAPIOutputResult:
     async with db_code.Session() as db_session:
-        result = db_session.exec(
+        query = db_session.exec(
             select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_response_id == inference_response_id)
-        ).one_or_none()
+        )
+        result = query.one_or_none()
         return result
     
 async def get_credit_pack_from_inference_request_id(inference_request_id: str) -> db_code.CreditPackPurchaseRequestResponse:
