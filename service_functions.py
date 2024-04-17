@@ -1529,10 +1529,11 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
             decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
             if decoded_reconstructed_file_data == credit_pack_purchase_request_response_json:
                 logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
-                # Save the retrieved ticket to the local database
-                credit_pack_purchase_request_response_json_transformed = transform_credit_pack_purchase_request_response(json.loads(credit_pack_purchase_request_response_json))
-                credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_json_transformed)
-                logger.info(f"Reconstructed credit pack ticket data: {credit_pack_purchase_request_response}")
+                use_test_reconstruction_of_object_from_json = 0
+                if use_test_reconstruction_of_object_from_json:
+                    credit_pack_purchase_request_response_json_transformed = transform_credit_pack_purchase_request_response(json.loads(credit_pack_purchase_request_response_json))
+                    credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_json_transformed)
+                    logger.info(f"Reconstructed credit pack ticket data: {credit_pack_purchase_request_response}")
             else:
                 logger.error("Failed to verify that the stored blockchain ticket data can be reconstructed exactly!")
                 storage_validation_error_string = "Failed to verify that the stored blockchain ticket data can be reconstructed exactly! Difference: " + str(set(decoded_reconstructed_file_data).symmetric_difference(set(credit_pack_purchase_request_response_json)))
@@ -2041,7 +2042,7 @@ async def send_credit_pack_storage_completion_announcement_to_supernodes(respons
                     challenge_id = challenge_dict["challenge_id"]
                     challenge_signature = challenge_dict["challenge_signature"]
                     payload = {
-                        "credit_pack_price_agreement_request": response.model_dump(),
+                        "storage_completion_announcement": response.model_dump(),
                         "challenge": challenge,
                         "challenge_id": challenge_id,
                         "challenge_signature": challenge_signature
@@ -2132,8 +2133,6 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields="",
                 responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash=""
             )
-            
-            
             # Generate the hash and signature fields
             confirmation_response.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(confirmation_response)
             confirmation_response.responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash = await sign_message_with_pastelid_func(
@@ -2141,6 +2140,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 confirmation_response.sha3_256_hash_of_credit_pack_purchase_request_confirmation_response_fields,
                 LOCAL_PASTEL_ID_PASSPHRASE
             )
+            confirmation_response_validation_errors = await validate_credit_pack_ticket_message_data_func(confirmation_response)
             # Send the CreditPackPurchaseRequestConfirmationResponse to the agreeing supernodes
             announcement_responses = await send_credit_pack_storage_completion_announcement_to_supernodes(confirmation_response, credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
             logger.info(f"Received {len(announcement_responses)} responses to the credit pack storage completion announcement, of which {len([response for response in announcement_responses if response.status_code == 200])} were successful")

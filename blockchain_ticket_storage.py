@@ -403,7 +403,7 @@ async def store_data_in_blockchain(input_data):
         signed_tx_before_fees = await rpc_connection.signrawtransaction(hexlify(unsigned_tx).decode('utf-8'))
         fee = round(Decimal(len(signed_tx_before_fees)/1000) * FEEPERKB, 5)
         change -= fee
-        txouts[-1][0] = change
+        txouts[-1][0] = round(change, 5)
         final_tx = packtx(raw_transaction)
         signed_tx_after_fees = await rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
         assert(signed_tx_after_fees['complete'])

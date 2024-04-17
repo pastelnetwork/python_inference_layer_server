@@ -399,7 +399,19 @@ async def calculate_xor_distance(pastelid1: str, pastelid2: str) -> int:
     xor_result = int(hash1, 16) ^ int(hash2, 16)
     return xor_result
 
+def check_if_pastelid_is_valid_func(input_string: str) -> bool:
+    # Define the regex pattern to match the conditions:
+    # Starts with 'jX'; Followed by characters that are only alphanumeric and are shown in the example;
+    pattern = r'^jX[A-Za-z0-9]{108}$'
+    if re.match(pattern, input_string):
+        return True
+    else:
+        return False
+
 async def get_supernode_url_from_pastelid_func(pastelid: str, supernode_list_df: pd.DataFrame) -> str:
+    is_valid_pastelid = check_if_pastelid_is_valid_func(pastelid)
+    if not is_valid_pastelid:
+        raise ValueError(f"Invalid PastelID: {pastelid}")
     supernode_row = supernode_list_df[supernode_list_df['extKey'] == pastelid]
     if not supernode_row.empty:
         supernode_ipaddress_port = supernode_row['ipaddress:port'].values[0]
@@ -2058,6 +2070,9 @@ async def handle_credit_pack_ticket_end_to_end(
     signed_credit_pack_ticket = signed_credit_pack_ticket_or_rejection
     # Send the required PSL from the credit usage tracking address to the burn address
     burn_transaction_txid = await send_to_address_func(burn_address, round(signed_credit_pack_ticket.proposed_total_cost_of_credit_pack_in_psl, 5), "Burn transaction for credit pack ticket")
+    if burn_transaction_txid is None:
+        logger.error("Error sending PSL to burn address for credit pack ticket")
+        return None
     # Prepare the credit pack purchase request confirmation
     credit_pack_purchase_request_confirmation = CreditPackPurchaseRequestConfirmation(
         sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
@@ -2088,7 +2103,6 @@ async def handle_credit_pack_ticket_end_to_end(
         logger.error(f"Credit pack purchase request terminated: {credit_pack_purchase_request_status.termination_reason_string}")
         # Retry the storage with the closest agreeing supernode
         closest_agreeing_supernode_pastelid = await get_closest_supernode_pastelid_from_list(MY_LOCAL_PASTELID, signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
-    # requesting_end_user_pastelid_signature_on_credit_pack_storage_retry_request_hash: str        
         credit_pack_storage_retry_request = CreditPackStorageRetryRequest(
             sha3_256_hash_of_credit_pack_purchase_request_response_fields=signed_credit_pack_ticket.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
             credit_pack_purchase_request_fields_json=signed_credit_pack_ticket.credit_pack_purchase_request_fields_json,
@@ -2260,7 +2274,7 @@ async def main():
 
     if use_test_credit_pack_ticket_functionality:
         # Test credit pack ticket functionality
-        number_of_credits = 5000
+        number_of_credits = 15000
         credit_usage_tracking_psl_address = LOCAL_CREDIT_TRACKING_PSL_ADDRESS
         credit_pack_purchase_request_confirmation_response = await handle_credit_pack_ticket_end_to_end(
             number_of_credits,
@@ -2274,7 +2288,7 @@ async def main():
             logger.error("Credit pack ticket storage failed!")
 
     if use_test_inference_request_functionality:
-        credit_pack_ticket_pastel_txid = "0a0869744c8be34680d67d76a26b46bb61cdabb88d4c657e602b91863457650c" # https://explorer-devnet.pastel.network/tx/0a0869744c8be34680d67d76a26b46bb61cdabb88d4c657e602b91863457650c
+        credit_pack_ticket_pastel_txid = "3c8c8d4105263e3c5140e586fb32e242233fd804bea3b1d2ce43dcc53caac6f7" # https://explorer-devnet.pastel.network/tx/3c8c8d4105263e3c5140e586fb32e242233fd804bea3b1d2ce43dcc53caac6f7
         if use_test_llm_text_completion:
             start_time = time.time()
             input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "

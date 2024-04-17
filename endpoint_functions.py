@@ -629,7 +629,7 @@ async def credit_pack_purchase_completion_announcement_endpoint(
 
 @router.post("/credit_pack_storage_completion_announcement")
 async def credit_pack_storage_completion_announcement_endpoint(
-    response: db.CreditPackPurchaseRequestConfirmationResponse = Body(...),
+    storage_completion_announcement: db.CreditPackPurchaseRequestConfirmationResponse = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
@@ -637,12 +637,12 @@ async def credit_pack_storage_completion_announcement_endpoint(
 ):
     try:
         is_valid_signature = await service_functions.verify_challenge_signature(
-            response.responding_supernode_pastelid, challenge_signature, challenge_id
+            storage_completion_announcement.responding_supernode_pastelid, challenge_signature, challenge_id
         )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        await service_functions.process_credit_pack_storage_completion_announcement(response)
-        service_functions.log_action_with_payload("processed", "credit pack storage completion announcement", response)
+        await service_functions.process_credit_pack_storage_completion_announcement(storage_completion_announcement)
+        service_functions.log_action_with_payload("processed", "credit pack storage completion announcement", storage_completion_announcement)
         return {"message": "Announcement processed successfully"}
     except Exception as e:
         logger.error(f"Error processing credit pack storage completion announcement: {str(e)}")
