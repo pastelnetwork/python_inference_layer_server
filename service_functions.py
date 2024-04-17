@@ -1522,8 +1522,11 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
             tx_info = await rpc_connection.gettransaction(credit_pack_ticket_txid)
             if tx_info:
                 num_confirmations = tx_info.get("confirmations", 0)
-                if num_confirmations > 0:
-                    logger.info(f"Transaction {credit_pack_ticket_txid} has been confirmed with {num_confirmations} confirmations.")
+                if (num_confirmations > 0) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK:
+                    if num_confirmations > 0:
+                        logger.info(f"Transaction {credit_pack_ticket_txid} has been confirmed with {num_confirmations} confirmations.")
+                    else:
+                        logger.info(f"Transaction {credit_pack_ticket_txid} has not yet been confirmed, but we are skipping confirmation check to speed things up.")
                     break
                 else:
                     logger.info(f"Transaction {credit_pack_ticket_txid} is not yet confirmed. Waiting for {retry_delay:.2f} seconds before checking again.")
@@ -1535,7 +1538,7 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
                 await asyncio.sleep(retry_delay)
                 try_count += 1
                 retry_delay *= 1.15  # Optional: increase delay between retries
-        if num_confirmations > 0:
+        if (num_confirmations > 0) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK:
             logger.info("Now verifying that we can reconstruct the original file written exactly...")
             reconstructed_file_data = await retrieve_data_from_blockchain(credit_pack_ticket_txid)
             decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')

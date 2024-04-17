@@ -1565,7 +1565,7 @@ class PastelMessagingClient:
                 log_action_with_payload("receiving", "response to credit pack purchase request", transformed_result)
                 return CreditPackPurchaseRequestResponse.model_validate(transformed_result)
 
-    async def check_status_of_credit_purchase_request(self, supernode_url: str, credit_pack_purchase_request_hash: str) -> Union[CreditPackPurchaseRequestResponse, CreditPackPurchaseRequestResponseTermination]:
+    async def check_status_of_credit_purchase_request(self, supernode_url: str, credit_pack_purchase_request_hash: str) -> CreditPackPurchaseRequestStatus:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
         challenge = challenge_result["challenge"]
         challenge_id = challenge_result["challenge_id"]
@@ -1591,12 +1591,8 @@ class PastelMessagingClient:
             )
             response.raise_for_status()
             result = response.json()
-            if "termination_reason_string" in result:
-                log_action_with_payload("receiving", "termination response from Supernode", result)
-                return CreditPackPurchaseRequestResponseTermination.model_validate(result)
-            else:
-                log_action_with_payload("receiving", "credit pack purchase request response from Supernode", result)
-                return CreditPackPurchaseRequestResponse.model_validate(result)
+            log_action_with_payload("receiving", "credit pack purchase request response from Supernode", result)
+            return CreditPackPurchaseRequestStatus.model_validate(result)
 
     async def confirm_credit_purchase_request(self, supernode_url: str, credit_pack_purchase_request_confirmation: CreditPackPurchaseRequestConfirmation) -> CreditPackPurchaseRequestConfirmationResponse:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
@@ -2117,8 +2113,8 @@ async def handle_credit_pack_ticket_end_to_end(
             if i == len(closest_supernodes) - 1:
                 logger.error("Failed to check status of credit purchase request with all Supernodes")
                 return None
-    if isinstance(credit_pack_purchase_request_status, CreditPackPurchaseRequestResponseTermination):
-        logger.error(f"Credit pack purchase request terminated: {credit_pack_purchase_request_status.termination_reason_string}")
+    if credit_pack_purchase_request_status.status != "completed":
+        logger.error(f"Credit pack purchase request failed: {credit_pack_purchase_request_status.status}")
         # Retry the storage with the closest agreeing supernode
         closest_agreeing_supernode_pastelid = await get_closest_supernode_pastelid_from_list(MY_LOCAL_PASTELID, signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
         credit_pack_storage_retry_request = CreditPackStorageRetryRequest(

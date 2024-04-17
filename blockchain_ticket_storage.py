@@ -22,7 +22,7 @@ import database_code as db_code
 logger = setup_logger()
 base_transaction_amount = Decimal(0.1)
 max_concurrent_requests = 1000
-FEEPERKB = Decimal(0.1)
+FEEPERKB = Decimal(0.00001)
 COIN = 100000 # patoshis in 1 PSL
 OP_CHECKSIG = b'\xac'
 OP_CHECKMULTISIG = b'\xae'
@@ -399,19 +399,23 @@ async def store_data_in_blockchain(input_data):
             value = round(Decimal(100/COIN), 5)            
             txouts.append((value, script_pubkey))
             change -= value   
-        out_value = round(base_transaction_amount, 5)
+        out_value = round(base_transaction_amount, 5) 
         change -= out_value
         receiving_address = await rpc_connection.getnewaddress()
-        txouts.append((out_value, OP_DUP + OP_HASH160 + pushdata(addr2bytes(receiving_address)) + OP_EQUALVERIFY + OP_CHECKSIG))
+        txouts.append((float(out_value), OP_DUP + OP_HASH160 + pushdata(addr2bytes(receiving_address)) + OP_EQUALVERIFY + OP_CHECKSIG))
         change_address = await rpc_connection.getnewaddress() # change output
-        txouts.append([change, OP_DUP + OP_HASH160 + pushdata(addr2bytes(change_address)) + OP_EQUALVERIFY + OP_CHECKSIG])
+        txouts.append([round(float(change), 5), OP_DUP + OP_HASH160 + pushdata(addr2bytes(change_address)) + OP_EQUALVERIFY + OP_CHECKSIG])
         logger.info(f"Original Data length: {len(input_data):,} bytes; Compressed data length: {len(compressed_data):,} bytes; Number of multisig outputs: {len(txouts):,}; Total size of multisig outputs in bytes: {sum(len(txout[1]) for txout in txouts):,}") 
         raw_transaction.vout = txouts        
         unsigned_tx = packtx(raw_transaction)
         signed_tx_before_fees = await rpc_connection.signrawtransaction(hexlify(unsigned_tx).decode('utf-8'))
         fee = round(Decimal(len(signed_tx_before_fees)/1000) * FEEPERKB, 5)
-        change -= fee
-        txouts[-1][0] = round(max(change, 0), 5)
+        if fee > change:
+            logger.error(f"Transaction fee exceeds change amount. Fee: {fee:.5f} PSL; Change: {change:.5f} PSL")
+            change = 0
+        else:
+            change -= fee
+        txouts[-1][0] = round(float(max(change, 0)), 5)
         final_tx = packtx(raw_transaction)
         signed_tx_after_fees = await rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
         assert(signed_tx_after_fees['complete'])
@@ -439,7 +443,7 @@ async def retrieve_data_from_blockchain(txid):
         reconstructed_combined_data = unhexlify(encoded_hex_data)
         reconstructed_combined_data_cleaned = reconstructed_combined_data.decode('utf-8').replace("A", "").rstrip("\x00")
         if len(reconstructed_combined_data_cleaned) % 2 != 0:
-            reconstructed_combined_data_cleaned = reconstructed_combined_data_cleaned[:-1]
+            reconstructed_combined_data_cleaned = reconstructed_combined_data_cleaned + "0"
         data_buffer = unhexlify(reconstructed_combined_data_cleaned)
         # Extract the identifier
         identifier_padded = data_buffer[:32]
