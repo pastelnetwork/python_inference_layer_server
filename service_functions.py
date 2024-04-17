@@ -609,7 +609,7 @@ async def list_sn_messages_func():
         sending_pastelid = txid_vout_to_pastelid_dict.get(sending_sn_txid_vout)
         receiving_pastelid = txid_vout_to_pastelid_dict.get(receiving_sn_txid_vout)
         if sending_pastelid is None or receiving_pastelid is None:
-            logger.warning(f"Skipping message due to missing PastelID for txid_vout: {sending_sn_txid_vout} or {receiving_sn_txid_vout}")
+            # logger.warning(f"Skipping message due to missing PastelID for txid_vout: {sending_sn_txid_vout} or {receiving_sn_txid_vout}")
             continue
         message_timestamp = parse_timestamp(datetime.fromtimestamp(message['Timestamp']).isoformat())
         # Check if the message already exists in the database
