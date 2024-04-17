@@ -2091,14 +2091,24 @@ async def handle_credit_pack_ticket_end_to_end(
     credit_pack_purchase_request_confirmation_response = await messaging_client.confirm_credit_purchase_request(highest_ranked_supernode_url, credit_pack_purchase_request_confirmation)
     # Send the credit pack purchase completion announcement to the responding supernode:
     for supernode_pastelid in signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
-        supernode_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
         try:
-            await messaging_client.credit_pack_purchase_completion_announcement(supernode_url, credit_pack_purchase_request_confirmation)
+            is_valid_pastelid = check_if_pastelid_is_valid_func(supernode_pastelid)
+            if is_valid_pastelid:
+                supernode_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
+                await messaging_client.credit_pack_purchase_completion_announcement(supernode_url, credit_pack_purchase_request_confirmation)
         except Exception as e:
             logger.error(f"Error sending credit_pack_purchase_completion_announcement to Supernode URL: {supernode_url}: {e}")
     # Check the status of the credit purchase request
-    credit_pack_purchase_request_status = await messaging_client.check_status_of_credit_purchase_request(highest_ranked_supernode_url, credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
-    logger.info(f"Credit pack purchase request status: {credit_pack_purchase_request_status}")
+    for i, (supernode_url, _) in enumerate(closest_supernodes):
+        try:
+            credit_pack_purchase_request_status = await messaging_client.check_status_of_credit_purchase_request(supernode_url, credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
+            logger.info(f"Credit pack purchase request status: {credit_pack_purchase_request_status}")
+            break
+        except Exception as e:
+            logger.error(f"Error checking status of credit purchase request with Supernode {i+1}: {e}")
+            if i == len(closest_supernodes) - 1:
+                logger.error("Failed to check status of credit purchase request with all Supernodes")
+                return None
     if isinstance(credit_pack_purchase_request_status, CreditPackPurchaseRequestResponseTermination):
         logger.error(f"Credit pack purchase request terminated: {credit_pack_purchase_request_status.termination_reason_string}")
         # Retry the storage with the closest agreeing supernode
@@ -2120,9 +2130,11 @@ async def handle_credit_pack_ticket_end_to_end(
         credit_pack_storage_retry_request_response = await messaging_client.credit_pack_storage_retry_request(closest_agreeing_supernode_url, credit_pack_storage_retry_request)
         # Send the credit pack purchase completion announcement to the responding supernode:
         for supernode_pastelid in signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
-            supernode_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
             try:
-                await messaging_client.credit_pack_purchase_completion_announcement(supernode_url, credit_pack_storage_retry_request_response)        
+                is_valid_pastelid = check_if_pastelid_is_valid_func(supernode_pastelid)
+                if is_valid_pastelid:
+                    supernode_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
+                    await messaging_client.credit_pack_purchase_completion_announcement(supernode_url, credit_pack_storage_retry_request_response)        
             except Exception as e:
                 logger.error(f"Error sending credit_pack_purchase_completion_announcement to Supernode URL: {supernode_url}: {e}")
         return credit_pack_storage_retry_request_response

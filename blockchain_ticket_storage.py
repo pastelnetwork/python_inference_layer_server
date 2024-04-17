@@ -347,12 +347,20 @@ def packtx(tx):
     # Serialize transaction outputs
     tx_data += varint(len(tx.vout))  # Number of outputs (varint)
     for txout in tx.vout:
-        tx_data += struct.pack('<Q', int(txout[0]*COIN))  # Transaction amount in patoshis (8 bytes)
+        output_value = int(txout[0]*COIN)
+        if 0 <= output_value <= 0xffffffffffffffff:
+            tx_data += struct.pack('<Q', output_value)  # Transaction amount in patoshis (8 bytes)
+        else:
+            logger.error(f"Invalid output value: {output_value}. Skipping this output.")        
         tx_data += varint(len(txout[1]))  # scriptPubKey length (varint)
         tx_data += txout[1]  # scriptPubKey (variable length)
     tx_data += struct.pack('<I', tx.lock_time)  # Locktime (4 bytes)
     tx_data += struct.pack('<I', tx.expiry_height)  # Expiry height (4 bytes)
-    tx_data += struct.pack('<Q', tx.value_balance)  # Value balance (8 bytes)
+    if 0 <= tx.value_balance <= 0xffffffffffffffff:
+        tx_data += struct.pack('<Q', tx.value_balance)  # Value balance (8 bytes)
+    else:
+        logger.error(f"Invalid value balance: {tx.value_balance}. Setting it to 0.")
+        tx_data += struct.pack('<Q', 0)  # Set value balance to 0 if it's outside the valid range    
     # Serialize Sapling-specific fields
     tx_data += varint(len(tx.vShieldedSpend))  # Number of shielded spends (varint)
     tx_data += varint(len(tx.vShieldedOutput))  # Number of shielded outputs (varint)
@@ -403,7 +411,7 @@ async def store_data_in_blockchain(input_data):
         signed_tx_before_fees = await rpc_connection.signrawtransaction(hexlify(unsigned_tx).decode('utf-8'))
         fee = round(Decimal(len(signed_tx_before_fees)/1000) * FEEPERKB, 5)
         change -= fee
-        txouts[-1][0] = round(change, 5)
+        txouts[-1][0] = round(max(change, 0), 5)
         final_tx = packtx(raw_transaction)
         signed_tx_after_fees = await rpc_connection.signrawtransaction(hexlify(final_tx).decode('utf-8'))
         assert(signed_tx_after_fees['complete'])
@@ -430,6 +438,8 @@ async def retrieve_data_from_blockchain(txid):
         # Decode the hex data to bytes and clean up extraneous characters and padding
         reconstructed_combined_data = unhexlify(encoded_hex_data)
         reconstructed_combined_data_cleaned = reconstructed_combined_data.decode('utf-8').replace("A", "").rstrip("\x00")
+        if len(reconstructed_combined_data_cleaned) % 2 != 0:
+            reconstructed_combined_data_cleaned = reconstructed_combined_data_cleaned[:-1]
         data_buffer = unhexlify(reconstructed_combined_data_cleaned)
         # Extract the identifier
         identifier_padded = data_buffer[:32]
