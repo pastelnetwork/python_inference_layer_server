@@ -661,6 +661,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
     model_input_data_json_b64: str
     inference_request_utc_iso_string: str
     inference_request_pastel_block_height: int
+    status: str = Field(index=True)
     inference_request_message_version_string: str
     sha3_256_hash_of_inference_request_fields: str
     requesting_pastelid_signature_on_request_hash: str
@@ -688,6 +689,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
                 "model_input_data_json_b64": "eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9",
                 "inference_request_utc_iso_string": "2023-06-01T12:00:00Z",
                 "inference_request_pastel_block_height": 123456,
+                "status": "in_progress",
                 "inference_request_message_version_string": "1.0",
                 "sha3_256_hash_of_inference_request_fields": "0x5678...",
                 "requesting_pastelid_signature_on_request_hash": "0xabcd..."
