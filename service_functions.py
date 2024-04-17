@@ -922,7 +922,7 @@ async def monitor_new_messages():
                             existing_message = query.one_or_none()
                             if existing_message:
                                 continue
-                            log_action_with_payload("received new", "message", existing_message)
+                            log_action_with_payload("received new", "message", message)
                             last_processed_timestamp = message['timestamp']
                             sending_sn_pastelid = message['sending_sn_pastelid']
                             receiving_sn_pastelid = message['receiving_sn_pastelid']

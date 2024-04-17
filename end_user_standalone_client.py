@@ -13,6 +13,7 @@ import urllib.parse as urlparse
 import re
 import random
 import time
+import traceback
 import uuid
 from decimal import Decimal
 import decimal
@@ -240,6 +241,7 @@ async def check_supernode_list_func():
     masternode_list_full_df['lastpaidblock'] = masternode_list_full_df['lastpaidblock'].astype(int)
     masternode_list_full_df['activedays'] = [float(x)/86400.0 for x in masternode_list_full_df['activeseconds'].values.tolist()]
     masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int)
+    masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['supernode_status'].isin(['ENABLED', 'PRE_ENABLED'])]
     masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['ipaddress:port'] != '154.38.164.75:29933'] #TODO: Remove this
     masternode_list_full_df__json = masternode_list_full_df.to_json(orient='index')
     return masternode_list_full_df, masternode_list_full_df__json
@@ -1718,7 +1720,7 @@ class PastelMessagingClient:
         challenge_signature = challenge_result["signature"]
         payload = request_data.model_dump()
         log_action_with_payload("making", "inference usage request", payload)
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
             response = await client.post(
                 f"{supernode_url}/make_inference_api_usage_request",
                 json={
@@ -1808,6 +1810,7 @@ class PastelMessagingClient:
                 return InferenceAPIUsageResponse.model_validate(result)
         except Exception as e:
             logger.error(f"Error in audit_inference_request_response from Supernode URL: {supernode_url}: {e}")
+            traceback.print_exc()
             raise
 
     async def call_audit_inference_request_result(self, supernode_url: str, inference_response_id: str) -> InferenceAPIOutputResult:
@@ -2275,7 +2278,8 @@ async def handle_inference_request_end_to_end(
                 results_available = await messaging_client.check_status_of_inference_request_results(supernode_url, inference_response_id) # Get the inference output results
                 if results_available:
                     output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
-                    output_results_size = len(output_results['inference_result_json_base64'])
+                    output_results_dict = output_results.model_dump()
+                    output_results_size = len(output_results.inference_result_json_base64)
                     max_response_size_to_log = 20000
                     if output_results_size < max_response_size_to_log:
                         logger.info(f"Retrieved inference output results: {output_results}")
@@ -2285,16 +2289,24 @@ async def handle_inference_request_end_to_end(
                         "request_data": inference_request_data.model_dump(),
                         "usage_request_response": usage_request_response_dict,
                         "input_prompt_to_llm": input_prompt_to_llm,
-                        "output_results": output_results,
+                        "output_results": output_results_dict,
                     }
                     if model_inference_type_string == "text_to_image":
-                        inference_result_dict["generated_image_base64"] = output_results["inference_result_json_base64"]
-                        inference_result_dict["generated_image_decoded"] = base64.b64decode(output_results["inference_result_json_base64"])
+                        inference_result_dict["generated_image_base64"] = output_results.inference_result_json_base64
+                        inference_result_dict["generated_image_decoded"] = base64.b64decode(output_results.inference_result_json_base64)
                     else:
-                        inference_result_dict["inference_result_decoded"] = base64.b64decode(output_results["inference_result_json_base64"]).decode()
-                    audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
-                    validation_results = validate_inference_data(inference_result_dict, audit_results)
-                    logger.info(f"Validation results: {validation_results}")                    
+                        inference_result_decoded = base64.b64decode(output_results.inference_result_json_base64).decode()
+                        logger.info(f"Decoded response:\n {inference_result_decoded}")
+                    use_audit_feature = 1
+                    if use_audit_feature:
+                        logger.info("Waiting 15 seconds for audit results to be available...")
+                        await asyncio.sleep(15) # Wait for the audit results to be available
+                        audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid) # TODO: Fix this
+                        validation_results = validate_inference_data(inference_result_dict, audit_results)
+                        logger.info(f"Validation results: {validation_results}")      
+                    else:
+                        audit_results = ""
+                        validation_results = ""
                     return inference_result_dict, audit_results, validation_results
                 else:
                     logger.info("Inference results not available yet; retrying...")
