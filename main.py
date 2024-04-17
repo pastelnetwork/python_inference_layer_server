@@ -74,7 +74,7 @@ async def startup():
         logger.info(f"Database initialization complete: {db_init_complete}")
         encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
         decrypt_sensitive_fields() # Now decrypt sensitive fields        
-        # asyncio.create_task(monitor_new_messages())  # Create a background task
+        asyncio.create_task(monitor_new_messages())  # Create a background task
         asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
     except Exception as e:
         logger.error(f"Error during startup: {e}")
