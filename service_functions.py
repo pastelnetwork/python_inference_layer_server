@@ -903,7 +903,7 @@ async def monitor_new_messages():
                     if last_processed_timestamp_raw is None:
                         last_processed_timestamp = pd.Timestamp.min
                     else:
-                        last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw[0])
+                        last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw)
                 new_messages_df = await list_sn_messages_func()
                 if new_messages_df is not None and not new_messages_df.empty:
                     new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
