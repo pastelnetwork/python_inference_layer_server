@@ -3860,20 +3860,36 @@ async def get_inference_api_usage_request_for_audit(inference_request_id: str) -
         result = query.one_or_none()
         return result
         
-async def get_inference_api_usage_response_for_audit(inference_response_id: str) -> db_code.InferenceAPIUsageResponse:
+async def get_inference_api_usage_response_for_audit(inference_request_or_response_id: str) -> db_code.InferenceAPIUsageResponse:
     async with db_code.Session() as db_session:
-        query = await db_session.exec(
-            select(db_code.InferenceAPIUsageResponse).where(db_code.InferenceAPIUsageResponse.inference_response_id == inference_response_id)
+        query1 = await db_session.exec(
+            select(db_code.InferenceAPIUsageResponse).where(db_code.InferenceAPIUsageResponse.inference_request_id == inference_request_or_response_id)
         )
-        result = query.one_or_none()
+        result1 = query1.one_or_none()
+        query2 = await db_session.exec(
+            select(db_code.InferenceAPIUsageResponse).where(db_code.InferenceAPIUsageResponse.inference_response_id == inference_request_or_response_id)
+        )
+        result2 = query2.one_or_none()        
+        if result1 is not None:
+            result = result1
+        elif result2 is not None:
+            result = result2
         return result
 
-async def get_inference_api_usage_result_for_audit(inference_response_id: str) -> db_code.InferenceAPIOutputResult:
+async def get_inference_api_usage_result_for_audit(inference_request_or_response_id: str) -> db_code.InferenceAPIOutputResult:
     async with db_code.Session() as db_session:
-        query = await db_session.exec(
-            select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_response_id == inference_response_id)
+        query1 = await db_session.exec(
+            select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_request_id == inference_request_or_response_id)
         )
-        result = query.one_or_none()
+        result1 = query1.one_or_none()
+        query2 = await db_session.exec(
+            select(db_code.InferenceAPIOutputResult).where(db_code.InferenceAPIOutputResult.inference_response_id == inference_request_or_response_id)
+        )
+        result2 = query2.one_or_none()        
+        if result1 is not None:
+            result = result1
+        elif result2 is not None:
+            result = result2        
         return result
     
 async def get_credit_pack_from_inference_request_id(inference_request_id: str) -> db_code.CreditPackPurchaseRequestResponse:

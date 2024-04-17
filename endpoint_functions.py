@@ -815,16 +815,16 @@ async def audit_inference_request_response_endpoint(
 ):
     try:
         # Retrieve the InferenceAPIOutputResult from the local database
-        result = await service_functions.get_inference_api_usage_result_for_audit(inference_response_id)
-        if result is None:
+        api_usage_response = await service_functions.get_inference_api_usage_response_for_audit(inference_response_id)
+        if api_usage_response is None:
             raise HTTPException(status_code=404, detail="Inference result not found")
         # Verify the signature
         is_valid_signature = await service_functions.verify_message_with_pastelid_func(pastel_id, inference_response_id, signature)
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        api_usage_response = await service_functions.get_inference_api_usage_response_for_audit(result.inference_request_id)
+        api_usage_request = await service_functions.get_inference_api_usage_request_for_audit(api_usage_response.inference_request_id)
         # Verify that the PastelID matches the one in the response
-        if api_usage_response.requesting_pastelid != pastel_id:
+        if api_usage_request.requesting_pastelid != pastel_id:
             raise HTTPException(status_code=403, detail="PastelID does not match the one in the inference request")
         # Return the InferenceAPIOutputResult as the API response
         return api_usage_response
@@ -849,8 +849,9 @@ async def audit_inference_request_result_endpoint(
         is_valid_signature = await service_functions.verify_message_with_pastelid_func(pastel_id, inference_response_id, signature)
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        api_usage_request = await service_functions.get_inference_api_usage_request_for_audit(api_usage_result.inference_request_id)
         # Verify that the PastelID matches the one in the response
-        if api_usage_result.requesting_pastelid != pastel_id:
+        if api_usage_request.requesting_pastelid != pastel_id:
             raise HTTPException(status_code=403, detail="PastelID does not match the one in the inference request")
         # Return the InferenceAPIOutputResult as the API response
         return api_usage_result
