@@ -861,6 +861,12 @@ async def process_broadcast_messages(message, db_session):
                     model_inference_type_string=response_data['model_inference_type_string'],
                     model_parameters_json=response_data['model_parameters_json'],
                     model_input_data_json_b64=response_data['model_input_data_json_b64'],
+                    inference_request_utc_iso_string = response_data['inference_request_utc_iso_string'],
+                    inference_request_pastel_block_height = response_data['inference_request_pastel_block_height'],
+                    status = response_data['status'],
+                    inference_request_message_version_string = response_data['inference_request_message_version_string'],
+                    sha3_256_hash_of_inference_request_fields = response_data['sha3_256_hash_of_inference_request_fields'],
+                    requesting_pastelid_signature_on_request_hash = response_data['requesting_pastelid_signature_on_request_hash']
                 )
                 usage_response = db_code.InferenceAPIUsageResponse(
                     inference_response_id=response_data['inference_response_id'],
@@ -870,6 +876,11 @@ async def process_broadcast_messages(message, db_session):
                     credit_usage_tracking_psl_address=response_data['credit_usage_tracking_psl_address'],
                     request_confirmation_message_amount_in_patoshis=response_data['request_confirmation_message_amount_in_patoshis'],
                     max_block_height_to_include_confirmation_transaction=response_data['max_block_height_to_include_confirmation_transaction'],
+                    inference_request_response_utc_iso_string = response_data['inference_request_response_utc_iso_string'],
+                    inference_request_response_pastel_block_height = response_data['inference_request_response_pastel_block_height'],
+                    inference_request_response_message_version_string = response_data['inference_request_response_message_version_string'],
+                    sha3_256_hash_of_inference_request_response_fields = response_data['sha3_256_hash_of_inference_request_response_fields'],
+                    supernode_pastelid_and_signature_on_inference_request_response_hash = response_data['supernode_pastelid_and_signature_on_inference_request_response_hash']
                 )
                 await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing
                 await retry_on_database_locked(db_session.add, usage_request)
@@ -886,13 +897,18 @@ async def process_broadcast_messages(message, db_session):
                 responding_supernode_pastelid=result_data['responding_supernode_pastelid'],
                 inference_result_json_base64=result_data['inference_result_json_base64'],
                 inference_result_file_type_strings=result_data['inference_result_file_type_strings'],
-                responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id']
+                responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id'],
+                inference_result_utc_iso_string=result_data['inference_result_utc_iso_string'],
+                inference_result_pastel_block_height=result_data['inference_result_pastel_block_height'],
+                inference_result_message_version_string=result_data['inference_result_message_version_string'],
+                sha3_256_hash_of_inference_result_fields=result_data['sha3_256_hash_of_inference_result_fields']
             )
             await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing
             await retry_on_database_locked(db_session.add, output_result)
             await retry_on_database_locked(db_session.commit)
             await retry_on_database_locked(db_session.refresh, output_result)
     except Exception as e:  # noqa: F841
+        traceback.print_exc()
         pass    
         
 async def monitor_new_messages():
