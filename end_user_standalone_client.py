@@ -25,7 +25,7 @@ from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from httpx import AsyncClient, Limits, Timeout
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from pydantic import field_validator
-from sqlmodel import SQLModel, Field, Column, JSON
+from sqlmodel import SQLModel, Field, Column, JSON, UUID
 
 # Note: you must have `minrelaytxfee=0.00001` in your pastel.conf to allow "dust" transactions for the inference request confirmation transactions to work!
 
@@ -876,7 +876,7 @@ async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase)
 # Messaging related models:
 
 class Message(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sending_sn_pastelid: str = Field(index=True)
     receiving_sn_pastelid: str = Field(index=True)
     sending_sn_txid_vout: str = Field(index=True)
@@ -903,7 +903,7 @@ class Message(SQLModel, table=True):
         }
 
 class UserMessage(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     from_pastelid: str = Field(index=True)
     to_pastelid: str = Field(index=True)
     message_body: str = Field(sa_column=Column(JSON))
@@ -922,10 +922,10 @@ class UserMessage(SQLModel, table=True):
         }
         
 # Credit pack purchasing/provisioning related models:        
-        
 
 class CreditPackPurchaseRequest(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, index=True, nullable=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
     requesting_end_user_pastelid: str = Field(index=True)
     requested_initial_credits_in_credit_pack: int
     list_of_authorized_pastelids_allowed_to_use_credit_pack: str = Field(sa_column=Column(JSON))
@@ -933,11 +933,11 @@ class CreditPackPurchaseRequest(SQLModel, table=True):
     request_timestamp_utc_iso_string: str
     request_pastel_block_height: int
     credit_purchase_request_message_version_string: str
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(unique=True, index=True)
     requesting_end_user_pastelid_signature_on_request_hash: str
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "requested_initial_credits_in_credit_pack": 1000,
                 "list_of_authorized_pastelids_allowed_to_use_credit_pack": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk"],
@@ -950,15 +950,15 @@ class CreditPackPurchaseRequest(SQLModel, table=True):
             }
         }
 
-class CreditPackPurchaseRequestRejection(SQLModel):
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+class CreditPackPurchaseRequestRejection(SQLModel, table=True):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
     rejection_reason_string: str
     rejection_timestamp_utc_iso_string: str
     rejection_pastel_block_height: int
     credit_purchase_request_rejection_message_version_string: str
-    responding_supernode_pastelid: str
-    sha3_256_hash_of_credit_pack_purchase_request_rejection_fields: str
+    responding_supernode_pastelid: str = Field(index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_rejection_fields: str = Field(unique=True, index=True)
     responding_supernode_signature_on_credit_pack_purchase_request_rejection_hash: str
     class Config:
         json_schema_extra = {
@@ -975,17 +975,17 @@ class CreditPackPurchaseRequestRejection(SQLModel):
             }
         }
         
-class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel):
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str
-    credit_usage_tracking_psl_address: str
+class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel, table=True):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
+    credit_usage_tracking_psl_address: str = Field(index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
     preliminary_quoted_price_per_credit_in_psl: float
     preliminary_total_cost_of_credit_pack_in_psl: float
     preliminary_price_quote_timestamp_utc_iso_string: str
     preliminary_price_quote_pastel_block_height: int
     preliminary_price_quote_message_version_string: str
-    responding_supernode_pastelid: str
-    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields: str
+    responding_supernode_pastelid: str = Field(index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields: str = Field(unique=True, index=True)
     responding_supernode_signature_on_credit_pack_purchase_request_preliminary_price_quote_hash: str
     class Config:
         json_schema_extra = {
@@ -1004,18 +1004,18 @@ class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel):
             }
         }
 
-class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel):
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str
-    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields: str
+class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel, table=True):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields: str = Field(index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
     agree_with_preliminary_price_quote: bool
-    credit_usage_tracking_psl_address: str
+    credit_usage_tracking_psl_address: str = Field(index=True)
     preliminary_quoted_price_per_credit_in_psl: float
     preliminary_price_quote_response_timestamp_utc_iso_string: str
     preliminary_price_quote_response_pastel_block_height: int
     preliminary_price_quote_response_message_version_string: str
-    requesting_end_user_pastelid: str
-    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields: str
+    requesting_end_user_pastelid: str = Field(index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_response_fields: str = Field(unique=True, index=True)
     requesting_end_user_pastelid_signature_on_preliminary_price_quote_response_hash: str
     class Config:
         json_schema_extra = {
@@ -1035,15 +1035,15 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel):
             }
         }
 
-class CreditPackPurchaseRequestResponseTermination(SQLModel):
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+class CreditPackPurchaseRequestResponseTermination(SQLModel, table=True):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
     termination_reason_string: str
     termination_timestamp_utc_iso_string: str
     termination_pastel_block_height: int
     credit_purchase_request_termination_message_version_string: str
-    responding_supernode_pastelid: str
-    sha3_256_hash_of_credit_pack_purchase_request_termination_fields: str
+    responding_supernode_pastelid: str = Field(index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_termination_fields: str = Field(unique=True, index=True)
     responding_supernode_signature_on_credit_pack_purchase_request_termination_hash: str
     class Config:
         json_schema_extra = {
@@ -1061,7 +1061,7 @@ class CreditPackPurchaseRequestResponseTermination(SQLModel):
         }        
         
 class CreditPackPurchaseRequestResponse(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
     psl_cost_per_credit: float
@@ -1076,10 +1076,10 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(unique=True, index=True)
     responding_supernode_signature_on_credit_pack_purchase_request_response_hash: str
-
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "credit_pack_purchase_request_fields_json": '{"requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", ...}',
                 "psl_cost_per_credit": 0.1,
@@ -1098,7 +1098,7 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
         }
 
 class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
@@ -1112,6 +1112,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x5678...",
                 "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
@@ -1126,7 +1127,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
         }
 
 class CreditPackPurchaseRequestConfirmationResponse(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str = Field(foreign_key="creditpackpurchaserequestconfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields", index=True)
     credit_pack_confirmation_outcome_string: str
@@ -1141,6 +1142,7 @@ class CreditPackPurchaseRequestConfirmationResponse(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields": "0x5678...",
                 "credit_pack_confirmation_outcome_string": "success",
@@ -1168,10 +1170,11 @@ class CreditPackRequestStatusCheck(SQLModel):
             }
         }
 
-class CreditPackPurchaseRequestStatus(SQLModel):
+class CreditPackPurchaseRequestStatus(SQLModel, table=True):
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
-    status: str
+    status: str = Field(index=True)
     status_details: str
     status_update_timestamp_utc_iso_string: str
     status_update_pastel_block_height: int
@@ -1182,6 +1185,7 @@ class CreditPackPurchaseRequestStatus(SQLModel):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "status": "in_progress",
                 "status_details": "Waiting for price agreement responses from supernodes",
@@ -1194,11 +1198,11 @@ class CreditPackPurchaseRequestStatus(SQLModel):
             }
         }
 
-class CreditPackStorageRetryRequest(SQLModel):
-    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str
+class CreditPackStorageRetryRequest(SQLModel, table=True):
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(primary_key=True, index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
-    requesting_end_user_pastelid: str
-    closest_agreeing_supernode_to_retry_storage_pastelid: str
+    requesting_end_user_pastelid: str = Field(index=True)
+    closest_agreeing_supernode_to_retry_storage_pastelid: str = Field(index=True)
     credit_pack_storage_retry_request_timestamp_utc_iso_string: str
     credit_pack_storage_retry_request_pastel_block_height: int
     credit_pack_storage_retry_request_message_version_string: str
@@ -1219,8 +1223,8 @@ class CreditPackStorageRetryRequest(SQLModel):
             }
         }
 
-class CreditPackStorageRetryRequestResponse(SQLModel):
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str
+class CreditPackStorageRetryRequestResponse(SQLModel, table=True):
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str
     credit_pack_storage_retry_confirmation_outcome_string: str
     pastel_api_credit_pack_ticket_registration_txid: str
@@ -1228,7 +1232,7 @@ class CreditPackStorageRetryRequestResponse(SQLModel):
     credit_pack_storage_retry_confirmation_response_utc_iso_string: str
     credit_pack_storage_retry_confirmation_response_pastel_block_height: int
     credit_pack_storage_retry_confirmation_response_message_version_string: str
-    closest_agreeing_supernode_to_retry_storage_pastelid: str
+    closest_agreeing_supernode_to_retry_storage_pastelid: str = Field(index=True)
     sha3_256_hash_of_credit_pack_storage_retry_confirmation_response_fields: str
     closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash: str    
     class Config:
@@ -1248,11 +1252,10 @@ class CreditPackStorageRetryRequestResponse(SQLModel):
             }
         }
 
-
 # Inference request related models:
 
 class InferenceAPIUsageRequest(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     inference_request_id: str = Field(unique=True, index=True)
     requesting_pastelid: str = Field(index=True)
     credit_pack_ticket_pastel_txid: str = Field(index=True)
@@ -1281,6 +1284,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
         protected_namespaces = ()
         json_schema_extra = {
             "example": {
+                id: "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "inference_request_id": "0x1234...",
                 "requesting_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "credit_pack_ticket_pastel_txid": "0x5678...",
@@ -1298,7 +1302,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
         }
 
 class InferenceAPIUsageResponse(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     inference_response_id: str = Field(unique=True, index=True)
     inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
     proposed_cost_of_request_in_inference_credits: float
@@ -1314,6 +1318,7 @@ class InferenceAPIUsageResponse(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "inference_response_id": "0x1234...",
                 "inference_request_id": "0x5678...",
                 "proposed_cost_of_request_in_inference_credits": 10,
@@ -1330,7 +1335,7 @@ class InferenceAPIUsageResponse(SQLModel, table=True):
         }
         
 class InferenceAPIOutputResult(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     inference_result_id: str = Field(unique=True, index=True)
     inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
     inference_response_id: str = Field(foreign_key="inferenceapiusageresponse.inference_response_id", index=True)
@@ -1345,6 +1350,7 @@ class InferenceAPIOutputResult(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "inference_result_id": "0x1234...",
                 "inference_request_id": "0x5678...",
                 "inference_response_id": "0x9abc...",
@@ -1802,7 +1808,7 @@ class PastelMessagingClient:
                 "signature": signature
             }
             log_action_with_payload("calling", "audit inference request response", payload)
-            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*2)) as client:
                 response = await client.post(f"{supernode_url}/audit_inference_request_response", json=payload)
                 response.raise_for_status()
                 result = response.json()
@@ -1822,7 +1828,7 @@ class PastelMessagingClient:
                 "signature": signature
             }
             log_action_with_payload("calling", "audit inference request result", payload)
-            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*2)) as client:
                 response = await client.post(f"{supernode_url}/audit_inference_request_result", json=payload)
                 response.raise_for_status()
                 result = response.json()
@@ -2297,11 +2303,12 @@ async def handle_inference_request_end_to_end(
                     else:
                         inference_result_decoded = base64.b64decode(output_results.inference_result_json_base64).decode()
                         logger.info(f"Decoded response:\n {inference_result_decoded}")
+                        inference_result_dict["inference_result_decoded"] = inference_result_decoded
                     use_audit_feature = 1
                     if use_audit_feature:
-                        logger.info("Waiting 15 seconds for audit results to be available...")
-                        await asyncio.sleep(15) # Wait for the audit results to be available
-                        audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid) # TODO: Fix this
+                        logger.info("Waiting 5 seconds for audit results to be available...")
+                        await asyncio.sleep(5) # Wait for the audit results to be available
+                        audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
                         validation_results = validate_inference_data(inference_result_dict, audit_results)
                         logger.info(f"Validation results: {validation_results}")      
                     else:
@@ -2367,6 +2374,7 @@ async def main():
         else:
             logger.error("Credit pack ticket storage failed!")
 
+    # credit_pack_ticket_pastel_txid = "849c4b50d098e8a73282112f4c5cc6bdc7b24a41b9e46407b97a88624954fd07"
     credit_pack_ticket_pastel_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
     logger.info(f"Selected credit pack ticket transaction ID: {credit_pack_ticket_pastel_txid}; corresponding psl tracking address: {credit_usage_tracking_psl_address}") # Each credit pack ticket has a corresponding UNIQUE tracking PSL address!
     
@@ -2383,18 +2391,20 @@ async def main():
         duration_in_seconds = (end_time - start_time)
         logger.info(f"Total time taken for credit pack ticket lookup: {round(duration_in_seconds, 2)} seconds")
                 
+                
     if use_test_inference_request_functionality:
         if use_test_llm_text_completion:
             start_time = time.time()
-            input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
+            # input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
             # input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
-            # input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
+            input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
             # requested_model_canonical_string = "mistralapi-mistral-large-latest" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
-            requested_model_canonical_string = "groq-mixtral-8x7b-32768" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
+            requested_model_canonical_string = "claude3-opus" # "groq-mixtral-8x7b-32768" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
             model_inference_type_string = "text_completion" # "embedding"        
             # model_parameters = {"number_of_tokens_to_generate": 200, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
-            model_parameters = {"number_of_tokens_to_generate": 1000, "number_of_completions_to_generate": 1}
+            model_parameters = {"number_of_tokens_to_generate": 2000, "number_of_completions_to_generate": 1}
             max_credit_cost_to_approve_inference_request = 200.0
+            
             inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(
                 credit_pack_ticket_pastel_txid,
                 input_prompt_text_to_llm,
@@ -2414,7 +2424,8 @@ async def main():
         if use_test_image_generation:
             # Test image generation
             start_time = time.time()
-            input_prompt_text_to_llm = "A stunning house with a beautiful garden and a pool, in a photorealistic style."
+            # input_prompt_text_to_llm = "A stunning house with a beautiful garden and a pool, in a photorealistic style."
+            input_prompt_text_to_llm = "A picture of a clown holding a sign that says PASTEL"
             requested_model_canonical_string = "stability-core"
             model_inference_type_string = "text_to_image"
             style_strings_list = ["3d-model", "analog-film", "anime", "cinematic", "comic-book", "digital-art", "enhance", "fantasy-art", "isometric", "line-art", "low-poly", "modeling-compound", "neon-punk", "origami", "photographic", "pixel-art", "tile-texture"] 

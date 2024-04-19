@@ -1,11 +1,12 @@
 import json
 import warnings
+import uuid
 from logger_config import setup_logger
 from datetime import datetime
 import datetime as dt
 from typing import Optional
 from contextlib import asynccontextmanager
-from sqlmodel import Field, SQLModel, Relationship, Column, JSON
+from sqlmodel import Field, SQLModel, Relationship, Column, JSON, UUID
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
 from sqlalchemy.orm import sessionmaker
 from pydantic import field_validator
@@ -25,7 +26,7 @@ warnings.filterwarnings("ignore", message="Field name .* shadows an attribute in
 # Messaging related models:
 
 class Message(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sending_sn_pastelid: str = Field(index=True)
     receiving_sn_pastelid: str = Field(index=True)
     sending_sn_txid_vout: str = Field(index=True)
@@ -52,7 +53,7 @@ class Message(SQLModel, table=True):
         }
 
 class UserMessage(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     from_pastelid: str = Field(index=True)
     to_pastelid: str = Field(index=True)
     message_body: str = Field(sa_column=Column(JSON))
@@ -90,7 +91,7 @@ class SupernodeUserMessage(Message, table=True):
         }
 
 class MessageMetadata(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     total_messages: int
     total_senders: int
     total_receivers: int
@@ -106,7 +107,7 @@ class MessageMetadata(SQLModel, table=True):
         }
 
 class MessageSenderMetadata(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sending_sn_pastelid: str = Field(index=True)
     sending_sn_txid_vout: str = Field(index=True)
     sending_sn_pubkey: str = Field(index=True)
@@ -126,7 +127,7 @@ class MessageSenderMetadata(SQLModel, table=True):
         }
         
 class MessageReceiverMetadata(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     receiving_sn_pastelid: str = Field(index=True)
     receiving_sn_txid_vout: str = Field(index=True)
     total_messages_received: int
@@ -144,7 +145,7 @@ class MessageReceiverMetadata(SQLModel, table=True):
         }
 
 class MessageSenderReceiverMetadata(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sending_sn_pastelid: str = Field(index=True)
     receiving_sn_pastelid: str = Field(index=True)
     total_messages: int
@@ -255,6 +256,7 @@ class ReputationScoreUpdate(SQLModel):
 # Credit pack related models:
 
 class CreditPackPurchaseRequest(SQLModel, table=True):
+    id: uuid.UUID = Field(default_factory=uuid.uuid4, index=True, nullable=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
     requesting_end_user_pastelid: str = Field(index=True)
     requested_initial_credits_in_credit_pack: int
@@ -267,6 +269,7 @@ class CreditPackPurchaseRequest(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "requested_initial_credits_in_credit_pack": 1000,
                 "list_of_authorized_pastelids_allowed_to_use_credit_pack": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk"],
@@ -365,7 +368,6 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel, table=Tru
         }
         
 class CreditPackPurchasePriceAgreementRequest(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(index=True)
     supernode_requesting_price_agreement_pastelid: str = Field(index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
@@ -449,7 +451,7 @@ class CreditPackPurchaseRequestResponseTermination(SQLModel, table=True):
         }        
         
 class CreditPackPurchaseRequestResponse(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
     psl_cost_per_credit: float
@@ -467,6 +469,7 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "credit_pack_purchase_request_fields_json": '{"requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", ...}',
                 "psl_cost_per_credit": 0.1,
@@ -496,7 +499,7 @@ class CreditPackPurchaseRequestResponseTxidMapping(SQLModel, table=True):
         }
         
 class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
@@ -510,6 +513,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x5678...",
                 "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
@@ -524,7 +528,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
         }
 
 class CreditPackPurchaseRequestConfirmationResponse(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str = Field(foreign_key="creditpackpurchaserequestconfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields", index=True)
     credit_pack_confirmation_outcome_string: str
@@ -539,6 +543,7 @@ class CreditPackPurchaseRequestConfirmationResponse(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields": "0x5678...",
                 "credit_pack_confirmation_outcome_string": "success",
@@ -567,7 +572,7 @@ class CreditPackRequestStatusCheck(SQLModel, table=True):
         }
 
 class CreditPackPurchaseRequestStatus(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
     status: str = Field(index=True)
@@ -581,6 +586,7 @@ class CreditPackPurchaseRequestStatus(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "status": "in_progress",
                 "status_details": "Waiting for price agreement responses from supernodes",
@@ -651,7 +657,7 @@ class CreditPackStorageRetryRequestResponse(SQLModel, table=True):
 # Inference request related models (i.e., using the credit packs to do inferences):
     
 class InferenceAPIUsageRequest(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     inference_request_id: str = Field(unique=True, index=True)
     requesting_pastelid: str = Field(index=True)
     credit_pack_ticket_pastel_txid: str = Field(index=True)
@@ -680,6 +686,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
         protected_namespaces = ()
         json_schema_extra = {
             "example": {
+                id: "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "inference_request_id": "0x1234...",
                 "requesting_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "credit_pack_ticket_pastel_txid": "0x5678...",
@@ -697,7 +704,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
         }
 
 class InferenceAPIUsageResponse(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     inference_response_id: str = Field(unique=True, index=True)
     inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
     proposed_cost_of_request_in_inference_credits: float
@@ -713,6 +720,7 @@ class InferenceAPIUsageResponse(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "inference_response_id": "0x1234...",
                 "inference_request_id": "0x5678...",
                 "proposed_cost_of_request_in_inference_credits": 10,
@@ -729,7 +737,7 @@ class InferenceAPIUsageResponse(SQLModel, table=True):
         }
         
 class InferenceAPIOutputResult(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True, index=True)
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     inference_result_id: str = Field(unique=True, index=True)
     inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
     inference_response_id: str = Field(foreign_key="inferenceapiusageresponse.inference_response_id", index=True)
@@ -744,6 +752,7 @@ class InferenceAPIOutputResult(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "inference_result_id": "0x1234...",
                 "inference_request_id": "0x5678...",
                 "inference_response_id": "0x9abc...",
