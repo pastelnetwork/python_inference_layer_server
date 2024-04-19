@@ -368,6 +368,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel, table=Tru
         }
         
 class CreditPackPurchasePriceAgreementRequest(SQLModel, table=True):
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(index=True)
     supernode_requesting_price_agreement_pastelid: str = Field(index=True)
     credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
@@ -381,6 +382,7 @@ class CreditPackPurchasePriceAgreementRequest(SQLModel, table=True):
     class Config:
         json_schema_extra = {
             "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x1234...",
                 "supernode_requesting_price_agreement_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
