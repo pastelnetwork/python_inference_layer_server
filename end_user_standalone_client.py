@@ -2348,7 +2348,7 @@ async def main():
         burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
         
     use_test_messaging_functionality = 0
-    use_test_credit_pack_ticket_functionality = 1
+    use_test_credit_pack_ticket_functionality = 0
     use_test_credit_pack_ticket_usage = 1
     use_test_inference_request_functionality = 1
     use_test_llm_text_completion = 1
@@ -2387,8 +2387,10 @@ async def main():
         else:
             logger.error("Credit pack ticket storage failed!")
 
-    # credit_pack_ticket_pastel_txid = "849c4b50d098e8a73282112f4c5cc6bdc7b24a41b9e46407b97a88624954fd07"
-    credit_pack_ticket_pastel_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
+    if 'credit_pack_purchase_request_confirmation_response' in globals():
+        credit_pack_ticket_pastel_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
+    else:
+        credit_pack_ticket_pastel_txid = "6145722a224cc85875cd57c5cff18a136a13e655ac9483dfad6ace0b195d8cd0" # "44oZnTrqgCF8wF2AyCzqTJKRioYLq3Wosv1M"
     logger.info(f"Selected credit pack ticket transaction ID: {credit_pack_ticket_pastel_txid}; corresponding psl tracking address: {credit_usage_tracking_psl_address}") # Each credit pack ticket has a corresponding UNIQUE tracking PSL address!
     
     # TODO: Add all credit pack tickets we create to local client database and make function that can automatically select the credit pack ticket with the largest remaining balance of credits and its corresponding psl tracking address.
@@ -2397,8 +2399,9 @@ async def main():
         start_time = time.time()
         credit_ticket_object = await get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid)
         credit_pack_purchase_request_dict = json.loads(credit_ticket_object.credit_pack_purchase_request_fields_json)
+        credit_usage_tracking_psl_address = credit_pack_purchase_request_dict['credit_usage_tracking_psl_address']
         initial_credit_pack_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
-        logger.info(f"Credit pack ticket data retrieved with initial balance {initial_credit_pack_balance}")
+        logger.info(f"Credit pack ticket data retrieved with initial balance {initial_credit_pack_balance} and credit tracking PSL address of {credit_usage_tracking_psl_address}")
         logger.info(f"Corresponding credit pack request dict: {credit_pack_purchase_request_dict}")
         end_time = time.time()
         duration_in_seconds = (end_time - start_time)
