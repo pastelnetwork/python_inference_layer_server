@@ -528,23 +528,24 @@ def parse_and_format(value):
         return value
 
 def pretty_json_func(data):
+    if isinstance(data, SQLModel):
+        data = data.dict()  # Assuming 'dict()' method provides serialization of SQLModel to dictionary
     if isinstance(data, dict):
         formatted_data = {}
         for key, value in data.items():
-            if key.endswith("_json"):
-                if isinstance(value, dict):
-                    formatted_data[key] = parse_and_format(value)
-                else:
-                    formatted_data[key] = parse_and_format(value)
-            elif isinstance(value, dict):
+            if isinstance(value, uuid.UUID):  # Convert UUIDs to string
+                formatted_data[key] = str(value)
+            elif isinstance(value, dict):  # Recursively handle dictionary values
                 formatted_data[key] = pretty_json_func(value)
-            else:
+            elif key.endswith("_json"):  # Handle keys that end with '_json'
+                formatted_data[key] = parse_and_format(value)
+            else:  # Handle other types of values
                 formatted_data[key] = value
         return json.dumps(formatted_data, indent=4)
-    elif isinstance(data, str):
+    elif isinstance(data, str):  # Handle string type data separately
         return parse_and_format(data)
     else:
-        return data
+        return data  # Return data as is if not a dictionary or string
     
 def log_action_with_payload(action_string, payload_name, json_payload):
     logger.info(f"Now {action_string} {payload_name} with payload:\n{pretty_json_func(json_payload)}")
@@ -1475,6 +1476,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_request.model_dump()
+        payload = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in payload.items()}
         log_action_with_payload("requesting", "a new Pastel credit pack ticket", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
@@ -1587,6 +1589,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = price_quote_response.model_dump()
+        payload = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in payload.items()}
         log_action_with_payload("sending", "price quote response to supernode", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
             response = await client.post(
@@ -1621,6 +1624,7 @@ class PastelMessagingClient:
         )
         # Convert the model instance to JSON payload
         payload = status_check.model_dump()
+        payload = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in payload.items()}
         log_action_with_payload("checking", "status of credit pack purchase request", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
@@ -1643,6 +1647,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_purchase_request_confirmation.model_dump()
+        payload = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in payload.items()}
         log_action_with_payload("confirming", "credit pack purchase request", payload)        
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*30)) as client: # Need to be patient with the timeout here since it requires the transaction to be mined/confirmed
             response = await client.post(
@@ -1665,6 +1670,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_purchase_request_confirmation.model_dump()
+        payload = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in payload.items()}        
         log_action_with_payload("sending", "purchase completion announcement message", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
@@ -1684,6 +1690,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_storage_retry_request.model_dump()
+        payload = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in payload.items()}        
         log_action_with_payload("sending", "credit pack storage retry request", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
@@ -1706,6 +1713,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_storage_retry_request_response.model_dump()
+        payload = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in payload.items()}        
         log_action_with_payload("sending", "storage retry completion announcement message", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
@@ -1725,6 +1733,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = request_data.model_dump()
+        payload = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in payload.items()}        
         log_action_with_payload("making", "inference usage request", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
             response = await client.post(
@@ -1747,6 +1756,7 @@ class PastelMessagingClient:
         challenge_id = challenge_result["challenge_id"]
         challenge_signature = challenge_result["signature"]
         payload = confirmation_data.model_dump()
+        payload = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in payload.items()}        
         log_action_with_payload("sending", "inference confirmation", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*4)) as client:
             response = await client.post(
@@ -2249,6 +2259,7 @@ async def handle_inference_request_end_to_end(
         raise ValueError(f"Invalid inference request response from Supernode URL {supernode_url}: {', '.join(validation_errors)}")    
     # Extract the relevant information from the response
     usage_request_response_dict = usage_request_response.model_dump()
+    usage_request_response_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in usage_request_response_dict.items()}
     inference_request_id = usage_request_response_dict["inference_request_id"]
     inference_response_id = usage_request_response_dict["inference_response_id"]
     proposed_cost_in_credits = float(usage_request_response_dict["proposed_cost_of_request_in_inference_credits"])
@@ -2285,14 +2296,16 @@ async def handle_inference_request_end_to_end(
                 if results_available:
                     output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
                     output_results_dict = output_results.model_dump()
+                    output_results_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in output_results_dict.items()}
                     output_results_size = len(output_results.inference_result_json_base64)
                     max_response_size_to_log = 20000
                     if output_results_size < max_response_size_to_log:
                         logger.info(f"Retrieved inference output results: {output_results}")
                     # Create the inference_result_dict with all relevant information
+                    inference_request_data_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in inference_request_data.model_dump().items()}
                     inference_result_dict = {
                         "supernode_url": supernode_url,
-                        "request_data": inference_request_data.model_dump(),
+                        "request_data": inference_request_data_dict,
                         "usage_request_response": usage_request_response_dict,
                         "input_prompt_to_llm": input_prompt_to_llm,
                         "output_results": output_results_dict,

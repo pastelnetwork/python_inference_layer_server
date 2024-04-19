@@ -181,7 +181,11 @@ def parse_timestamp(timestamp_str):
 
 def parse_and_format(value):
     try:
-        if isinstance(value, str): # Unescape the JSON string if it's a string
+        # Check if the JSON string is already formatted
+        if isinstance(value, str) and "\n" in value:
+            return value
+        # Unescape the JSON string if it's a string
+        if isinstance(value, str):
             unescaped_value = json.loads(json.dumps(value))
             parsed_value = json.loads(unescaped_value)
         else:
@@ -192,24 +196,23 @@ def parse_and_format(value):
 
 def pretty_json_func(data):
     if isinstance(data, SQLModel):
-        data = data.model_dump()
+        data = data.dict()  # Assuming 'dict()' method provides serialization of SQLModel to dictionary
     if isinstance(data, dict):
         formatted_data = {}
         for key, value in data.items():
-            if key.endswith("_json"):
-                if isinstance(value, dict):
-                    formatted_data[key] = parse_and_format(value)
-                else:
-                    formatted_data[key] = parse_and_format(value)
-            elif isinstance(value, dict):
+            if isinstance(value, uuid.UUID):  # Convert UUIDs to string
+                formatted_data[key] = str(value)
+            elif isinstance(value, dict):  # Recursively handle dictionary values
                 formatted_data[key] = pretty_json_func(value)
-            else:
+            elif key.endswith("_json"):  # Handle keys that end with '_json'
+                formatted_data[key] = parse_and_format(value)
+            else:  # Handle other types of values
                 formatted_data[key] = value
         return json.dumps(formatted_data, indent=4)
-    elif isinstance(data, str):
+    elif isinstance(data, str):  # Handle string type data separately
         return parse_and_format(data)
     else:
-        return data
+        return data  # Return data as is if not a dictionary or string
     
 def log_action_with_payload(action_string, payload_name, json_payload):
     logger.info(f"Now {action_string} {payload_name} with payload:\n{pretty_json_func(json_payload)}")
@@ -847,69 +850,56 @@ async def retry_on_database_locked(func, *args, max_retries=5, initial_delay=1, 
                 await db_session.rollback()
             else:
                 raise
-
+            
+async def check_if_record_exists(db_session, model, **kwargs):
+    """ Check if a record exists in the database matching the given criteria. """
+    existing_record = await db_session.execute(
+        select(model).filter_by(**kwargs)
+    )
+    return existing_record.scalars().first()
+        
 async def process_broadcast_messages(message, db_session):
     try:
         message_body = json.loads(message.message_body)
         if message.message_type == 'inference_request_response_announcement_message':
-                response_data = json.loads(message_body['message'])
-                usage_request = db_code.InferenceAPIUsageRequest(
-                    inference_request_id=response_data['inference_request_id'],
-                    requesting_pastelid=response_data['requesting_pastelid'],
-                    credit_pack_ticket_pastel_txid=response_data['credit_pack_ticket_pastel_txid'],
-                    requested_model_canonical_string=response_data['requested_model_canonical_string'],
-                    model_inference_type_string=response_data['model_inference_type_string'],
-                    model_parameters_json=response_data['model_parameters_json'],
-                    model_input_data_json_b64=response_data['model_input_data_json_b64'],
-                    inference_request_utc_iso_string = response_data['inference_request_utc_iso_string'],
-                    inference_request_pastel_block_height = response_data['inference_request_pastel_block_height'],
-                    status = response_data['status'],
-                    inference_request_message_version_string = response_data['inference_request_message_version_string'],
-                    sha3_256_hash_of_inference_request_fields = response_data['sha3_256_hash_of_inference_request_fields'],
-                    requesting_pastelid_signature_on_request_hash = response_data['requesting_pastelid_signature_on_request_hash']
-                )
-                usage_response = db_code.InferenceAPIUsageResponse(
-                    inference_response_id=response_data['inference_response_id'],
-                    inference_request_id=response_data['inference_request_id'],
-                    proposed_cost_of_request_in_inference_credits=response_data['proposed_cost_of_request_in_inference_credits'],
-                    remaining_credits_in_pack_after_request_processed=response_data['remaining_credits_in_pack_after_request_processed'],
-                    credit_usage_tracking_psl_address=response_data['credit_usage_tracking_psl_address'],
-                    request_confirmation_message_amount_in_patoshis=response_data['request_confirmation_message_amount_in_patoshis'],
-                    max_block_height_to_include_confirmation_transaction=response_data['max_block_height_to_include_confirmation_transaction'],
-                    inference_request_response_utc_iso_string = response_data['inference_request_response_utc_iso_string'],
-                    inference_request_response_pastel_block_height = response_data['inference_request_response_pastel_block_height'],
-                    inference_request_response_message_version_string = response_data['inference_request_response_message_version_string'],
-                    sha3_256_hash_of_inference_request_response_fields = response_data['sha3_256_hash_of_inference_request_response_fields'],
-                    supernode_pastelid_and_signature_on_inference_request_response_hash = response_data['supernode_pastelid_and_signature_on_inference_request_response_hash']
-                )
-                await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing
+            response_data = json.loads(message_body['message'])
+            # Check if the record already exists
+            existing_request = await check_if_record_exists(
+                db_session, db_code.InferenceAPIUsageRequest,
+                sha3_256_hash_of_inference_request_fields=response_data['sha3_256_hash_of_inference_request_fields']
+            )
+            existing_response = await check_if_record_exists(
+                db_session, db_code.InferenceAPIUsageResponse,
+                sha3_256_hash_of_inference_request_response_fields=response_data['sha3_256_hash_of_inference_request_response_fields']
+            )
+            if not existing_request and not existing_response:
+                # If neither record exists, proceed to create new entries
+                usage_request = db_code.InferenceAPIUsageRequest(**response_data)
+                usage_response = db_code.InferenceAPIUsageResponse(**response_data)
+                await asyncio.sleep(random.uniform(0.1, 0.5))  # Random sleep before DB operations
                 await retry_on_database_locked(db_session.add, usage_request)
                 await retry_on_database_locked(db_session.add, usage_response)
                 await retry_on_database_locked(db_session.commit)
                 await retry_on_database_locked(db_session.refresh, usage_request)
                 await retry_on_database_locked(db_session.refresh, usage_response)
+            else:
+                logger.info("Skipping insertion as the record already exists.")
         elif message.message_type == 'inference_request_result_announcement_message':
             result_data = json.loads(message_body['message'])
-            output_result = db_code.InferenceAPIOutputResult(
-                inference_result_id=result_data['inference_result_id'],
-                inference_request_id=result_data['inference_request_id'],
-                inference_response_id=result_data['inference_response_id'],
-                responding_supernode_pastelid=result_data['responding_supernode_pastelid'],
-                inference_result_json_base64=result_data['inference_result_json_base64'],
-                inference_result_file_type_strings=result_data['inference_result_file_type_strings'],
-                responding_supernode_signature_on_inference_result_id=result_data['responding_supernode_signature_on_inference_result_id'],
-                inference_result_utc_iso_string=result_data['inference_result_utc_iso_string'],
-                inference_result_pastel_block_height=result_data['inference_result_pastel_block_height'],
-                inference_result_message_version_string=result_data['inference_result_message_version_string'],
+            existing_result = await check_if_record_exists(
+                db_session, db_code.InferenceAPIOutputResult,
                 sha3_256_hash_of_inference_result_fields=result_data['sha3_256_hash_of_inference_result_fields']
             )
-            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding and committing
-            await retry_on_database_locked(db_session.add, output_result)
-            await retry_on_database_locked(db_session.commit)
-            await retry_on_database_locked(db_session.refresh, output_result)
-    except Exception as e:  # noqa: F841
+            if not existing_result:
+                output_result = db_code.InferenceAPIOutputResult(**result_data)
+                await asyncio.sleep(random.uniform(0.1, 0.5))  # Random sleep before DB operations
+                await retry_on_database_locked(db_session.add, output_result)
+                await retry_on_database_locked(db_session.commit)
+                await retry_on_database_locked(db_session.refresh, output_result)
+            else:
+                logger.info("Skipping insertion as the result record already exists.")
+    except Exception as e: # noqa: F841
         traceback.print_exc()
-        pass    
         
 async def monitor_new_messages():
     last_processed_timestamp = None
@@ -1059,6 +1049,8 @@ async def create_user_message(from_pastelid: str, to_pastelid: str, message_body
         db.add(user_message)
         db.commit()
         db.refresh(user_message)
+        user_message_dict = user_message.model_dump()
+        user_message_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in user_message_dict.items()}
         return user_message.model_dump()
 
 async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_pastelid: str, user_message_data: dict) -> dict:
@@ -1075,7 +1067,9 @@ async def create_supernode_user_message(sending_sn_pastelid: str, receiving_sn_p
         db.add(supernode_user_message)
         db.commit()
         db.refresh(supernode_user_message)
-        return supernode_user_message.model_dump()
+        supernode_user_message_dict = supernode_user_message.model_dump()
+        supernode_user_message_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in supernode_user_message_dict.items()}
+        return supernode_user_message_dict
 
 async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str, message_body: str, message_signature: str) -> dict:
     user_message_data = await create_user_message(from_pastelid, to_pastelid, message_body, message_signature)
@@ -1735,8 +1729,10 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
                     challenge = challenge_dict["challenge"]
                     challenge_id = challenge_dict["challenge_id"]
                     challenge_signature = challenge_dict["challenge_signature"]
+                    request_dict = request.model_dump()
+                    request_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in request_dict.items()}
                     payload = {
-                        "credit_pack_price_agreement_request": request.model_dump(),
+                        "credit_pack_price_agreement_request": request_dict,
                         "challenge": challenge,
                         "challenge_id": challenge_id,
                         "challenge_signature": challenge_signature
@@ -1792,8 +1788,10 @@ async def send_credit_pack_purchase_request_final_response_to_supernodes(respons
                     challenge = challenge_dict["challenge"]
                     challenge_id = challenge_dict["challenge_id"]
                     challenge_signature = challenge_dict["challenge_signature"]
+                    response_dict = response.model_dump()
+                    response_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in response_dict.items()}
                     payload = {
-                        "response": response.model_dump(),
+                        "response": response_dict,
                         "challenge": challenge,
                         "challenge_id": challenge_id,
                         "challenge_signature": challenge_signature
@@ -2141,8 +2139,10 @@ async def send_credit_pack_storage_completion_announcement_to_supernodes(respons
                     challenge = challenge_dict["challenge"]
                     challenge_id = challenge_dict["challenge_id"]
                     challenge_signature = challenge_dict["challenge_signature"]
+                    response_dict = response.model_dump()
+                    response_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in response_dict.items()}
                     payload = {
-                        "storage_completion_announcement": response.model_dump(),
+                        "storage_completion_announcement": response_dict,
                         "challenge": challenge,
                         "challenge_id": challenge_id,
                         "challenge_signature": challenge_signature
@@ -2206,7 +2206,9 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             current_block_height = await get_current_pastel_block_height_func()
         if matching_transaction_found or exceeding_transaction_found:
             # Store the credit pack ticket on the blockchain
-            credit_pack_purchase_request_response_json = json.dumps(credit_pack_purchase_request_response.model_dump())
+            credit_pack_purchase_request_response_dict = credit_pack_purchase_request_response.model_dump()
+            credit_pack_purchase_request_response_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in credit_pack_purchase_request_response_dict.items()}
+            credit_pack_purchase_request_response_json = json.dumps(credit_pack_purchase_request_response_dict)
             credit_pack_ticket_bytes_before_compression = sys.getsizeof(credit_pack_purchase_request_response_json)
             compressed_credit_pack_ticket, _ = await compress_data_with_zstd_func(credit_pack_purchase_request_response_json)
             credit_pack_ticket_bytes_after_compression = sys.getsizeof(compressed_credit_pack_ticket)
@@ -3049,6 +3051,7 @@ async def process_inference_api_usage_request(inference_api_usage_request: db_co
     # Validate the inference API usage request
     is_valid_request, proposed_cost_in_credits, remaining_credits_after_request = await validate_inference_api_usage_request(inference_api_usage_request) 
     inference_api_usage_request_dict = inference_api_usage_request.model_dump()
+    inference_api_usage_request_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in inference_api_usage_request_dict.items()}
     if not is_valid_request:
         logger.error("Invalid inference API usage request received!")
         raise ValueError(f"Error! Received invalid inference API usage request: {inference_api_usage_request_dict}")

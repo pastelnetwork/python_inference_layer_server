@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.exceptions import HTTPException
 from json import JSONEncoder
 import json
+import uuid
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Union
@@ -494,10 +495,12 @@ async def credit_purchase_preliminary_price_quote_response_endpoint(
         result = await service_functions.process_credit_purchase_preliminary_price_quote_response(preliminary_price_quote_response)
         if isinstance(result, db.CreditPackPurchaseRequestResponse):
             result_dict = result.model_dump()
+            result_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in result_dict.items()}
             service_functions.log_action_with_payload("processed", "credit purchase preliminary price quote response", result_dict)
             return result
         elif isinstance(result, db.CreditPackPurchaseRequestResponseTermination):
             result_dict = result.model_dump()
+            result_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in result_dict.items()}
             logger.warning(f"Credit purchase preliminary price quote response terminated: {result_dict}")
             return result
         else:
@@ -526,6 +529,7 @@ async def credit_pack_price_agreement_request_endpoint(
         response = await service_functions.process_credit_pack_price_agreement_request(credit_pack_price_agreement_request)
         if isinstance(response, db.CreditPackPurchasePriceAgreementRequestResponse):
             response_dict = response.model_dump()
+            response_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in response_dict.items()}
             service_functions.log_action_with_payload("processed", "credit pack price agreement request", response_dict)
             return response
         else:
@@ -553,6 +557,7 @@ async def check_status_of_credit_purchase_request_endpoint(
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         status = await service_functions.get_credit_purchase_request_status(credit_pack_request_status_check)
         status_dict = status.model_dump()
+        status_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in status_dict.items()}
         service_functions.log_action_with_payload("checked status of", "credit purchase request", status_dict)
         return status
     except Exception as e:
@@ -576,6 +581,7 @@ async def confirm_credit_purchase_request_endpoint(
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         response = await service_functions.process_credit_purchase_request_confirmation(confirmation)
         response_dict = response.model_dump()
+        response_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in response_dict.items()}
         service_functions.log_action_with_payload("processed", "credit purchase request confirmation", response_dict)
         return response
     except Exception as e:
@@ -665,6 +671,7 @@ async def credit_pack_storage_retry_request_endpoint(
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
         response = await service_functions.process_credit_pack_storage_retry_request(request)
         response_dict = response.model_dump()
+        response_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in response_dict.items()}
         service_functions.log_action_with_payload("processed", "credit pack storage retry request", response_dict)
         return response
     except Exception as e:
@@ -714,9 +721,11 @@ async def make_inference_api_usage_request_endpoint(
         # Validate and process the inference API usage request
         inference_response = await service_functions.process_inference_api_usage_request(inference_api_usage_request)
         inference_request_dict = inference_api_usage_request.model_dump()
+        inference_request_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in inference_request_dict.items()}
         # Abbreviate the 'model_input_data_json_b64' field to the first 32 characters
         inference_request_dict['model_input_data_json_b64'] = inference_request_dict['model_input_data_json_b64'][:32]        
         inference_response_dict = inference_response.model_dump()
+        inference_response_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in inference_response_dict.items()}
         combined_message_dict = {**inference_request_dict, **inference_response_dict}
         # Broadcast message to nearest SNs to requester's pastelid containing inference request/response message 
         response_message_body = json.dumps(combined_message_dict)
@@ -788,9 +797,11 @@ async def retrieve_inference_output_results_endpoint(
         inference_output_results = await service_functions.get_inference_output_results_and_verify_authorization(inference_response_id, pastelid)
         # Broadcast message to nearest SNs to requester's pastelid containing inference results
         inference_output_results_dict = inference_output_results.model_dump()
+        inference_output_results_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in inference_output_results_dict.items()}
         # Retrieve the inference API usage request from the database
         inference_usage_request_object = await service_functions.get_inference_api_usage_request_for_audit(inference_output_results_dict['inference_request_id'])
         inference_usage_request_dict = inference_usage_request_object.model_dump()
+        inference_usage_request_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in inference_usage_request_dict.items()}
         # Add model_parameters_json and other fields to the inference output results dict:
         inference_output_results_dict['model_parameters_json'] = inference_usage_request_dict['model_parameters_json']
         inference_output_results_dict['requested_model_canonical_string'] = inference_usage_request_dict['requested_model_canonical_string']
