@@ -3845,9 +3845,9 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
                 total_credits_consumed += float(vout["valuePat"]) / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER
     # Calculate the current credit balance
     current_credit_balance = initial_credit_balance - total_credits_consumed
-    logger.info(f"Initial credit balance: {initial_credit_balance}")
-    logger.info(f"Total credits consumed: {total_credits_consumed}")
-    logger.info(f"Current credit balance: {current_credit_balance}")
+    logger.info(f"Initial credit balance: {initial_credit_balance:,}")
+    logger.info(f"Total credits consumed: {total_credits_consumed:,}")
+    logger.info(f"Current credit balance: {current_credit_balance:,}")
     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
 
 async def update_inference_sn_reputation_score(supernode_pastelid: str, reputation_score: float) -> bool:

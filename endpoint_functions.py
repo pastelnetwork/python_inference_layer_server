@@ -480,10 +480,10 @@ async def credit_purchase_initial_request_endpoint(
 
 @router.post("/credit_purchase_preliminary_price_quote_response", response_model=Union[db.CreditPackPurchaseRequestResponse, db.CreditPackPurchaseRequestResponseTermination])
 async def credit_purchase_preliminary_price_quote_response_endpoint(
-    preliminary_price_quote_response: db.CreditPackPurchaseRequestPreliminaryPriceQuoteResponse = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    preliminary_price_quote_response: db.CreditPackPurchaseRequestPreliminaryPriceQuoteResponse = Body(...),
     rpc_connection=Depends(get_rpc_connection),
 ):
     try:
@@ -514,10 +514,10 @@ async def credit_purchase_preliminary_price_quote_response_endpoint(
 
 @router.post("/credit_pack_price_agreement_request", response_model=db.CreditPackPurchasePriceAgreementRequestResponse)
 async def credit_pack_price_agreement_request_endpoint(
-    credit_pack_price_agreement_request: db.CreditPackPurchasePriceAgreementRequest = Body(...),
     challenge: str = Body(..., description="The challenge string"),
     challenge_id: str = Body(..., description="The ID of the challenge string"),
     challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    credit_pack_price_agreement_request: db.CreditPackPurchasePriceAgreementRequest = Body(...),
     rpc_connection=Depends(get_rpc_connection),
 ):
     try:

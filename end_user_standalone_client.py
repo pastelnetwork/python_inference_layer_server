@@ -1595,10 +1595,10 @@ class PastelMessagingClient:
             response = await client.post(
                 f"{supernode_url}/credit_purchase_preliminary_price_quote_response",
                 json={
-                    "preliminary_price_quote_response": payload,
                     "challenge": challenge,
                     "challenge_id": challenge_id,
-                    "challenge_signature": challenge_signature
+                    "challenge_signature": challenge_signature,
+                    "preliminary_price_quote_response": payload,
                 }
             )
             response.raise_for_status()
@@ -2348,7 +2348,7 @@ async def main():
         burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
         
     use_test_messaging_functionality = 0
-    use_test_credit_pack_ticket_functionality = 0
+    use_test_credit_pack_ticket_functionality = 1
     use_test_credit_pack_ticket_usage = 1
     use_test_inference_request_functionality = 1
     use_test_llm_text_completion = 1
@@ -2391,7 +2391,7 @@ async def main():
         credit_pack_ticket_pastel_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
     else:
         credit_pack_ticket_pastel_txid = "6145722a224cc85875cd57c5cff18a136a13e655ac9483dfad6ace0b195d8cd0" # "44oZnTrqgCF8wF2AyCzqTJKRioYLq3Wosv1M"
-    logger.info(f"Selected credit pack ticket transaction ID: {credit_pack_ticket_pastel_txid}; corresponding psl tracking address: {credit_usage_tracking_psl_address}") # Each credit pack ticket has a corresponding UNIQUE tracking PSL address!
+    logger.info(f"Selected credit pack ticket transaction ID: {credit_pack_ticket_pastel_txid}") # Each credit pack ticket has a corresponding UNIQUE tracking PSL address that must be accessible within the wallet of the client machine.
     
     # TODO: Add all credit pack tickets we create to local client database and make function that can automatically select the credit pack ticket with the largest remaining balance of credits and its corresponding psl tracking address.
     
@@ -2400,6 +2400,11 @@ async def main():
         credit_ticket_object = await get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid)
         credit_pack_purchase_request_dict = json.loads(credit_ticket_object.credit_pack_purchase_request_fields_json)
         credit_usage_tracking_psl_address = credit_pack_purchase_request_dict['credit_usage_tracking_psl_address']
+        credit_usage_tracking_psl_address_current_balance = await check_psl_address_balance_alternative_func(credit_usage_tracking_psl_address)
+        min_psl_balance_in_tracking_address = 10.0 
+        if credit_usage_tracking_psl_address_current_balance < min_psl_balance_in_tracking_address:
+            logger.info(f"Not enough balance in tracking address: {credit_usage_tracking_psl_address}; current balance: {credit_usage_tracking_psl_address_current_balance}; Now sending more coin to the tracking address...")
+            await send_to_address_func(credit_usage_tracking_psl_address, 10.0, "Sending more coin to the tracking address")
         initial_credit_pack_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
         logger.info(f"Credit pack ticket data retrieved with initial balance {initial_credit_pack_balance} and credit tracking PSL address of {credit_usage_tracking_psl_address}")
         logger.info(f"Corresponding credit pack request dict: {credit_pack_purchase_request_dict}")
@@ -2413,7 +2418,7 @@ async def main():
             start_time = time.time()
             # input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
             # input_prompt_text_to_llm = "What made the Battle of Salamus so important? What clever ideas were used in the battle? What mistakes were made?"
-            input_prompt_text_to_llm = "how do you measure the speed of an earthquake?"
+            input_prompt_text_to_llm = "Write a Shakespearean sonnet about a cryptocurrency called pastel network that now allows users to do AI inference tasks in a totally decentralized way. Make sure it's exactly 12 lines long and rhymes and follows the rhyme scheme ABAB CDCD EFEF GG. It should sound like a real sonnet by the Bard."
             # requested_model_canonical_string = "mistralapi-mistral-large-latest" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
             requested_model_canonical_string = "claude3-opus" # "groq-mixtral-8x7b-32768" # "groq-mixtral-8x7b-32768" # "claude3-opus" "claude3-sonnet" "mistral-7b-instruct-v0.2" # "claude3-haiku" # "phi-2" , "mistral-7b-instruct-v0.2", "groq-mixtral-8x7b-32768", "groq-llama2-70b-4096", "groq-gemma-7b-it", "mistralapi-mistral-small-latest", "mistralapi-mistral-large-latest"
             model_inference_type_string = "text_completion" # "embedding"        
