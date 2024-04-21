@@ -6,7 +6,7 @@ from datetime import datetime
 import datetime as dt
 from typing import Optional
 from contextlib import asynccontextmanager
-from sqlmodel import Field, SQLModel, Relationship, Column, JSON, UUID
+from sqlmodel import Field, SQLModel, Relationship, Column, JSON
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
 from sqlalchemy.orm import sessionmaker
 from pydantic import field_validator

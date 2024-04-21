@@ -1980,7 +1980,10 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
                 list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json.append(
                     response.responding_supernode_signature_on_credit_pack_purchase_request_fields_json
                 )
-        credit_request_response_dict = json.loads(preliminary_price_quote_response.credit_pack_purchase_request_fields_json)
+        if isinstance(preliminary_price_quote_response.credit_pack_purchase_request_fields_json, str):
+            credit_request_response_dict = json.loads(preliminary_price_quote_response.credit_pack_purchase_request_fields_json)
+        elif isinstance(preliminary_price_quote_response.credit_pack_purchase_request_fields_json, dict):
+            credit_request_response_dict = preliminary_price_quote_response.credit_pack_purchase_request_fields_json
         requested_initial_credits_in_credit_pack = credit_request_response_dict['requested_initial_credits_in_credit_pack']
         # Create the credit pack purchase request response
         credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(
