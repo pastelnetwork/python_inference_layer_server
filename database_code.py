@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from decouple import Config as DecoupleConfig, RepositoryEnv
         
 config = DecoupleConfig(RepositoryEnv('.env'))
-DATABASE_URL = config.get("DATABASE_URL", cast=str, default="sqlite+aiosqlite:///super_node_messaging_and_control_layer.sqlite")
+DATABASE_URL = config.get("DATABASE_URL", cast=str, default="sqlite+aiosqlite:///super_node_inference_layer.sqlite")
 logger = setup_logger()
 # Ignore specific warnings related to shadowing of fields in SQLModel or Pydantic
 warnings.filterwarnings("ignore", message="Field name .* shadows an attribute in parent .*")

@@ -970,7 +970,7 @@ async def show_logs(minutes: int = 5):
             var text = document.querySelector('#log-container').innerText;
             var element = document.createElement('a');
             element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
-            element.setAttribute('download', 'pastel_supernode_messaging_and_control_layer_log__' + new Date().toISOString() + '.txt');
+            element.setAttribute('download', 'pastel_supernode_inference_layer_log__' + new Date().toISOString() + '.txt');
             element.style.display = 'none';
             document.body.appendChild(element);
             element.click();

@@ -4,7 +4,7 @@ import shutil
 import queue
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 
-logger = logging.getLogger("pastel_supernode_messaging_and_control_layer")
+logger = logging.getLogger("pastel_supernode_inference_layer")
 
 def setup_logger():
     if logger.handlers:
@@ -14,7 +14,7 @@ def setup_logger():
         os.makedirs(old_logs_dir)
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    log_file_path = 'pastel_supernode_messaging_and_control_layer.log'
+    log_file_path = 'pastel_supernode_inference_layer.log'
     log_queue = queue.Queue(-1)  # Create a queue for the handlers
     fh = RotatingFileHandler(log_file_path, maxBytes=10*1024*1024, backupCount=5)
     fh.setFormatter(formatter)

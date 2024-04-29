@@ -1,8 +1,8 @@
-# Pastel Supernode Messaging and Control Layer
+# Pastel Supernode Inference Layer
 
-![Illustration](https://raw.githubusercontent.com/pastelnetwork/python_supernode_messaging_and_control_layer/master/illustration.webp)
+![Illustration](https://raw.githubusercontent.com/pastelnetwork/python_inference_layer_server/master/illustration.webp)
 
-The Supernode messaging and control layer is implemented using Python and FastAPI. It provides a set of API endpoints that allow communication and coordination among the Supernodes in the Pastel Network.
+The Supernode Inference Layer for Pastgel Network is implemented using Python and FastAPI. It provides a set of API endpoints that allow communication and coordination among the Supernodes in the Pastel Network for the purpose of provisioning API credit packs in the Pastel Blockchain and then using these credit packs to pay for the cost of inference requests across a range of AI/LLM models from various services (including OpenAI, Anthropic, Groq, Mistral, OpenRouter, Stability, and others), and also locally hosted models on the Supernodes themselves using the related Swiss Army Llama package.
 
 The key components of this layer include:
 
@@ -41,8 +41,8 @@ Instruction assume Ubuntu v22+.
 Clone the repository and navigate to the project directory:
 
 ```
-git clone https://github.com/pastelnetwork/python_supernode_messaging_and_control_layer.git
-cd python_supernode_messaging_and_control_layer
+git clone https://github.com/pastelnetwork/python_inference_layer_server.git
+cd python_inference_layer_server
 ```
 
 Set up a virtual environment and activate it:
@@ -59,8 +59,8 @@ Alternatively, you can run:
 
 ```
 cd ~
-git clone https://github.com/pastelnetwork/python_supernode_messaging_and_control_layer.git
-cd python_supernode_messaging_and_control_layer
+git clone https://github.com/pastelnetwork/python_inference_layer_server.git
+cd python_inference_layer_server
 chmod +x ./set_up_project.sh
 ./set_up_project.sh
 ```
@@ -89,7 +89,7 @@ The application uses environment variables for configuration. You can set these 
 
 ## Endpoints
 
-The following endpoints are available in the Pastel Supernode Messaging and Control Layer:
+The following endpoints are available in the Pastel Supernode Inference Layer:
 
 - `/supernode_list_json`: Retrieves the list of Supernodes as JSON data.
 - `/supernode_list_csv`: Retrieves the list of Supernodes as a normalized CSV file.
@@ -113,7 +113,7 @@ Refer to the API documentation available at `http://localhost:7123` when the ser
 
 ## Database
 
-The application uses SQLite as the database backend. The database file is located at `./super_node_messaging_and_control_layer.sqlite` by default. The database schema is defined in the `database_code.py` file.
+The application uses SQLite as the database backend. The database file is located at `./super_node_inference_layer.sqlite` by default. The database schema is defined in the `database_code.py` file.
 
 The following tables are used:
 
@@ -144,10 +144,6 @@ Refer to the API documentation for more details on the request and response form
 The application logs various events and errors using the configured logger. The log messages are written to the console and can be further configured to write to a file or external logging service.
 
 The `monitor_new_messages` function runs as a background task and continuously monitors for new messages, updates the message metadata, and logs relevant information.
-
-## Contributing
-
-Contributions to the Pastel Supernode Messaging and Control Layer are welcome! If you find any issues or have suggestions for improvements, please open an issue or submit a pull request on the project's GitHub repository.
 
 ## License
 

@@ -29,7 +29,7 @@ from sqlmodel import SQLModel, Field, Column, JSON, UUID
 
 # Note: you must have `minrelaytxfee=0.00001` in your pastel.conf to allow "dust" transactions for the inference request confirmation transactions to work!
 
-logger = logging.getLogger("pastel_supernode_messaging_client")
+logger = logging.getLogger("pastel_supernode_inference_client")
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 MESSAGING_TIMEOUT_IN_SECONDS = config.get("MESSAGING_TIMEOUT_IN_SECONDS", default=60, cast=int)
@@ -51,7 +51,7 @@ def setup_logger():
         os.makedirs(old_logs_dir)
     logger.setLevel(logging.INFO)
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    log_file_path = 'pastel_supernode_messaging_client.log'
+    log_file_path = 'pastel_supernode_inference_client.log'
     log_queue = queue.Queue(-1)  # Create a queue for the handlers
     fh = RotatingFileHandler(log_file_path, maxBytes=10*1024*1024, backupCount=5)
     fh.setFormatter(formatter)
@@ -1387,7 +1387,7 @@ class InferenceConfirmation(SQLModel):
 
 # Class for handling interactions with the supernode servers:
 
-class PastelMessagingClient:
+class PastelInferenceClient:
     def __init__(self, pastelid: str, passphrase: str):
         self.pastelid = pastelid
         self.passphrase = passphrase
@@ -2038,8 +2038,8 @@ async def send_message_and_check_for_new_incoming_messages(
     message_body: str
 ):
     global MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE
-    # Create messaging client to use:
-    messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)    
+    # Create inference client to use:
+    inference_client = PastelInferenceClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)    
     # Get the list of Supernodes
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
     # Send a user message
@@ -2058,20 +2058,20 @@ async def send_message_and_check_for_new_incoming_messages(
     # Send the message to the 3 closest Supernodes concurrently
     send_tasks = []
     for supernode_url, _ in closest_supernodes_to_recipient:
-        send_task = asyncio.create_task(messaging_client.send_user_message(supernode_url, user_message))
+        send_task = asyncio.create_task(inference_client.send_user_message(supernode_url, user_message))
         send_tasks.append(send_task)
     send_results = await asyncio.gather(*send_tasks)
     logger.info(f"Sent user messages: {send_results}")
     # Get user messages from the 3 closest Supernodes
     logger.info("Retrieving incoming user messages...")
-    logger.info(f"My local pastelid: {messaging_client.pastelid}")
+    logger.info(f"My local pastelid: {inference_client.pastelid}")
     # Lookup the 3 closest supernodes to the local pastelid
-    closest_supernodes_to_local = await get_n_closest_supernodes_to_pastelid_urls(3, messaging_client.pastelid, supernode_list_df)
+    closest_supernodes_to_local = await get_n_closest_supernodes_to_pastelid_urls(3, inference_client.pastelid, supernode_list_df)
     logger.info(f"Closest Supernodes to local pastelid: {[sn[1] for sn in closest_supernodes_to_local]}")
     # Retrieve messages from the 3 closest Supernodes concurrently
     message_retrieval_tasks = []
     for supernode_url, _ in closest_supernodes_to_local:
-        message_retrieval_task = asyncio.create_task(messaging_client.get_user_messages(supernode_url))
+        message_retrieval_task = asyncio.create_task(inference_client.get_user_messages(supernode_url))
         message_retrieval_tasks.append(message_retrieval_task)
     message_lists = await asyncio.gather(*message_retrieval_tasks)
     # Combine the message lists and remove duplicates
@@ -2097,8 +2097,8 @@ async def handle_credit_pack_ticket_end_to_end(
     maximum_per_credit_price_in_psl: Optional[float] = None
     ):
     global MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE
-    # Create messaging client to use:
-    messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)    
+    # Create inference client to use:
+    inference_client = PastelInferenceClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)    
     # Get the list of Supernodes
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
     # Prepare the credit pack request
@@ -2119,9 +2119,9 @@ async def handle_credit_pack_ticket_end_to_end(
     # Send the credit pack request to the highest-ranked supernode
     closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(1, MY_LOCAL_PASTELID, supernode_list_df)
     highest_ranked_supernode_url = closest_supernodes[0][0]
-    preliminary_price_quote = await messaging_client.credit_pack_ticket_initial_purchase_request(highest_ranked_supernode_url, credit_pack_request)
+    preliminary_price_quote = await inference_client.credit_pack_ticket_initial_purchase_request(highest_ranked_supernode_url, credit_pack_request)
     # Check if the end user agrees with the preliminary price quote
-    signed_credit_pack_ticket_or_rejection = await messaging_client.credit_pack_ticket_preliminary_price_quote_response(highest_ranked_supernode_url, credit_pack_request, preliminary_price_quote, maximum_total_credit_pack_price_in_psl, maximum_per_credit_price_in_psl)
+    signed_credit_pack_ticket_or_rejection = await inference_client.credit_pack_ticket_preliminary_price_quote_response(highest_ranked_supernode_url, credit_pack_request, preliminary_price_quote, maximum_total_credit_pack_price_in_psl, maximum_per_credit_price_in_psl)
     if isinstance(signed_credit_pack_ticket_or_rejection, CreditPackPurchaseRequestResponseTermination):
         logger.error(f"Credit pack purchase request terminated: {signed_credit_pack_ticket_or_rejection.termination_reason_string}")
         return None
@@ -2146,20 +2146,20 @@ async def handle_credit_pack_ticket_end_to_end(
     )
     credit_pack_purchase_request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_purchase_request_confirmation)
     credit_pack_purchase_request_confirmation.requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, credit_pack_purchase_request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields, MY_PASTELID_PASSPHRASE)
-    credit_pack_purchase_request_confirmation_response = await messaging_client.confirm_credit_purchase_request(highest_ranked_supernode_url, credit_pack_purchase_request_confirmation)
+    credit_pack_purchase_request_confirmation_response = await inference_client.confirm_credit_purchase_request(highest_ranked_supernode_url, credit_pack_purchase_request_confirmation)
     # Send the credit pack purchase completion announcement to the responding supernode:
     for supernode_pastelid in signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
         try:
             is_valid_pastelid = check_if_pastelid_is_valid_func(supernode_pastelid)
             if is_valid_pastelid:
                 supernode_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
-                await messaging_client.credit_pack_purchase_completion_announcement(supernode_url, credit_pack_purchase_request_confirmation)
+                await inference_client.credit_pack_purchase_completion_announcement(supernode_url, credit_pack_purchase_request_confirmation)
         except Exception as e:
             logger.error(f"Error sending credit_pack_purchase_completion_announcement to Supernode URL: {supernode_url}: {e}")
     # Check the status of the credit purchase request
     for i, (supernode_url, _) in enumerate(closest_supernodes):
         try:
-            credit_pack_purchase_request_status = await messaging_client.check_status_of_credit_purchase_request(supernode_url, credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
+            credit_pack_purchase_request_status = await inference_client.check_status_of_credit_purchase_request(supernode_url, credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
             logger.info(f"Credit pack purchase request status: {credit_pack_purchase_request_status}")
             break
         except Exception as e:
@@ -2185,14 +2185,14 @@ async def handle_credit_pack_ticket_end_to_end(
         credit_pack_storage_retry_request.sha3_256_hash_of_credit_pack_storage_retry_request_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_storage_retry_request)
         credit_pack_storage_retry_request.requesting_end_user_pastelid_signature_on_credit_pack_storage_retry_request_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, credit_pack_storage_retry_request.sha3_256_hash_of_credit_pack_storage_retry_request_fields, MY_PASTELID_PASSPHRASE)
         closest_agreeing_supernode_url = await get_supernode_url_from_pastelid_func(closest_agreeing_supernode_pastelid, supernode_list_df)
-        credit_pack_storage_retry_request_response = await messaging_client.credit_pack_storage_retry_request(closest_agreeing_supernode_url, credit_pack_storage_retry_request)
+        credit_pack_storage_retry_request_response = await inference_client.credit_pack_storage_retry_request(closest_agreeing_supernode_url, credit_pack_storage_retry_request)
         # Send the credit pack purchase completion announcement to the responding supernode:
         for supernode_pastelid in signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
             try:
                 is_valid_pastelid = check_if_pastelid_is_valid_func(supernode_pastelid)
                 if is_valid_pastelid:
                     supernode_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
-                    await messaging_client.credit_pack_purchase_completion_announcement(supernode_url, credit_pack_storage_retry_request_response)        
+                    await inference_client.credit_pack_purchase_completion_announcement(supernode_url, credit_pack_storage_retry_request_response)        
             except Exception as e:
                 logger.error(f"Error sending credit_pack_purchase_completion_announcement to Supernode URL: {supernode_url}: {e}")
         return credit_pack_storage_retry_request_response
@@ -2201,12 +2201,12 @@ async def handle_credit_pack_ticket_end_to_end(
 
 async def get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid: str):
     # Create messaging client to use:
-    messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
+    inference_client = PastelInferenceClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
     # Get the closest Supernode URL
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
     supernode_url, _ = await get_closest_supernode_to_pastelid_url(MY_LOCAL_PASTELID, supernode_list_df)
     logger.info(f"Getting credit pack ticket data from Supernode URL: {supernode_url}...")
-    credit_pack_data_object = await messaging_client.get_credit_pack_ticket_from_txid(supernode_url, credit_pack_ticket_pastel_txid)
+    credit_pack_data_object = await inference_client.get_credit_pack_ticket_from_txid(supernode_url, credit_pack_ticket_pastel_txid)
     return credit_pack_data_object
 
 async def handle_inference_request_end_to_end(
@@ -2219,10 +2219,10 @@ async def handle_inference_request_end_to_end(
     burn_address: str
 ):
     # Create messaging client to use:
-    messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
+    inference_client = PastelInferenceClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
     # Get the closest Supernode URL
     model_parameters_json = json.dumps(model_parameters)
-    supernode_support_dict, closest_supporting_supernode_pastelid, closest_supporting_supernode_url = await messaging_client.get_closest_supernode_url_that_supports_desired_model(requested_model_canonical_string, model_inference_type_string, model_parameters_json) 
+    supernode_support_dict, closest_supporting_supernode_pastelid, closest_supporting_supernode_url = await inference_client.get_closest_supernode_url_that_supports_desired_model(requested_model_canonical_string, model_inference_type_string, model_parameters_json) 
     supernode_url = closest_supporting_supernode_url
     supernode_pastelid = closest_supporting_supernode_pastelid
     try:
@@ -2251,7 +2251,7 @@ async def handle_inference_request_end_to_end(
     requesting_pastelid_signature_on_request_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, sha3_256_hash_of_inference_request_fields, MY_PASTELID_PASSPHRASE)
     inference_request_data.requesting_pastelid_signature_on_request_hash = requesting_pastelid_signature_on_request_hash    
     # Send the inference API usage request
-    usage_request_response = await messaging_client.make_inference_api_usage_request(supernode_url, inference_request_data)
+    usage_request_response = await inference_client.make_inference_api_usage_request(supernode_url, inference_request_data)
     logger.info(f"Received inference API usage request response from SN:\n {usage_request_response}")
     # Check the validity of the response
     validation_errors = await validate_credit_pack_ticket_message_data_func(usage_request_response)
@@ -2281,7 +2281,7 @@ async def handle_inference_request_end_to_end(
                 requesting_pastelid=MY_LOCAL_PASTELID,
                 confirmation_transaction={"txid": tracking_transaction_txid}
             )
-            confirmation_result = await messaging_client.send_inference_confirmation(supernode_url, confirmation_data) # Send the inference confirmation
+            confirmation_result = await inference_client.send_inference_confirmation(supernode_url, confirmation_data) # Send the inference confirmation
             logger.info(f"Sent inference confirmation: {confirmation_result}")
             max_tries_to_get_confirmation = 10
             initial_wait_time_in_seconds = 10
@@ -2292,9 +2292,9 @@ async def handle_inference_request_end_to_end(
                 await asyncio.sleep(wait_time_in_seconds)
                 assert(len(inference_request_id)>0)
                 assert(len(inference_response_id)>0)
-                results_available = await messaging_client.check_status_of_inference_request_results(supernode_url, inference_response_id) # Get the inference output results
+                results_available = await inference_client.check_status_of_inference_request_results(supernode_url, inference_response_id) # Get the inference output results
                 if results_available:
-                    output_results = await messaging_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
+                    output_results = await inference_client.retrieve_inference_output_results(supernode_url, inference_request_id, inference_response_id)
                     output_results_dict = output_results.model_dump()
                     output_results_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in output_results_dict.items()}
                     output_results_size = len(output_results.inference_result_json_base64)
@@ -2321,7 +2321,7 @@ async def handle_inference_request_end_to_end(
                     if use_audit_feature:
                         logger.info("Waiting 5 seconds for audit results to be available...")
                         await asyncio.sleep(5) # Wait for the audit results to be available
-                        audit_results = await messaging_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
+                        audit_results = await inference_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
                         validation_results = validate_inference_data(inference_result_dict, audit_results)
                         logger.info(f"Validation results: {validation_results}")      
                     else:
@@ -2369,8 +2369,8 @@ async def main():
         amount_of_psl_for_tracking_transactions = 10.0
         credit_price_cushion_percentage = 0.15
         maximum_total_amount_of_psl_to_fund_in_new_tracking_address = 100000.0
-        messaging_client = PastelMessagingClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
-        estimated_total_cost_in_psl_for_credit_pack = await messaging_client.internal_estimate_of_credit_pack_ticket_cost_in_psl(desired_number_of_credits, credit_price_cushion_percentage)
+        inference_client = PastelInferenceClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
+        estimated_total_cost_in_psl_for_credit_pack = await inference_client.internal_estimate_of_credit_pack_ticket_cost_in_psl(desired_number_of_credits, credit_price_cushion_percentage)
         if estimated_total_cost_in_psl_for_credit_pack > maximum_total_amount_of_psl_to_fund_in_new_tracking_address:
             logger.error(f"Estimated total cost of credit pack exceeds the maximum allowed amount of {maximum_total_amount_of_psl_to_fund_in_new_tracking_address} PSL")
             raise ValueError(f"Estimated total cost of credit pack exceeds the maximum allowed amount of {maximum_total_amount_of_psl_to_fund_in_new_tracking_address} PSL")

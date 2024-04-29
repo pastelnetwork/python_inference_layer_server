@@ -23,7 +23,7 @@ cd ~/.pyenv && git pull && cd -
 pyenv install 3.12
 
 # Setup the project directory
-PROJECT_DIR="$HOME/python_supernode_messaging_and_control_layer"
+PROJECT_DIR="$HOME/python_inference_layer_server"
 if [ -d "$PROJECT_DIR" ]; then
     cd "$PROJECT_DIR"
     pyenv local 3.12

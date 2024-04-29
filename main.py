@@ -23,8 +23,8 @@ asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
 
 app = fastapi.FastAPI(
-    title="Pastel-Supernode-Messaging-and-Control-Layer",
-    description="Pastel Supernode Messaging and Control Layer API",
+    title="Pastel-Supernode-Inference-Layer",
+    description="Pastel Supernode Inference Layer API",
     docs_url="/",
     redoc_url="/redoc"
 )

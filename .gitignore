@@ -53,4 +53,4 @@ db/
 venv/
 *_log
 old_logs/
-super_node_messaging_and_control_layer.sqlite*
+super_node_inference_layer.sqlite*
