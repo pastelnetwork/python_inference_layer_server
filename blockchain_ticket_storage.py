@@ -607,6 +607,59 @@ async def process_block_for_masternode_transactions(block_height, masternode_tra
                     db.add(transaction)
                     await db.commit()
 
+async def get_masternode_transactions_by_block():
+    masternode_transactions_by_block = {}
+    try:
+        async with db_code.Session() as db:
+            transactions = await db.exec(select(db_code.MasternodeTransaction).where(db_code.MasternodeTransaction.moved == False))
+            for transaction in transactions:
+                block_height = transaction.block_height
+                if block_height not in masternode_transactions_by_block:
+                    masternode_transactions_by_block[block_height] = {
+                        'count': 0,
+                        'transactions': []
+                    }
+                masternode_transactions_by_block[block_height]['count'] += 1
+                masternode_transactions_by_block[block_height]['transactions'].append({
+                    'txid_vout': f"{transaction.txid}-{transaction.vout}",
+                    'receiving_address': transaction.receiving_address
+                })
+        logger.info("Masternode transactions retrieved from the database.")
+    except Exception as e:
+        logger.warning(f"Failed to retrieve masternode transactions from the database: {e}")
+        logger.info("Falling back to using dict/pickle files.")
+        for file in os.listdir('masternode_transactions_dicts'):
+            if file.startswith('masternode_txids__block_') and file.endswith('.pickle'):
+                with open(os.path.join('masternode_transactions_dicts', file), 'rb') as f:
+                    masternode_transactions_dict = pickle.load(f)
+                for key, value in masternode_transactions_dict.items():
+                    block_height = value['block_height']
+                    if block_height not in masternode_transactions_by_block:
+                        masternode_transactions_by_block[block_height] = {
+                            'count': 0,
+                            'transactions': []
+                        }
+                    masternode_transactions_by_block[block_height]['count'] += 1
+                    masternode_transactions_by_block[block_height]['transactions'].append({
+                        'txid_vout': key,
+                        'receiving_address': value['receiving_address']
+                    })
+        with open('masternode_master_file.pickle', 'rb') as f:
+            masternode_master_file = pickle.load(f)
+        for key, value in masternode_master_file.items():
+            if not value.get('moved', False):
+                block_height = value['block_height']
+                if block_height not in masternode_transactions_by_block:
+                    masternode_transactions_by_block[block_height] = {
+                        'count': 0,
+                        'transactions': []
+                    }
+                masternode_transactions_by_block[block_height]['count'] += 1
+                masternode_transactions_by_block[block_height]['transactions'].append({
+                    'txid_vout': key,
+                    'receiving_address': value['receiving_address']
+                })
+    return masternode_transactions_by_block
 
 rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
 network, burn_address = get_network_info(rpc_port)
