@@ -538,9 +538,9 @@ async def process_blocks_for_masternode_transactions(force_recheck_from_scratch=
         logger.info(f"Processing blocks {start_block:,} to {end_block:,}")
         tasks = []
         for block_height in range(start_block, end_block + 1):
-            tasks.append(asyncio.create_task(process_block_for_masternode_transactions(block_height, masternode_transactions_dict)))
+            tasks.append(asyncio.create_task(process_block(block_height, masternode_transactions_dict)))
         await asyncio.gather(*tasks)
-        if end_block % 10000 == 0:
+        if end_block % 1000 == 0:
             save_path = os.path.join('masternode_transactions_dicts', f"masternode_txids__block_{start_block}_to_block_{end_block}.pickle")
             with open(save_path, 'wb') as f:
                 pickle.dump(masternode_transactions_dict, f)
@@ -579,14 +579,20 @@ async def process_blocks_for_masternode_transactions(force_recheck_from_scratch=
         pickle.dump(masternode_master_file, f)
     logger.info("Masternode transaction processing completed")
 
-async def process_block_for_masternode_transactions(block_height, masternode_transactions_dict):
-    global rpc_connection
+async def process_block(block_height, masternode_transactions_dict):
+    global rpc_connection, network
+    if network == 'mainnet':
+        masternode_collateral_amount = 5 * 10**11  # 5,000,000 PSL
+    elif network in ['devnet', 'testnet']:
+        masternode_collateral_amount = 10**11  # 1,000,000 PSL
+    else:
+        logger.error(f"Unknown network: {network}")
     block_hash = await rpc_connection.getblockhash(block_height)
     block = await rpc_connection.getblock(block_hash)
     for tx_id in block['tx']:
         tx = await rpc_connection.getrawtransaction(tx_id, 1)
         for vout in tx['vout']:
-            if vout['value'] == 5000000:
+            if vout['valuePat'] == masternode_collateral_amount:
                 receiving_address = vout['scriptPubKey']['addresses'][0]
                 key = f"{tx_id}-{vout['n']}"
                 masternode_transactions_dict[key] = {
@@ -594,19 +600,23 @@ async def process_block_for_masternode_transactions(block_height, masternode_tra
                     'block_datetime': datetime.utcfromtimestamp(block['time']).isoformat(),
                     'receiving_address': receiving_address
                 }
-                logger.info(f"Found valid masternode transaction with txid {tx_id} and vout {vout['n']} at block {block_height}")
-                async with db_code.Session() as db:
-                    transaction = db_code.MasternodeTransaction(
-                        id=key,
-                        txid=tx_id,
-                        vout=vout['n'],
-                        receiving_address=receiving_address,
-                        block_height=block_height,
-                        block_datetime=datetime.utcfromtimestamp(block['time'])
-                    )
-                    db.add(transaction)
-                    await db.commit()
-
+                logger.info(f"Found valid masternode transaction with txid {tx_id} and vout {vout['n']} at block {block_height:,}")
+                await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before processing the transaction
+                try:
+                    async with db_code.Session() as db:
+                        transaction = db_code.MasternodeTransaction(
+                            id=key,
+                            txid=tx_id,
+                            vout=vout['n'],
+                            receiving_address=receiving_address,
+                            block_height=block_height,
+                            block_datetime=datetime.utcfromtimestamp(block['time'])
+                        )
+                        db.add(transaction)
+                        await db.commit()
+                except Exception as e:  # noqa: E722
+                    pass
+                    
 async def get_masternode_transactions_by_block():
     masternode_transactions_by_block = {}
     try:
