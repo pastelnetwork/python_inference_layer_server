@@ -5,9 +5,11 @@ import io
 import asyncio
 import base64
 import json
+import pickle
 import random
 import time
 import traceback
+from datetime import datetime
 from binascii import unhexlify, hexlify
 import urllib.parse as urlparse
 from decimal import Decimal
@@ -17,6 +19,7 @@ import tempfile
 import zstandard as zstd
 from httpx import AsyncClient, Limits, Timeout
 from logger_config import setup_logger
+from sqlmodel import select, delete
 import database_code as db_code
 
 logger = setup_logger()
@@ -503,6 +506,106 @@ def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~
             current_value = line.strip().split('=')[1].strip()
             other_flags[current_flag] = current_value
     return rpchost, rpcport, rpcuser, rpcpassword, other_flags
+
+async def process_blocks_for_masternode_transactions(force_recheck_from_scratch=False):
+    global rpc_connection
+    if not os.path.exists('masternode_transactions_dicts'):
+        os.makedirs('masternode_transactions_dicts')
+    if force_recheck_from_scratch:
+        logger.info("Forcing a recheck from scratch. Deleting existing pickle files and database records.")
+        for file in os.listdir('masternode_transactions_dicts'):
+            if file.startswith('masternode_txids__block_') and file.endswith('.pickle'):
+                os.remove(os.path.join('masternode_transactions_dicts', file))
+        if os.path.exists('masternode_master_file.pickle'):
+            os.remove('masternode_master_file.pickle')
+        async with db_code.Session() as db:
+            await db.exec(delete(db_code.MasternodeTransaction))
+            await db.commit()
+    masternode_transactions_dict = {}
+    masternode_master_file = {}
+    latest_block_height = await rpc_connection.getblockcount()
+    last_processed_block = 0
+    for file in os.listdir('masternode_transactions_dicts'):
+        if file.startswith('masternode_txids__block_') and file.endswith('.pickle'):
+            block_range = file[len('masternode_txids__block_'):-len('.pickle')]
+            start_block, end_block = map(int, block_range.split('_to_block_'))
+            if end_block > last_processed_block:
+                last_processed_block = end_block
+    logger.info(f"Starting from block {last_processed_block + 1:,} of {latest_block_height:,}")
+    batch_size = 100
+    for start_block in range(last_processed_block + 1, latest_block_height + 1, batch_size):
+        end_block = min(start_block + batch_size - 1, latest_block_height)
+        logger.info(f"Processing blocks {start_block:,} to {end_block:,}")
+        tasks = []
+        for block_height in range(start_block, end_block + 1):
+            tasks.append(asyncio.create_task(process_block_for_masternode_transactions(block_height, masternode_transactions_dict)))
+        await asyncio.gather(*tasks)
+        if end_block % 10000 == 0:
+            save_path = os.path.join('masternode_transactions_dicts', f"masternode_txids__block_{start_block}_to_block_{end_block}.pickle")
+            with open(save_path, 'wb') as f:
+                pickle.dump(masternode_transactions_dict, f)
+            logger.info(f"Saved masternode transactions from block {start_block:,} to {end_block:,}")
+            masternode_transactions_dict = {}
+    if masternode_transactions_dict:
+        save_path = os.path.join('masternode_transactions_dicts', f"masternode_txids__block_{end_block - (end_block % 10000) + 1}_to_block_{end_block}.pickle")
+        with open(save_path, 'wb') as f:
+            pickle.dump(masternode_transactions_dict, f)
+        logger.info(f"Saved remaining masternode transactions from block {end_block - (end_block % 10000) + 1:,} to {end_block:,}")
+    logger.info("Checking if any masternode txids are moved elsewhere...")
+    for key in masternode_transactions_dict:
+        tx_id, vout = key.split('-')
+        try:
+            tx = await rpc_connection.getrawtransaction(tx_id, 1)
+            if tx['vout'][int(vout)]['scriptPubKey']['addresses'][0] != masternode_transactions_dict[key]['receiving_address']:
+                masternode_master_file[key] = masternode_transactions_dict[key]
+                masternode_master_file[key]['moved'] = True
+                async with db_code.Session() as db:
+                    transaction = await db.exec(select(db_code.MasternodeTransaction).where(db_code.MasternodeTransaction.id == key))
+                    transaction = transaction.one_or_none()
+                    if transaction:
+                        transaction.moved = True
+                        await db.commit()
+        except JSONRPCException as e:
+            if e.code == -5:
+                masternode_master_file[key] = masternode_transactions_dict[key]
+                masternode_master_file[key]['moved'] = True
+                async with db_code.Session() as db:
+                    transaction = await db.exec(select(db_code.MasternodeTransaction).where(db_code.MasternodeTransaction.id == key))
+                    transaction = transaction.one_or_none()
+                    if transaction:
+                        transaction.moved = True
+                        await db.commit()
+    with open('masternode_master_file.pickle', 'wb') as f:
+        pickle.dump(masternode_master_file, f)
+    logger.info("Masternode transaction processing completed")
+
+async def process_block_for_masternode_transactions(block_height, masternode_transactions_dict):
+    global rpc_connection
+    block_hash = await rpc_connection.getblockhash(block_height)
+    block = await rpc_connection.getblock(block_hash)
+    for tx_id in block['tx']:
+        tx = await rpc_connection.getrawtransaction(tx_id, 1)
+        for vout in tx['vout']:
+            if vout['value'] == 5000000:
+                receiving_address = vout['scriptPubKey']['addresses'][0]
+                key = f"{tx_id}-{vout['n']}"
+                masternode_transactions_dict[key] = {
+                    'block_height': block_height,
+                    'block_datetime': datetime.utcfromtimestamp(block['time']).isoformat(),
+                    'receiving_address': receiving_address
+                }
+                logger.info(f"Found valid masternode transaction with txid {tx_id} and vout {vout['n']} at block {block_height}")
+                async with db_code.Session() as db:
+                    transaction = db_code.MasternodeTransaction(
+                        id=key,
+                        txid=tx_id,
+                        vout=vout['n'],
+                        receiving_address=receiving_address,
+                        block_height=block_height,
+                        block_datetime=datetime.utcfromtimestamp(block['time'])
+                    )
+                    db.add(transaction)
+                    await db.commit()
 
 
 rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()

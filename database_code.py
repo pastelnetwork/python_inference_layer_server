@@ -252,6 +252,29 @@ class ReputationScoreUpdate(SQLModel):
             }
         }
             
+class MasternodeTransaction(SQLModel, table=True):
+    id: str = Field(primary_key=True, index=True)
+    txid: str = Field(index=True)
+    vout: int
+    receiving_address: str = Field(index=True)
+    block_height: int = Field(index=True)
+    block_datetime: datetime
+    moved: bool = Field(default=False)
+    additional_data: dict = Field(sa_column=Column(JSON), default={})
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "txid-vout",
+                "txid": "0x1234...",
+                "vout": 0,
+                "receiving_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
+                "block_height": 123456,
+                "block_datetime": "2023-06-01T12:00:00Z",
+                "moved": False,
+                "additional_data": {}
+            }
+        }            
 #_________________________________________________________________________________________
 # Credit pack related models:
 

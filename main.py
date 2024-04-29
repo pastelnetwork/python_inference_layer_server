@@ -13,6 +13,7 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
 from database_code import initialize_db
 from service_functions import monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value
 from setup_swiss_army_llama import check_and_setup_swiss_army_llama
+from blockchain_ticket_storage import process_blocks_for_masternode_transactions
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 UVICORN_PORT = config.get("UVICORN_PORT", cast=int)
@@ -75,6 +76,7 @@ async def startup():
         encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
         decrypt_sensitive_fields() # Now decrypt sensitive fields        
         asyncio.create_task(monitor_new_messages())  # Create a background task
+        asyncio.create_task(process_blocks_for_masternode_transactions())  # Create a background task
         asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
     except Exception as e:
         logger.error(f"Error during startup: {e}")
