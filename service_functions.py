@@ -327,7 +327,7 @@ def EncodeDecimal(o):
     raise TypeError(repr(o) + " is not JSON serializable")
     
 class AsyncAuthServiceProxy:
-    max_concurrent_requests = 200
+    max_concurrent_requests = 500
     _semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
     def __init__(self, service_url, service_name=None, reconnect_timeout=15, reconnect_amount=2, request_timeout=20):
         self.service_url = service_url
@@ -1488,11 +1488,31 @@ async def save_credit_pack_purchase_request_response_txid_mapping(credit_pack_pu
     except Exception as e:
         logger.error(f"Error saving credit pack purchase request response txid mapping: {str(e)}")
         raise
+
+def turn_lists_into_strings_func(data: bytes) -> str:
+    # Decode the bytes to a string
+    data_str = data.decode('utf-8')
+    # Parse the string as JSON
+    data_dict = json.loads(data_str)
+    def replace_lists_with_strings(obj):
+        if isinstance(obj, dict):
+            # Recursively process nested dictionaries
+            return {k: replace_lists_with_strings(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            # Convert the list to a JSON string
+            return json.dumps(obj)
+        else:
+            return obj
+    # Process the input data
+    processed_data = replace_lists_with_strings(data_dict)
+    # Convert the processed data back to a JSON string
+    return json.dumps(processed_data)
         
 async def retrieve_credit_pack_ticket_from_blockchain_using_txid(txid: str) -> db_code.CreditPackPurchaseRequestResponse:
     try:
         retrieved_data = await retrieve_data_from_blockchain(txid)
-        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(retrieved_data)
+        transformed_retrieved_data = turn_lists_into_strings_func(retrieved_data)        
+        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(transformed_retrieved_data)
         return credit_pack_purchase_request_response
     except Exception as e:
         logger.error(f"Error retrieving credit pack ticket from blockchain: {str(e)}")

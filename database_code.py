@@ -6,7 +6,7 @@ from datetime import datetime
 import datetime as dt
 from typing import Optional
 from contextlib import asynccontextmanager
-from sqlmodel import Field, SQLModel, Relationship, Column, JSON
+from sqlmodel import Field, SQLModel, Relationship, Column, JSON, UniqueConstraint
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
 from sqlalchemy.orm import sessionmaker
 from pydantic import field_validator
@@ -261,7 +261,9 @@ class MasternodeTransaction(SQLModel, table=True):
     block_datetime: datetime
     moved: bool = Field(default=False)
     additional_data: dict = Field(sa_column=Column(JSON), default={})
-
+    __table_args__ = (
+        UniqueConstraint("txid", "vout", name="unique_txid_vout"),
+    )
     class Config:
         json_schema_extra = {
             "example": {
@@ -274,7 +276,7 @@ class MasternodeTransaction(SQLModel, table=True):
                 "moved": False,
                 "additional_data": {}
             }
-        }            
+        }
 #_________________________________________________________________________________________
 # Credit pack related models:
 
