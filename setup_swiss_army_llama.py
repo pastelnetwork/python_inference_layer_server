@@ -31,12 +31,14 @@ def run_command(command, shell='/bin/bash', env=None):
     """Runs a command through subprocess.run with specified shell and environment."""
     subprocess.run(command, shell=True, executable=shell, env=env)
 
-def is_pyenv_installed():
-    """Checks if pyenv is installed by attempting to run 'pyenv --version'."""
+def is_pyenv_installed(shell_path):
+    """Checks if pyenv is installed by attempting to run 'pyenv --version' in a subshell."""
+    profile_file = "zshrc" if "/zsh" in shell_path else "bashrc"
+    command = f"source ~/.{profile_file} && pyenv --version"
     try:
-        subprocess.run(["pyenv", "--version"], capture_output=True)
+        subprocess.run(command, shell=True, executable=shell_path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
-    except FileNotFoundError:
+    except (FileNotFoundError, subprocess.CalledProcessError):
         return False
     
 def is_python_3_12_installed():

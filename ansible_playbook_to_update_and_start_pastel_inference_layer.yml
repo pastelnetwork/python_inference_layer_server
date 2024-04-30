@@ -14,8 +14,10 @@
 
     - name: Close/terminate the application if running
       shell: |
-        ps -ef | grep 'supernode_inference_layer' | grep -v grep | awk '{print $2}' | xargs -r kill -9
-        ps -ef | grep 'swiss_army_llama' | grep -v grep | awk '{print $2}' | xargs -r kill -9
+        pid=$(lsof -t -i :7123)
+        if [ -n "$pid" ]; then
+          kill -9 $pid
+        fi
       ignore_errors: true
 
     - name: Update code
@@ -55,7 +57,7 @@
       copy:
         content: |
           #!/bin/{{ 'zsh' if '/zsh' in shell_path else 'bash' }}
-          source ~/.$profile_file
+          source ~/.{{ profile_file }}
           cd ~/python_inference_layer_server
           pyenv local 3.12
           source venv/bin/activate
@@ -69,7 +71,7 @@
 
     - name: Launch script in new tmux window
       shell: |
-        tmux new-window -t {{ session_name }}: -n supernode_script -d "bash -c '~/run_script.sh'"
+        tmux new-window -t {{ session_name }}: -n supernode_script -d "{{ shell_path }} -c '~/run_script.sh'"
       args:
         executable: "{{ shell_path }}"
 
