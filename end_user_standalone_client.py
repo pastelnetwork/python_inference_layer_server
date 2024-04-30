@@ -699,7 +699,7 @@ async def create_and_fund_new_psl_credit_tracking_address(amount_of_psl_to_fund_
     global rpc_connection
     new_credit_tracking_address = await rpc_connection.getnewaddress()
     txid = await send_to_address_func(new_credit_tracking_address, amount_of_psl_to_fund_address_with, comment="Funding new credit tracking address ", comment_to="", subtract_fee_from_amount=False)
-    logger.info(f"Funded new credit tracking address {new_credit_tracking_address} with {amount_of_psl_to_fund_address_with} PSL. TXID: {txid}")
+    logger.info(f"Funded new credit tracking address {new_credit_tracking_address} with {amount_of_psl_to_fund_address_with: ,} PSL. TXID: {txid}")
     return new_credit_tracking_address, txid
 
 async def check_psl_address_balance_func(address_to_check):
@@ -1532,7 +1532,7 @@ class PastelInferenceClient:
             quoted_total_price <= maximum_total_credit_pack_price_in_psl and
             price_difference_percentage <= MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING
         ):
-            logger.info(f"Preliminary price quote is within the acceptable range: {quoted_price_per_credit} PSL per credit, {quoted_total_price} PSL total, which is within the maximum of {maximum_per_credit_price_in_psl} PSL per credit and {maximum_total_credit_pack_price_in_psl} PSL total. The price difference from the estimated fair market price is {100*price_difference_percentage:.2f}%, which is within the allowed maximum of {100*MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING:.2f}%.")
+            logger.info(f"Preliminary price quote is within the acceptable range: {quoted_price_per_credit} PSL per credit, {quoted_total_price:,} PSL total, which is within the maximum of {maximum_per_credit_price_in_psl} PSL per credit and {maximum_total_credit_pack_price_in_psl:,} PSL total. The price difference from the estimated fair market price is {100*price_difference_percentage:.2f}%, which is within the allowed maximum of {100*MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING:.2f}%.")
             return True
         else:
             logger.warning(f"Preliminary price quote exceeds the maximum acceptable price or the price difference from the estimated fair price is too high! Quoted price: {quoted_price_per_credit} PSL per credit, {quoted_total_price} PSL total, maximum price: {maximum_per_credit_price_in_psl} PSL per credit, {maximum_total_credit_pack_price_in_psl} PSL total. The price difference from the estimated fair market price is {100*price_difference_percentage:.2f}%, which exceeds the allowed maximum of {100*MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING:.2f}%.")
@@ -2115,10 +2115,10 @@ async def handle_credit_pack_ticket_end_to_end(
     )
     credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_request)
     credit_pack_request.requesting_end_user_pastelid_signature_on_request_hash = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields, MY_PASTELID_PASSPHRASE)
-    # print(f"Credit pack purchase request data:\n {credit_pack_request}")
     # Send the credit pack request to the highest-ranked supernode
     closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(1, MY_LOCAL_PASTELID, supernode_list_df)
     highest_ranked_supernode_url = closest_supernodes[0][0]
+    logger.info(f"Sending credit pack request to responding_supernode with URL {highest_ranked_supernode_url}") 
     preliminary_price_quote = await inference_client.credit_pack_ticket_initial_purchase_request(highest_ranked_supernode_url, credit_pack_request)
     # Check if the end user agrees with the preliminary price quote
     signed_credit_pack_ticket_or_rejection = await inference_client.credit_pack_ticket_preliminary_price_quote_response(highest_ranked_supernode_url, credit_pack_request, preliminary_price_quote, maximum_total_credit_pack_price_in_psl, maximum_per_credit_price_in_psl)
@@ -2218,7 +2218,7 @@ async def handle_inference_request_end_to_end(
     maximum_inference_cost_in_credits: float,
     burn_address: str
 ):
-    # Create messaging client to use:
+    # Create inference client to use:
     inference_client = PastelInferenceClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
     # Get the closest Supernode URL
     model_parameters_json = json.dumps(model_parameters)
@@ -2368,7 +2368,7 @@ async def main():
         desired_number_of_credits = 1500
         amount_of_psl_for_tracking_transactions = 10.0
         credit_price_cushion_percentage = 0.15
-        maximum_total_amount_of_psl_to_fund_in_new_tracking_address = 100000.0
+        maximum_total_amount_of_psl_to_fund_in_new_tracking_address = 120000.0
         inference_client = PastelInferenceClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
         estimated_total_cost_in_psl_for_credit_pack = await inference_client.internal_estimate_of_credit_pack_ticket_cost_in_psl(desired_number_of_credits, credit_price_cushion_percentage)
         if estimated_total_cost_in_psl_for_credit_pack > maximum_total_amount_of_psl_to_fund_in_new_tracking_address:
