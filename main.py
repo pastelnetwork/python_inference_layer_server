@@ -2,6 +2,7 @@ from logger_config import setup_logger
 from endpoint_functions import router
 import asyncio
 import os
+import traceback
 import fastapi
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,13 +40,11 @@ async def custom_exception_handling(request: Request, call_next):
     except RequestValidationError as ve:
         logger.error(f"Validation error: {ve}")
         return JSONResponse(status_code=ve.status_code, content={"detail": ve.error_msg})
-    except RequestValidationError as re:
-        logger.error(f"Request validation error: {re}")
-        return JSONResponse(status_code=422, content={"detail": re.errors()})
     except Exception as e:
-        logger.error(f"Unhandled exception: {e}")
+        tb = traceback.format_exc()  # Get the full traceback
+        logger.error(f"Unhandled exception: {e}\n{tb}")  # Log the exception with traceback
         return JSONResponse(status_code=500, content={"detail": str(e)})
-
+    
 # CORS Middleware
 app.add_middleware(
     CORSMiddleware,
@@ -76,7 +75,7 @@ async def startup():
         encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
         decrypt_sensitive_fields() # Now decrypt sensitive fields        
         asyncio.create_task(monitor_new_messages())  # Create a background task
-        asyncio.create_task(process_blocks_for_masternode_transactions())  # Create a background task
+        # asyncio.create_task(process_blocks_for_masternode_transactions())  # Create a background task
         asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
     except Exception as e:
         logger.error(f"Error during startup: {e}")
