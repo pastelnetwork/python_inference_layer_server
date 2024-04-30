@@ -3897,9 +3897,6 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
         int: The number of confirmation transactions from the tracking address to the burn address.
     """
     global rpc_connection
-    current_time = time.time()  # Current time in seconds since the Unix epoch
-    max_age_seconds = BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS * 24 * 3600  # Convert days to seconds
-    cutoff_timestamp = current_time - max_age_seconds  # Calculate cutoff timestamp
     credit_pack_purchase_request_object = await get_credit_pack_purchase_request_from_response(credit_pack)
     initial_credit_balance = credit_pack_purchase_request_object.requested_initial_credits_in_credit_pack
     credit_usage_tracking_psl_address = credit_pack.credit_usage_tracking_psl_address
@@ -3908,11 +3905,10 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     burn_address_transactions = [
         tx for tx in transactions
         if tx.get("address") == burn_address and tx.get("category") == "receive" 
-        and tx.get("amount") < 1.0 and tx.get("time") >= cutoff_timestamp
     ]
     burn_address_txids = [tx.get("txid") for tx in burn_address_transactions]
     number_of_burn_address_txids = len(burn_address_txids)
-    logger.info(f"Number of transactions sent to the burn address with amount < 1.0 PSL within the past {round(BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS,1)} days: {number_of_burn_address_txids}")
+    logger.info(f"Number of transactions sent to the burn address with amount < 1.0 PSL: {number_of_burn_address_txids}")
     # Fetch and decode raw transactions in parallel using asyncio.gather
     decoded_tx_data_list = await asyncio.gather(*[get_and_decode_raw_transaction(txid) for txid in burn_address_txids])
     # Filter the tracking transactions to include only those sent from the credit_usage_tracking_psl_address
