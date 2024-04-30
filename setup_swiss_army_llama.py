@@ -6,9 +6,21 @@ from logger_config import setup_logger
 logger = setup_logger()
 
 def get_external_ip_func():
-    response = httpx.get("https://ipinfo.io/ip")
-    response.raise_for_status()
-    return response.text.strip()
+    providers = [
+        "https://ipinfo.io/ip",
+        "https://api.ipify.org",
+        "https://checkip.amazonaws.com",
+        "https://icanhazip.com"
+    ]
+    for provider in providers:
+        try:
+            response = httpx.get(provider)
+            response.raise_for_status()
+            return response.text.strip()
+        except httpx.RequestError as e:
+            logger.warning(f"Failed to retrieve external IP address from {provider}: {e}")
+    logger.warning("Failed to retrieve external IP address from all providers.")
+    return "Unknown"
 
 def is_port_available(port):
     try:
