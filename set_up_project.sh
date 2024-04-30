@@ -1,3 +1,12 @@
+#!/bin/bash
+
+# Detect the shell type and source appropriate profile
+if [[ "$SHELL" == *"zsh"* ]]; then
+  SHELL_PROFILE=".zshrc"
+else
+  SHELL_PROFILE=".bashrc"
+fi
+
 # Install pyenv if not already installed
 if ! command -v pyenv &> /dev/null; then
     sudo apt-get update
@@ -6,9 +15,10 @@ if ! command -v pyenv &> /dev/null; then
     xz-utils tk-dev libffi-dev liblzma-dev python3-openssl git
 
     git clone https://github.com/pyenv/pyenv.git ~/.pyenv
-    echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
-    echo 'export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.zshrc
-    echo 'eval "$(pyenv init --path)"' >> ~/.zshrc
+    echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/$SHELL_PROFILE
+    echo 'export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/$SHELL_PROFILE
+    echo 'eval "$(pyenv init --path)"' >> ~/$SHELL_PROFILE
+    source ~/$SHELL_PROFILE
 fi
 
 # Set PYENV_ROOT and update PATH for this script
@@ -16,11 +26,9 @@ export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init --path)"
 
-# Update pyenv
+# Update pyenv and install Python 3.12
 cd ~/.pyenv && git pull && cd -
-
-# Install Python 3.12 using pyenv
-pyenv install 3.12
+pyenv install -s 3.12
 
 # Setup the project directory
 PROJECT_DIR="$HOME/python_inference_layer_server"
