@@ -47,9 +47,9 @@ def is_port_available(port):
     result = run_command(["lsof", "-i", f":{port}"], capture_output=True)
     return result.returncode != 0
 
-def is_swiss_army_llama_responding(swiss_army_llama_port: int, security_token: str):
+def is_swiss_army_llama_responding(external_ip: str, swiss_army_llama_port: int, security_token: str):
     try:
-        url = f"http://localhost:{swiss_army_llama_port}/get_list_of_available_model_names/"
+        url = f"http://{external_ip}:{swiss_army_llama_port}/get_list_of_available_model_names/"
         params = {'token': security_token}  # Assuming the token should be passed as a query parameter
         response = httpx.get(url, params=params)
         return response.status_code == 200
@@ -66,16 +66,20 @@ def update_security_token(file_path, token):
         file.write(content)
     
 def is_pyenv_installed():
-    pyenv_init_script = os.path.expanduser("~/.pyenv/bin/pyenv")
-    if os.path.isfile(pyenv_init_script):
-        result = run_command([pyenv_init_script, '--version'], capture_output=True)
-        return result.returncode == 0
+    shell_profile_path = os.path.expanduser('~/.zshrc') if os.path.exists(os.path.expanduser('~/.zshrc')) else os.path.expanduser('~/.bashrc')
+    with open(shell_profile_path, 'r') as file:
+        content = file.read()
+        if 'export PYENV_ROOT' in content and 'export PATH="$PYENV_ROOT/bin:$PATH"' in content:
+            return True
     return False
 
 def is_python_3_12_installed():
-    pyenv_root = os.path.expanduser("~/.pyenv")
-    pyenv_versions = os.path.join(pyenv_root, "versions")
-    return "3.12" in os.listdir(pyenv_versions)
+    shell_profile_path = os.path.expanduser('~/.zshrc') if os.path.exists(os.path.expanduser('~/.zshrc')) else os.path.expanduser('~/.bashrc')
+    with open(shell_profile_path, 'r') as file:
+        content = file.read()
+        if 'pyenv global 3.12' in content:
+            return True
+    return False
 
 def is_rust_installed():
     try:
@@ -134,12 +138,12 @@ WantedBy=multi-user.target
 def ensure_pyenv_setup():
     if not is_pyenv_installed():
         logger.info("Installing pyenv...")
-        run_command(["sudo apt-get update && sudo apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python3-openssl git redis redis-tools"], check=True)
-        run_command(["curl https://pyenv.run | bash"], check=True)
+        run_command(["sudo apt-get update && sudo apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python3-openssl git redis redis-tools"])
+        run_command(["curl https://pyenv.run | bash"])
     if not is_python_3_12_installed():
         logger.info("Installing Python 3.12 using pyenv...")
-        run_command(["pyenv install 3.12"], check=True)
-        run_command(["pyenv global 3.12"], check=True)
+        run_command(["pyenv install 3.12"])
+        run_command(["pyenv global 3.12"])
 
 def configure_shell_for_pyenv():
     shell_rc_path = os.path.expanduser("~/.zshrc") if os.path.exists(os.path.expanduser("~/.zshrc")) else os.path.expanduser("~/.bashrc")
