@@ -3,9 +3,9 @@
     "configurations": [
         {
             "name": "FastAPI",
-            "type": "python",
+            "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/main.py"
+            "program": "${workspaceFolder}/main.py",
         }
     ]
 }
