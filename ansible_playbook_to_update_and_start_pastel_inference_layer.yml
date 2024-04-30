@@ -12,14 +12,6 @@
         shell_path: "{{ user_shell.stdout }}"
         profile_file: "{{ 'zshrc' if '/zsh' in user_shell.stdout else 'bashrc' }}"
 
-    - name: Close/terminate the application if running
-      shell: |
-        pid=$(lsof -t -i :7123)
-        if [ -n "$pid" ]; then
-          kill -9 $pid
-        fi
-      ignore_errors: true
-
     - name: Update code
       shell: |
         source ~/.{{ profile_file }}
