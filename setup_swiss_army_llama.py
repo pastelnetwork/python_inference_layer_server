@@ -86,12 +86,14 @@ def is_rust_installed():
 
 def setup_virtual_environment(swiss_army_llama_path):
     venv_path = os.path.join(swiss_army_llama_path, 'venv')
-    python_executable = os.path.join(venv_path, 'bin', 'python')
+    if not os.path.exists(venv_path):  # Ensure the venv is created only if it doesn't exist
+        os.makedirs(venv_path)
+        run_command([f'python3 -m venv {venv_path}'], check=True)
     pip_executable = os.path.join(venv_path, 'bin', 'pip')
-    run_command([f'python3 -m venv {venv_path}'], check=True)
     run_command([f'{pip_executable} install --upgrade pip'], check=True)
-    run_command([f'{pip_executable} install -r requirements.txt'], check=True)
-    return python_executable
+    run_command([f'{pip_executable} install wheel'], check=True)  # Ensures wheel is installed before other packages
+    run_command([f'{pip_executable} install -r {swiss_army_llama_path}/requirements.txt'], check=True)
+    return os.path.join(venv_path, 'bin', 'python')
 
 def set_timezone_utc():
     os.environ['TZ'] = 'UTC'
@@ -139,10 +141,6 @@ def ensure_pyenv_setup():
         run_command(["pyenv install 3.12"], check=True)
         run_command(["pyenv global 3.12"], check=True)
 
-def setup_python_environment(swiss_army_llama_path):
-    pip_commands = f"source {swiss_army_llama_path}/venv/bin/activate && pip install --upgrade pip && pip install wheel && pip install -r {swiss_army_llama_path}/requirements.txt"
-    run_command([pip_commands])
-        
 def configure_shell_for_pyenv():
     shell_rc_path = os.path.expanduser("~/.zshrc") if os.path.exists(os.path.expanduser("~/.zshrc")) else os.path.expanduser("~/.bashrc")
     pyenv_init_str = 'export PYENV_ROOT="$HOME/.pyenv"\nexport PATH="$PYENV_ROOT/bin:$PATH"\neval "$(pyenv init --path)"\n'
@@ -163,6 +161,7 @@ def setup_swiss_army_llama(security_token):
         logger.info("Swiss Army Llama repository already exists. Updating repository.")
         run_command(f"git -C {swiss_army_llama_path} stash && git -C {swiss_army_llama_path} pull", check=True)
     ensure_pyenv_setup()
+    configure_shell_for_pyenv()
     if not is_python_3_12_installed():
         logger.info("Python 3.12 is not installed. Installing Python 3.12 using pyenv.")
         run_command("pyenv install 3.12", check=True)
@@ -176,7 +175,6 @@ def setup_swiss_army_llama(security_token):
             'PATH': f"{os.environ.get('HOME')}/.cargo/bin:{os.environ.get('PATH')}"
         })
         run_command("rustup default nightly && rustup update nightly", check=True)
-    setup_python_environment(swiss_army_llama_path)
     if not check_systemd_service_exists("swiss_army_llama"):
         create_systemd_service("swiss_army_llama", os.getlogin(), swiss_army_llama_path, f"{python_executable} {swiss_army_llama_script}")
     else:
