@@ -41,6 +41,7 @@ from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
 import database_code as db_code
 from sqlmodel import select, delete, func, SQLModel
+from sqlalchemy.exc import IntegrityError
 
 encryption_key = None
 magika = Magika()
@@ -3906,11 +3907,16 @@ async def process_transactions_in_chunks(transactions, chunk_size, db_code, rpc_
             for transaction in chunk:
                 if transaction['category'] == 'receive' and transaction['amount'] > 0:
                     txid = transaction['txid']
+                    # Check if transaction already exists in the database
+                    stmt = select(db_code.BurnAddressTransaction).where(db_code.BurnAddressTransaction.txid == txid)
+                    existing_transaction = await db.execute(stmt)
+                    if existing_transaction.scalars().first() is not None:
+                        logger.info(f"Transaction {txid} already exists in the database, skipping.")
+                        continue
                     tx_details = await rpc_connection.gettransaction(txid, True)  # Get verbose transaction details
                     block_info = await rpc_connection.getblock(tx_details['blockhash'])
                     block_height = block_info['height']
-                    try: # Assuming the tracking address can be derived from inputs, similar to your previous implementation
-                        # Extract sending addresses from the inputs of the transaction
+                    try:
                         input_addresses = set()
                         for vin in tx_details['details']:
                             if 'address' in vin:
@@ -3930,11 +3936,16 @@ async def process_transactions_in_chunks(transactions, chunk_size, db_code, rpc_
                             successful_transaction_additions += 1
                         else:
                             logger.info(f"Skipping transaction {txid} due to multiple input addresses.")
-                    except Exception as e:
+                    except IntegrityError as e:
                         logger.error(f"Error processing transaction {txid}: {str(e)}")
                         db.rollback()
+                        continue
+                    except Exception as e:
+                        logger.error(f"Unhandled error processing transaction {txid}: {str(e)}")
+                        db.rollback()
+                        continue
             logger.info(f"Added {successful_transaction_additions} new burn transactions to the database successfully.")
-            _ = await db_code.consolidate_wal_data() # WAL Consolidation after processing the chunk
+            _ = await db_code.consolidate_wal_data()  # WAL Consolidation after processing the chunk
         decoded_tx_data_list.extend(chunk)  # Keep the list of processed transactions, even if just IDs for reference
     return decoded_tx_data_list
 
