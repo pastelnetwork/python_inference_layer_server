@@ -21,7 +21,7 @@ def get_external_ip_func():
     logger.warning("Failed to retrieve external IP address from all providers.")
     return "Unknown"
 
-def run_command(command, env=None, capture_output=False, check=False):
+def run_command(command, env=None, capture_output=False, check=False, timeout=None):
     shell = '/bin/zsh' if os.path.exists('/bin/zsh') else '/bin/bash'
     if env:
         full_env = {**os.environ, **env}
@@ -29,13 +29,15 @@ def run_command(command, env=None, capture_output=False, check=False):
         full_env = os.environ.copy()
     command = ' '.join(command) if isinstance(command, list) else command
     try:
-        result = subprocess.run(command, shell=True, env=full_env, capture_output=capture_output, text=True, executable=shell, check=check)
+        result = subprocess.run(command, shell=True, env=full_env, capture_output=capture_output, text=True, executable=shell, check=check, timeout=timeout)
         if capture_output:
             if result.stdout:
                 logger.info(result.stdout)
             if result.stderr:
                 logger.error(result.stderr)
         return result
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Command '{command}' timed out after {timeout} seconds")
     except subprocess.CalledProcessError as e:
         logger.error(f"Command '{command}' failed with exit code {e.returncode}")
         if capture_output:
@@ -124,7 +126,10 @@ WantedBy=multi-user.target
     run_command("sudo systemctl daemon-reload", check=True)
     run_command(f"sudo systemctl enable {service_name}", check=True)
     run_command(f"sudo systemctl start {service_name}", check=True)
-
+    # Check the status of the service and capture the output
+    status_output = run_command(f"sudo systemctl status {service_name}", capture_output=True, timeout=5)
+    logger.info(f"Status of {service_name} service:\n{status_output.stdout}")
+    
 def ensure_pyenv_setup():
     if not is_pyenv_installed():
         logger.info("Installing pyenv...")
@@ -177,8 +182,14 @@ def setup_swiss_army_llama(security_token):
     if not check_systemd_service_exists("swiss_army_llama"):
         create_systemd_service("swiss_army_llama", os.getlogin(), swiss_army_llama_path, f"{python_executable} {swiss_army_llama_script}")
     else:
-        logger.info("Swiss Army Llama systemd service already exists.")
-
+        logger.info("Swiss Army Llama systemd service already exists; skipping installation, reloading systemd, and starting/enabling the service.")
+        run_command("sudo systemctl daemon-reload", check=True)
+        run_command("sudo systemctl enable swiss_army_llama", check=True)
+        run_command("sudo systemctl start swiss_army_llama", check=True)        
+        # Check the status of the service and capture the output
+        status_output = run_command("sudo systemctl status swiss_army_llama", capture_output=True, timeout=5)
+        logger.info(f"Status of swiss_army_llama service:\n{status_output.stdout}")
+        
 def check_and_setup_swiss_army_llama(security_token):
     swiss_army_llama_port = 8089
     external_ip = get_external_ip_func()
