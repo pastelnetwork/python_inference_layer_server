@@ -23,7 +23,7 @@ import pandas as pd
 import httpx
 from httpx import AsyncClient, Limits, Timeout
 import urllib.parse as urlparse
-from logger_config import setup_logger
+from logger_config import logger
 from blockchain_ticket_storage import store_data_in_blockchain, retrieve_data_from_blockchain
 import zstandard as zstd
 from sqlalchemy.exc import OperationalError, InvalidRequestError
@@ -135,9 +135,6 @@ def decrypt_sensitive_fields():
     STABILITY_API_KEY = decrypt_sensitive_data(get_env_value("STABILITY_API_KEY"), encryption_key)
     OPENROUTER_API_KEY = decrypt_sensitive_data(get_env_value("OPENROUTER_API_KEY"), encryption_key)
         
-# Logger setup
-logger = setup_logger()
-
 number_of_cpus = os.cpu_count()
 my_os = platform.system()
 loop = asyncio.get_event_loop()

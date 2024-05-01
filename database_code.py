@@ -1,7 +1,7 @@
 import json
 import warnings
 import uuid
-from logger_config import setup_logger
+from logger_config import logger
 from datetime import datetime
 import datetime as dt
 from typing import Optional
@@ -16,7 +16,7 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
         
 config = DecoupleConfig(RepositoryEnv('.env'))
 DATABASE_URL = config.get("DATABASE_URL", cast=str, default="sqlite+aiosqlite:///super_node_inference_layer.sqlite")
-logger = setup_logger()
+
 # Ignore specific warnings related to shadowing of fields in SQLModel or Pydantic
 warnings.filterwarnings("ignore", message="Field name .* shadows an attribute in parent .*")
 

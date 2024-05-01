@@ -1,6 +1,6 @@
 import service_functions
 import database_code as db
-from logger_config import setup_logger
+from logger_config import logger
 from fastapi import APIRouter, Depends, Query, Request, Body
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.exceptions import HTTPException
@@ -15,7 +15,6 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0)
-logger = setup_logger()
 
 # RPC Client Dependency
 async def get_rpc_connection():

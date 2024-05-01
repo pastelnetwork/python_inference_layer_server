@@ -18,11 +18,10 @@ import shutil
 import tempfile
 import zstandard as zstd
 from httpx import AsyncClient, Limits, Timeout
-from logger_config import setup_logger
+from logger_config import logger
 from sqlmodel import select, delete
 import database_code as db_code
 
-logger = setup_logger()
 base_transaction_amount = Decimal(0.1)
 max_concurrent_requests = 1000
 FEEPERKB = Decimal(0.00001)
@@ -618,14 +617,14 @@ async def process_block(block_height, masternode_transactions_dict):
                             )
                             db.add(transaction)
                             await db.commit()
-                    except Exception as e:  # noqa: E722
+                    except Exception as e:  # noqa: E722, F841
                         pass
                     
 async def get_masternode_transactions_by_block():
     masternode_transactions_by_block = {}
     try:
         async with db_code.Session() as db:
-            transactions = await db.exec(select(db_code.MasternodeTransaction).where(db_code.MasternodeTransaction.moved == False))
+            transactions = await db.exec(select(db_code.MasternodeTransaction).where(db_code.MasternodeTransaction.moved == False))  # noqa: E712
             for transaction in transactions:
                 block_height = transaction.block_height
                 if block_height not in masternode_transactions_by_block:

@@ -2,8 +2,7 @@ import os
 import subprocess
 import httpx
 import re
-from logger_config import setup_logger
-logger = setup_logger()
+from logger_config import logger
 
 def get_external_ip_func():
     providers = [
