@@ -3911,17 +3911,23 @@ async def process_transactions_in_chunks(transactions, chunk_size, db_code, rpc_
                     existing_transaction = await db.execute(stmt)
                     if existing_transaction.scalars().first() is not None:
                         continue
-                    tx_details = await rpc_connection.gettransaction(txid, True)  # Get verbose transaction details
-                    block_info = await rpc_connection.getblock(tx_details['blockhash'])
+                    raw_tx = await rpc_connection.getrawtransaction(txid, 1)  # Get the raw transaction data with verbose mode
+                    if 'blockhash' not in raw_tx:
+                        logger.error(f"Blockhash not found in transaction details for txid: {txid}")
+                        continue
+                    block_info = await rpc_connection.getblock(raw_tx['blockhash'])
                     block_height = block_info['height']
+                    input_addresses = set()
                     try:
-                        input_addresses = set()
-                        for vin in tx_details['details']:
-                            if 'address' in vin:
-                                input_addresses.add(vin['address'])
-                        if len(input_addresses) == 1:  # Ensure only one sender
+                        for vin in raw_tx['vin']:
+                            if 'txid' in vin:
+                                prev_raw_tx = await rpc_connection.getrawtransaction(vin['txid'], 1)
+                                prev_output = prev_raw_tx['vout'][vin['vout']]
+                                if 'scriptPubKey' in prev_output and 'addresses' in prev_output['scriptPubKey']:
+                                    input_addresses.update(prev_output['scriptPubKey']['addresses'])
+                        if len(input_addresses) == 1:
                             tracking_address = next(iter(input_addresses))
-                            amount = sum(detail['amount'] for detail in tx_details['details'] if detail['address'] == burn_address)
+                            amount = sum(vout['value'] for vout in raw_tx['vout'] if burn_address in vout['scriptPubKey'].get('addresses', []))
                             burn_transaction = db_code.BurnAddressTransaction(
                                 txid=txid,
                                 block_height=block_height,
@@ -3932,19 +3938,12 @@ async def process_transactions_in_chunks(transactions, chunk_size, db_code, rpc_
                             db.add(burn_transaction)
                             await db.commit()
                             successful_transaction_additions += 1
-                        else:
-                            logger.info(f"Skipping transaction {txid} due to multiple input addresses.")
-                    except IntegrityError as e:
+                    except Exception as e:
                         logger.error(f"Error processing transaction {txid}: {str(e)}")
                         db.rollback()
-                        continue
-                    except Exception as e:
-                        logger.error(f"Unhandled error processing transaction {txid}: {str(e)}")
-                        db.rollback()
-                        continue
             logger.info(f"Added {successful_transaction_additions} new burn transactions to the database successfully.")
-            _ = await db_code.consolidate_wal_data()  # WAL Consolidation after processing the chunk
-        decoded_tx_data_list.extend(chunk)  # Keep the list of processed transactions, even if just IDs for reference
+            _ = await db_code.consolidate_wal_data()
+        decoded_tx_data_list.extend(chunk)
     return decoded_tx_data_list
 
 async def full_rescan_burn_transactions():
