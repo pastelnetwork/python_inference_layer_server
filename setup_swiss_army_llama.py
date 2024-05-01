@@ -155,15 +155,20 @@ def setup_swiss_army_llama(security_token):
         run_command(f"git clone https://github.com/Dicklesworthstone/swiss_army_llama {swiss_army_llama_path}", check=True)
     else:
         logger.info("Swiss Army Llama repository already exists. Updating repository.")
-        run_command(f"git -C {swiss_army_llama_path} stash && git -C {swiss_army_llama_path} pull", check=True)
+        run_command(f"git -C {swiss_army_llama_path} pull --rebase", check=True)
     configure_shell_for_pyenv()
-    ensure_pyenv_setup()
+    if not is_pyenv_installed():
+        ensure_pyenv_setup()
     if not is_python_3_12_installed():
         logger.info("Python 3.12 is not installed. Installing Python 3.12 using pyenv.")
         run_command("pyenv install 3.12", check=True)
         run_command("pyenv global 3.12", check=True)
     update_security_token(swiss_army_llama_script, security_token)
-    python_executable = setup_virtual_environment(swiss_army_llama_path)
+    venv_path = os.path.join(swiss_army_llama_path, 'venv')
+    if not os.path.exists(venv_path):
+        python_executable = setup_virtual_environment(swiss_army_llama_path)
+    else:
+        python_executable = os.path.join(venv_path, 'bin', 'python')
     if not is_rust_installed():
         logger.info("Rust is not installed. Installing Rust.")
         run_command("curl https://sh.rustup.rs -sSf | sh -s -- -y", check=True)
