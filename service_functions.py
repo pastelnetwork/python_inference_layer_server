@@ -6,6 +6,7 @@ import ipaddress
 import json
 import os
 import platform
+import math
 import statistics
 import time
 import uuid
@@ -3885,12 +3886,13 @@ async def process_transactions_in_chunks(transactions, chunk_size):
     for i in range(0, len(transactions), chunk_size):
         chunk = transactions[i:i + chunk_size]
         decoded_chunk = await asyncio.gather(*[get_and_decode_raw_transaction(tx["txid"]) for tx in chunk])
+        logger.info(f"Decoded {len(decoded_chunk)} transactions in chunk {i+1} out of a total of {math.ceil(len(transactions)/chunk_size)} chunks...")
         decoded_tx_data_list.extend(decoded_chunk)
     return decoded_tx_data_list
 
 async def full_rescan_burn_transactions():
     current_block_height = await get_current_pastel_block_height_func()
-    transactions = await rpc_connection.listtransactions("*", 100000, 0)
+    transactions = await rpc_connection.listtransactions("*", 1000000, 0)
     burn_transactions = [tx for tx in transactions if tx.get("address") == burn_address and tx.get("category") == "receive"]
     chunk_size = 100  # Adjust the chunk size as needed
     decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size)
@@ -3900,19 +3902,23 @@ async def full_rescan_burn_transactions():
             for vin in decoded_tx_data["vin"]:
                 if "address" in vin:
                     tracking_address = vin["address"]
-                    break    
-            if tracking_address:
-                burn_transaction = db_code.BurnAddressTransaction(
-                    txid=decoded_tx_data["txid"],
-                    block_height=decoded_tx_data["blockheight"],
-                    burn_address=burn_address,
-                    tracking_address=tracking_address,
-                    amount=sum(vout["value"] for vout in decoded_tx_data["vout"] if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address)
-                )
-                try:
-                    db.add(burn_transaction)
-                except Exception as e: # noqa: F841
-                    pass                
+                    break
+            # Retrieve the block height for the transaction
+            tx_info = await rpc_connection.gettransaction(decoded_tx_data["txid"])
+            block_hash = tx_info["blockhash"]
+            block_info = await rpc_connection.getblock(block_hash)
+            block_height = block_info["height"]
+            burn_transaction = db_code.BurnAddressTransaction(
+                txid=decoded_tx_data["txid"],
+                block_height=block_height,
+                burn_address=burn_address,
+                tracking_address=tracking_address,
+                amount=sum(vout["value"] for vout in decoded_tx_data["vout"] if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address)
+            )
+            try:
+                db.add(burn_transaction)
+            except Exception as e:  # noqa: F841
+                pass
         await db.commit()
     block_hashes = []
     for i in range(0, current_block_height + 1, chunk_size):
@@ -4007,16 +4013,21 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
                     if "address" in vin:
                         tracking_address = vin["address"]
                         break
+                # Retrieve the block height for the transaction
+                tx_info = await rpc_connection.gettransaction(decoded_tx_data["txid"])
+                block_hash = tx_info["blockhash"]
+                block_info = await rpc_connection.getblock(block_hash)
+                block_height = block_info["height"]
                 burn_transaction = db_code.BurnAddressTransaction(
                     txid=decoded_tx_data["txid"],
-                    block_height=decoded_tx_data["blockheight"],
+                    block_height=block_height,
                     burn_address=burn_address,
                     tracking_address=tracking_address,
                     amount=sum(vout["value"] for vout in decoded_tx_data["vout"] if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address)
                 )
                 try:
                     db.add(burn_transaction)
-                except Exception as e: # noqa: F841
+                except Exception as e:  # noqa: F841
                     pass
             await db.commit()
         logger.info(f"Added {len(new_decoded_tx_data_list):,} new burn transactions to the database")
