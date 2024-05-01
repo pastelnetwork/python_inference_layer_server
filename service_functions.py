@@ -3065,7 +3065,7 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         model_parameters = inference_api_usage_request.model_parameters_json
         input_data = inference_api_usage_request.model_input_data_json_b64
         if not validate_pastel_txid_string(credit_pack_ticket_pastel_txid):
-            logger.error(f"Invalid PastelID: {credit_pack_ticket_pastel_txid}")
+            logger.error(f"Invalid Pastel TXID: {credit_pack_ticket_pastel_txid}")
             return False, 0, 0
         credit_pack_purchase_request_response_object = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_pastel_txid)
         credit_pack_purchase_request_object = await get_credit_pack_purchase_request_from_response(credit_pack_purchase_request_response_object)
@@ -3118,7 +3118,7 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
             input_data = input_data_binary.decode("utf-8")
         proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, input_data)
         # Check if the credit pack has sufficient credits for the request
-        current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_purchase_request_response_object, burn_address)
+        current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_pastel_txid, burn_address)
         if proposed_cost_in_credits >= current_credit_balance:
             logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {current_credit_balance}")
             return False, proposed_cost_in_credits, current_credit_balance
@@ -3274,9 +3274,8 @@ async def process_inference_confirmation(inference_request_id: str, inference_co
         credit_usage_tracking_amount_in_psl = float(inference_response.request_confirmation_message_amount_in_patoshis)/(10**5) # Divide by number of Patoshis per PSL
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(burn_address, inference_response.credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, confirmation_transaction_txid, inference_response.max_block_height_to_include_confirmation_transaction)
         if matching_transaction_found:
-            logger.info(f"Found correct inference request confirmation tracking transaction in burn address (with {num_confirmations} confirmation blocks so far)! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};") 
-            credit_pack_object = await get_credit_pack_from_inference_request_id(inference_request_id)
-            computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_object, burn_address)
+            logger.info(f"Found correct inference request confirmation tracking transaction in burn address (with {num_confirmations} confirmation blocks so far)! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};")
+            computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(inference_request.credit_pack_ticket_pastel_txid, burn_address)
             logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address} tracking transactions from tracking address to burn address.")       
             # Update the inference request status to "confirmed"
             inference_request.status = "confirmed"
