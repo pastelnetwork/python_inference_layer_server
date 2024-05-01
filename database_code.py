@@ -903,7 +903,7 @@ async def consolidate_wal_data():
     try:
         async with engine.begin() as conn:  # Use the existing engine for connection
             result = await conn.execute(sql_text(consolidate_command))
-            result_fetch = await result.fetchone()
+            result_fetch = result.fetchone()
             logger.info(f"WAL consolidation result: {result_fetch}")
             return result_fetch  # This typically returns (0, 0, 0) on success
     except Exception as e:

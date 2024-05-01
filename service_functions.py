@@ -3881,58 +3881,84 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
             raise ValueError("Unauthorized access to inference output results")
         return inference_output_result
 
-async def process_transactions_in_chunks(transactions, chunk_size):
+async def extract_transaction_details(decoded_tx_data, rpc_connection, burn_address):
+    tracking_address = None
+    for vin in decoded_tx_data["vin"]:
+        if "address" in vin:
+            tracking_address = vin["address"]
+            break
+    tx_info = await rpc_connection.gettransaction(decoded_tx_data["txid"])
+    block_hash = tx_info["blockhash"]
+    block_info = await rpc_connection.getblock(block_hash)
+    block_height = block_info["height"]
+    amount = sum(vout["value"] for vout in decoded_tx_data["vout"] if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address)
+    return tracking_address, block_height, amount
+
+async def process_transactions_in_chunks(transactions, chunk_size, db_code, rpc_connection, burn_address):
     decoded_tx_data_list = []
     chunk_count = 0
     for i in range(0, len(transactions), chunk_size):
         chunk = transactions[i:i + chunk_size]
         chunk_count += 1
-        decoded_chunk = await asyncio.gather(*[get_and_decode_raw_transaction(tx["txid"]) for tx in chunk])
-        logger.info(f"Decoded {len(decoded_chunk)} transactions in chunk {chunk_count} out of a total of {math.ceil(len(transactions)/chunk_size)} chunks...")
-        decoded_tx_data_list.extend(decoded_chunk)
+        logger.info(f"Processing chunk {chunk_count} of {math.ceil(len(transactions) / chunk_size)}...")
+        successful_transaction_additions = 0
+        async with db_code.Session() as db:
+            for transaction in chunk:
+                if transaction['category'] == 'receive' and transaction['amount'] > 0:
+                    txid = transaction['txid']
+                    tx_details = await rpc_connection.gettransaction(txid, True)  # Get verbose transaction details
+                    block_info = await rpc_connection.getblock(tx_details['blockhash'])
+                    block_height = block_info['height']
+                    try: # Assuming the tracking address can be derived from inputs, similar to your previous implementation
+                        # Extract sending addresses from the inputs of the transaction
+                        input_addresses = set()
+                        for vin in tx_details['details']:
+                            if 'address' in vin:
+                                input_addresses.add(vin['address'])
+                        if len(input_addresses) == 1:  # Ensure only one sender
+                            tracking_address = next(iter(input_addresses))
+                            amount = sum(detail['amount'] for detail in tx_details['details'] if detail['address'] == burn_address)
+                            burn_transaction = db_code.BurnAddressTransaction(
+                                txid=txid,
+                                block_height=block_height,
+                                burn_address=burn_address,
+                                tracking_address=tracking_address,
+                                amount=amount
+                            )
+                            db.add(burn_transaction)
+                            await db.commit()
+                            successful_transaction_additions += 1
+                        else:
+                            logger.info(f"Skipping transaction {txid} due to multiple input addresses.")
+                    except Exception as e:
+                        logger.error(f"Error processing transaction {txid}: {str(e)}")
+                        db.rollback()
+            logger.info(f"Added {successful_transaction_additions} new burn transactions to the database successfully.")
+            _ = await db_code.consolidate_wal_data() # WAL Consolidation after processing the chunk
+        decoded_tx_data_list.extend(chunk)  # Keep the list of processed transactions, even if just IDs for reference
     return decoded_tx_data_list
 
 async def full_rescan_burn_transactions():
     current_block_height = await get_current_pastel_block_height_func()
-    transactions = await rpc_connection.listtransactions("*", 1000000, 0)
+    transactions = await rpc_connection.listtransactions("*", 1000000, 0)  # List all transactions up to the maximum
     burn_transactions = [tx for tx in transactions if tx.get("address") == burn_address and tx.get("category") == "receive"]
     chunk_size = 100  # Adjust the chunk size as needed
-    decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size)
-    async with db_code.Session() as db:
-        for decoded_tx_data in decoded_tx_data_list:
-            tracking_address = None
-            for vin in decoded_tx_data["vin"]:
-                if "address" in vin:
-                    tracking_address = vin["address"]
-                    break
-            # Retrieve the block height for the transaction
-            tx_info = await rpc_connection.gettransaction(decoded_tx_data["txid"])
-            block_hash = tx_info["blockhash"]
-            block_info = await rpc_connection.getblock(block_hash)
-            block_height = block_info["height"]
-            burn_transaction = db_code.BurnAddressTransaction(
-                txid=decoded_tx_data["txid"],
-                block_height=block_height,
-                burn_address=burn_address,
-                tracking_address=tracking_address,
-                amount=sum(vout["value"] for vout in decoded_tx_data["vout"] if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address)
-            )
-            try:
-                db.add(burn_transaction)
-            except Exception as e:  # noqa: F841
-                pass
-        await db.commit()
+    # Process transactions in chunks
+    decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, db_code, rpc_connection, burn_address)
+    logger.info(f"Decoded {len(decoded_tx_data_list):,} new burn transactions in total!")
+    # Storing block hashes for all processed blocks
     block_hashes = []
     for i in range(0, current_block_height + 1, chunk_size):
         chunk_heights = list(range(i, min(i + chunk_size, current_block_height + 1)))
         chunk_hashes = await asyncio.gather(*[rpc_connection.getblockhash(height) for height in chunk_heights])
         block_hashes.extend(chunk_hashes)
+    # Insert block hashes into the database
     async with db_code.Session() as db:
-        for height, block_hash in enumerate(block_hashes, start=1):
+        for height, block_hash in zip(range(current_block_height + 1 - len(block_hashes), current_block_height + 1), block_hashes):
             block_hash_obj = db_code.BlockHash(block_height=height, block_hash=block_hash)
             db.add(block_hash_obj)
         await db.commit()
-        
+
 async def detect_chain_reorg_and_rescan():
     while True:
         async with db_code.Session() as db:
@@ -3969,16 +3995,7 @@ async def store_block_hash(block_height: int, block_hash: str):
 async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_txid: str, burn_address: str):
     """
     Determines the current credit balance of an inference credit pack based on the tracking transactions.
-
-    Args:
-        credit_pack_ticket_txid: The txid of the credit pack ticket.
-        burn_address: The burn address to which the tracking transactions are sent.
-
-    Returns:
-        float: The current credit balance of the inference credit pack.
-        int: The number of confirmation transactions from the tracking address to the burn address.
     """
-    global rpc_connection
     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
     credit_pack_purchase_request_response_object = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
     credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_response_object.credit_pack_purchase_request_fields_json)
@@ -3986,77 +4003,39 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     credit_usage_tracking_psl_address = credit_pack_purchase_request_response_object.credit_usage_tracking_psl_address
     logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,}, Tracking address: {credit_usage_tracking_psl_address}")
     async with db_code.Session() as db:
-        query = await db.exec(
+        db_transactions_result = await db.exec(
             select(db_code.BurnAddressTransaction)
             .where(db_code.BurnAddressTransaction.burn_address == burn_address)
             .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
         )
-        db_transactions = query.all()
+        db_transactions = db_transactions_result.all()
     total_credits_consumed = sum(tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
-    logger.info(f"Retrieved {len(db_transactions):,} burn transactions from the database. Total credits consumed: {total_credits_consumed:,}")
     latest_db_block_height = max(tx.block_height for tx in db_transactions) if db_transactions else 0
     current_block_height = await get_current_pastel_block_height_func()
-    logger.info(f"Latest block height in the database: {latest_db_block_height:,}, Current block height: {current_block_height:,}")
     if current_block_height > latest_db_block_height:
         logger.info(f"New blocks detected that aren't yet in the local database. Retrieving new burn transactions from block height {latest_db_block_height + 1:,} to {current_block_height:,}")
         latest_db_block_hash = await rpc_connection.getblockhash(latest_db_block_height)
         listsinceblock_output = await rpc_connection.listsinceblock(latest_db_block_hash, 1, True)
         new_transactions = listsinceblock_output["transactions"]
-        logger.info(f"Retrieved {len(new_transactions):,} new transactions from the Pastel blockchain")
         new_burn_transactions = [
             tx for tx in new_transactions
             if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height)
         ]
-        logger.info(f"Filtered {len(new_burn_transactions):,} new burn transactions")
-        chunk_size = 100  # Adjust the chunk size as needed
-        new_decoded_tx_data_list = await process_transactions_in_chunks(new_burn_transactions, chunk_size)
-        logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions")
-        logger.info(f"Now adding {len(new_decoded_tx_data_list):,} new burn transactions to the database...")
-        successful_transaction_additions = 0
+        chunk_size = 100
+        new_decoded_tx_data_list = await process_transactions_in_chunks(new_burn_transactions, chunk_size, db_code, rpc_connection, burn_address)
+        logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
         async with db_code.Session() as db:
-            for idx, decoded_tx_data in enumerate(new_decoded_tx_data_list):
-                tracking_address = None
-                for vin in decoded_tx_data["vin"]:
-                    if "address" in vin:
-                        tracking_address = vin["address"]
-                        break
-                # Retrieve the block height for the transaction
-                tx_info = await rpc_connection.gettransaction(decoded_tx_data["txid"])
-                block_hash = tx_info["blockhash"]
-                block_info = await rpc_connection.getblock(block_hash)
-                block_height = block_info["height"]
-                burn_transaction = db_code.BurnAddressTransaction(
-                    txid=decoded_tx_data["txid"],
-                    block_height=block_height,
-                    burn_address=burn_address,
-                    tracking_address=tracking_address,
-                    amount=sum(vout["value"] for vout in decoded_tx_data["vout"] if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address)
-                )
-                try:
-                    db.add(burn_transaction)
-                    await db.commit()
-                    successful_transaction_additions += 1
-                    if idx % 100 == 0:
-                        logger.info(f"Added {successful_transaction_additions:,} new burn transactions to the database successfully ({idx - successful_transaction_additions:,} transactions failed to add)")
-                except Exception as e:  # noqa: F841
-                    logger.error(f"Error adding new burn transaction to the database: {str(e)}")
-                    pass
-        wal_consolidate_results = await db_code.consolidate_wal_data()
-        logger.info(f"WAL consolidation results: {wal_consolidate_results}")
-        logger.info(f"Added {len(new_decoded_tx_data_list):,} new burn transactions to the database")
-        query = await db.exec(
-            select(db_code.BurnAddressTransaction)
-            .where(db_code.BurnAddressTransaction.burn_address == burn_address)
-            .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-            .where(db_code.BurnAddressTransaction.block_height > latest_db_block_height)
-        )
-        new_tracking_transactions = query.all()
+            new_tracking_transactions_results = await db.exec(
+                select(db_code.BurnAddressTransaction)
+                .where(db_code.BurnAddressTransaction.burn_address == burn_address)
+                .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
+                .where(db_code.BurnAddressTransaction.block_height > latest_db_block_height)
+            )
+            new_tracking_transactions = new_tracking_transactions_results.all()
         total_credits_consumed += sum(tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_tracking_transactions)
-        logger.info(f"Retrieved {len(new_tracking_transactions):,} new tracking transactions from the database. Updated total credits consumed: {total_credits_consumed:,}")
         for height in range(latest_db_block_height + 1, current_block_height + 1):
             block_hash = await rpc_connection.getblockhash(height)
             await store_block_hash(height, block_hash)
-        logger.info(f"Stored block hashes from block height {latest_db_block_height + 1:,} to {current_block_height:,} in the database")
     current_credit_balance = initial_credit_balance - total_credits_consumed
     number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
     logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,}; Total credits consumed: {total_credits_consumed:,}; Current credit balance: {current_credit_balance:,}")
