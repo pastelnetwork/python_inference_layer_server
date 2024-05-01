@@ -117,15 +117,12 @@ Restart=always
 WantedBy=multi-user.target
 """
     service_path = f"/etc/systemd/system/{service_name}.service"
-    if os.geteuid() == 0:
-        with open(service_path, 'w') as file:
-            file.write(service_content)
-        logger.info(f"Systemd service file created at {service_path}")
-        run_command("systemctl daemon-reload")
-        run_command(f"systemctl enable {service_name}")
-        run_command(f"systemctl start {service_name}")
-    else:
-        logger.error("You need root permissions to create systemd services.")
+    with open(service_path, 'w') as file:
+        file.write(service_content)
+    logger.info(f"Systemd service file created at {service_path}")
+    run_command("sudo systemctl daemon-reload", check=True)
+    run_command(f"sudo systemctl enable {service_name}", check=True)
+    run_command(f"sudo systemctl start {service_name}", check=True)
 
 def ensure_pyenv_setup():
     if not is_pyenv_installed():
