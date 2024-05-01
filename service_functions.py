@@ -3896,7 +3896,7 @@ async def full_rescan_burn_transactions():
     current_block_height = await get_current_pastel_block_height_func()
     transactions = await rpc_connection.listtransactions("*", 1000000, 0)
     burn_transactions = [tx for tx in transactions if tx.get("address") == burn_address and tx.get("category") == "receive"]
-    chunk_size = 250  # Adjust the chunk size as needed
+    chunk_size = 100  # Adjust the chunk size as needed
     decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size)
     async with db_code.Session() as db:
         for decoded_tx_data in decoded_tx_data_list:
@@ -4008,7 +4008,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
             if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height)
         ]
         logger.info(f"Filtered {len(new_burn_transactions):,} new burn transactions")
-        chunk_size = 250  # Adjust the chunk size as needed
+        chunk_size = 100  # Adjust the chunk size as needed
         new_decoded_tx_data_list = await process_transactions_in_chunks(new_burn_transactions, chunk_size)
         logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions")
         async with db_code.Session() as db:
