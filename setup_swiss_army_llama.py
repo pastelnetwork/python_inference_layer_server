@@ -203,37 +203,37 @@ def check_and_setup_swiss_army_llama(security_token):
     else:
         setup_swiss_army_llama(security_token)
         
-def setup_process_blocks_for_masternode_transactions_service():
-    service_name = "process_blocks_for_masternode_transactions"
-    script_path = os.path.join(os.path.dirname(__file__), "process_blocks_for_masternode_transactions.py")
+# def setup_process_blocks_for_masternode_transactions_service():
+#     service_name = "process_blocks_for_masternode_transactions"
+#     script_path = os.path.join(os.path.dirname(__file__), "process_blocks_for_masternode_transactions.py")
     
-    if not check_systemd_service_exists(service_name):
-        create_systemd_service(
-            service_name=service_name,
-            user=os.getlogin(),
-            working_directory=os.path.dirname(__file__),
-            exec_start=f"{python_executable} {script_path}"
-        )
-    else:
-        logger.info(f"{service_name} systemd service already exists; skipping setup.")
-        run_command(f"sudo systemctl restart {service_name}", check=True)
+#     if not check_systemd_service_exists(service_name):
+#         create_systemd_service(
+#             service_name=service_name,
+#             user=os.getlogin(),
+#             working_directory=os.path.dirname(__file__),
+#             exec_start=f"{python_executable} {script_path}"
+#         )
+#     else:
+#         logger.info(f"{service_name} systemd service already exists; skipping setup.")
+#         run_command(f"sudo systemctl restart {service_name}", check=True)
 
-def setup_detect_chain_reorg_and_rescan_service():
-    service_name = "detect_chain_reorg_and_rescan"
-    script_path = os.path.join(os.path.dirname(__file__), "detect_chain_reorg_and_rescan.py")
+# def setup_detect_chain_reorg_and_rescan_service():
+#     service_name = "detect_chain_reorg_and_rescan"
+#     script_path = os.path.join(os.path.dirname(__file__), "detect_chain_reorg_and_rescan.py")
     
-    if not check_systemd_service_exists(service_name):
-        create_systemd_service(
-            service_name=service_name,
-            user=os.getlogin(),
-            working_directory=os.path.dirname(__file__),
-            exec_start=f"{python_executable} {script_path}"
-        )
-    else:
-        logger.info(f"{service_name} systemd service already exists; skipping setup.")
-        run_command(f"sudo systemctl restart {service_name}", check=True)
+#     if not check_systemd_service_exists(service_name):
+#         create_systemd_service(
+#             service_name=service_name,
+#             user=os.getlogin(),
+#             working_directory=os.path.dirname(__file__),
+#             exec_start=f"{python_executable} {script_path}"
+#         )
+#     else:
+#         logger.info(f"{service_name} systemd service already exists; skipping setup.")
+#         run_command(f"sudo systemctl restart {service_name}", check=True)
 
-def setup_background_services(security_token):
-    setup_swiss_army_llama(security_token)
-    setup_process_blocks_for_masternode_transactions_service()
-    setup_detect_chain_reorg_and_rescan_service()        
+# def setup_background_services(security_token):
+#     setup_swiss_army_llama(security_token)
+#     setup_process_blocks_for_masternode_transactions_service()
+#     setup_detect_chain_reorg_and_rescan_service()        

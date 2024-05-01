@@ -4011,8 +4011,10 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
         chunk_size = 100  # Adjust the chunk size as needed
         new_decoded_tx_data_list = await process_transactions_in_chunks(new_burn_transactions, chunk_size)
         logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions")
+        logger.info(f"Now adding {len(new_decoded_tx_data_list):,} new burn transactions to the database...")
+        successful_transaction_additions = 0
         async with db_code.Session() as db:
-            for decoded_tx_data in new_decoded_tx_data_list:
+            for idx, decoded_tx_data in enumerate(new_decoded_tx_data_list):
                 tracking_address = None
                 for vin in decoded_tx_data["vin"]:
                     if "address" in vin:
@@ -4032,9 +4034,12 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
                 )
                 try:
                     db.add(burn_transaction)
+                    await db.commit()
+                    successful_transaction_additions += 1
+                    if idx % 100 == 0:
+                        logger.info(f"Added {successful_transaction_additions:,} new burn transactions to the database successfully ({idx - successful_transaction_additions:,} transactions failed to add)")
                 except Exception as e:  # noqa: F841
                     pass
-            await db.commit()
         logger.info(f"Added {len(new_decoded_tx_data_list):,} new burn transactions to the database")
         query = await db.exec(
             select(db_code.BurnAddressTransaction)
