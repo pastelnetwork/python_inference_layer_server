@@ -277,6 +277,41 @@ class MasternodeTransaction(SQLModel, table=True):
                 "additional_data": {}
             }
         }
+        
+class BlockHash(SQLModel, table=True):
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    block_height: int = Field(index=True, unique=True)
+    block_hash: str = Field(index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "block_height": 123456,
+                "block_hash": "0x1234...",
+                "timestamp": "2023-06-01T12:00:00Z"
+            }
+        }
+        
+class BurnAddressTransaction(SQLModel, table=True):
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    txid: str = Field(index=True, unique=True)
+    block_height: int = Field(index=True)
+    burn_address: str = Field(index=True)
+    tracking_address: str = Field(index=True)
+    amount: float
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "txid": "0x1234...",
+                "block_height": 123456,
+                "burn_address": "tPpasteLBurnAddressXXXXXXXXXXX3wy7u",
+                "tracking_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
+                "amount": 0.00014,
+                "timestamp": "2023-06-01T12:00:00Z"
+            }
+        }                
 #_________________________________________________________________________________________
 # Credit pack related models:
 
