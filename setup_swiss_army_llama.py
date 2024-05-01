@@ -155,7 +155,7 @@ def setup_swiss_army_llama(security_token):
         run_command(f"git clone https://github.com/Dicklesworthstone/swiss_army_llama {swiss_army_llama_path}", check=True)
     else:
         logger.info("Swiss Army Llama repository already exists. Updating repository.")
-        run_command(f"git -C {swiss_army_llama_path} pull --rebase", check=True)
+        run_command(f"git -C {swiss_army_llama_path} stash && git -C {swiss_army_llama_path} pull", check=True)        
     configure_shell_for_pyenv()
     if not is_pyenv_installed():
         ensure_pyenv_setup()
