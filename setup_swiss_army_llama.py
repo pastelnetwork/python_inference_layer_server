@@ -117,8 +117,10 @@ Restart=always
 WantedBy=multi-user.target
 """
     service_path = f"/etc/systemd/system/{service_name}.service"
-    with open(service_path, 'w') as file:
+    temp_service_path = f"/tmp/{service_name}.service"
+    with open(temp_service_path, 'w') as file:
         file.write(service_content)
+    run_command(f"sudo mv {temp_service_path} {service_path}", check=True)
     logger.info(f"Systemd service file created at {service_path}")
     run_command("sudo systemctl daemon-reload", check=True)
     run_command(f"sudo systemctl enable {service_name}", check=True)
