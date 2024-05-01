@@ -66,20 +66,12 @@ def update_security_token(file_path, token):
         file.write(content)
     
 def is_pyenv_installed():
-    shell_profile_path = os.path.expanduser('~/.zshrc') if os.path.exists(os.path.expanduser('~/.zshrc')) else os.path.expanduser('~/.bashrc')
-    with open(shell_profile_path, 'r') as file:
-        content = file.read()
-        if 'export PYENV_ROOT' in content and 'export PATH="$PYENV_ROOT/bin:$PATH"' in content:
-            return True
-    return False
+    result = run_command(["pyenv --version"], capture_output=True)
+    return result.returncode == 0
 
 def is_python_3_12_installed():
-    shell_profile_path = os.path.expanduser('~/.zshrc') if os.path.exists(os.path.expanduser('~/.zshrc')) else os.path.expanduser('~/.bashrc')
-    with open(shell_profile_path, 'r') as file:
-        content = file.read()
-        if 'pyenv global 3.12' in content:
-            return True
-    return False
+    result = run_command(["pyenv versions"], capture_output=True)
+    return "3.12" in result.stdout
 
 def is_rust_installed():
     try:
@@ -164,8 +156,8 @@ def setup_swiss_army_llama(security_token):
     else:
         logger.info("Swiss Army Llama repository already exists. Updating repository.")
         run_command(f"git -C {swiss_army_llama_path} stash && git -C {swiss_army_llama_path} pull", check=True)
-    ensure_pyenv_setup()
     configure_shell_for_pyenv()
+    ensure_pyenv_setup()
     if not is_python_3_12_installed():
         logger.info("Python 3.12 is not installed. Installing Python 3.12 using pyenv.")
         run_command("pyenv install 3.12", check=True)
