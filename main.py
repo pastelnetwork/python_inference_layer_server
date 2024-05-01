@@ -76,8 +76,9 @@ async def startup():
         decrypt_sensitive_fields() # Now decrypt sensitive fields        
         asyncio.create_task(monitor_new_messages())  # Create a background task
         # asyncio.create_task(process_blocks_for_masternode_transactions())  # Create a background task
-        # asyncio.create_task(detect_chain_reorg_and_rescan())
-        asyncio.create_task(asyncio.to_thread(setup_background_services, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Setup background services
+        asyncio.create_task(detect_chain_reorg_and_rescan())
+        asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
+        # asyncio.create_task(asyncio.to_thread(setup_background_services, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Setup background services
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         
