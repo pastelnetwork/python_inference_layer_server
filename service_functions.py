@@ -3880,18 +3880,27 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
             raise ValueError("Unauthorized access to inference output results")
         return inference_output_result
 
+async def process_transactions_in_chunks(transactions, chunk_size):
+    decoded_tx_data_list = []
+    for i in range(0, len(transactions), chunk_size):
+        chunk = transactions[i:i + chunk_size]
+        decoded_chunk = await asyncio.gather(*[get_and_decode_raw_transaction(tx["txid"]) for tx in chunk])
+        decoded_tx_data_list.extend(decoded_chunk)
+    return decoded_tx_data_list
+
 async def full_rescan_burn_transactions():
     current_block_height = await get_current_pastel_block_height_func()
     transactions = await rpc_connection.listtransactions("*", 100000, 0)
     burn_transactions = [tx for tx in transactions if tx.get("address") == burn_address and tx.get("category") == "receive"]
-    decoded_tx_data_list = await asyncio.gather(*[get_and_decode_raw_transaction(tx["txid"]) for tx in burn_transactions])
+    chunk_size = 100  # Adjust the chunk size as needed
+    decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size)
     async with db_code.Session() as db:
         for decoded_tx_data in decoded_tx_data_list:
             tracking_address = None
             for vin in decoded_tx_data["vin"]:
                 if "address" in vin:
                     tracking_address = vin["address"]
-                    break
+                    break    
             if tracking_address:
                 burn_transaction = db_code.BurnAddressTransaction(
                     txid=decoded_tx_data["txid"],
@@ -3900,9 +3909,16 @@ async def full_rescan_burn_transactions():
                     tracking_address=tracking_address,
                     amount=sum(vout["value"] for vout in decoded_tx_data["vout"] if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address)
                 )
-                db.add(burn_transaction)
+                try:
+                    db.add(burn_transaction)
+                except Exception as e: # noqa: F841
+                    pass                
         await db.commit()
-    block_hashes = await asyncio.gather(*[rpc_connection.getblockhash(height) for height in range(1, current_block_height + 1)])
+    block_hashes = []
+    for i in range(0, current_block_height + 1, chunk_size):
+        chunk_heights = list(range(i, min(i + chunk_size, current_block_height + 1)))
+        chunk_hashes = await asyncio.gather(*[rpc_connection.getblockhash(height) for height in chunk_heights])
+        block_hashes.extend(chunk_hashes)
     async with db_code.Session() as db:
         for height, block_hash in enumerate(block_hashes, start=1):
             block_hash_obj = db_code.BlockHash(block_height=height, block_hash=block_hash)
@@ -3930,12 +3946,9 @@ async def detect_chain_reorg_and_rescan():
 async def store_block_hash(block_height: int, block_hash: str):
     async with db_code.Session() as db:
         # Check if the block hash already exists in the database
-        query = await db.exec(
-            select(db_code.BlockHash).where(db_code.BlockHash.block_height == block_height)
-        )
+        query = await db.exec(select(db_code.BlockHash).where(db_code.BlockHash.block_height == block_height))
         existing_block_hash = query.one_or_none()
         if existing_block_hash:
-            logger.info(f"Block hash for block height {block_height:,} already exists in the database. Skipping insertion.")
             return
         # If the block hash doesn't exist, insert it into the database
         block_hash_obj = db_code.BlockHash(block_height=block_height, block_hash=block_hash)
@@ -3974,22 +3987,18 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     current_block_height = await get_current_pastel_block_height_func()
     logger.info(f"Latest block height in the database: {latest_db_block_height:,}, Current block height: {current_block_height:,}")
     if current_block_height > latest_db_block_height:
-        logger.info(f"New blocks detected. Retrieving new transactions from block height {latest_db_block_height + 1:,} to {current_block_height:,}")
-        num_skipped_transactions = 0
-        new_transactions = []
-        while True:
-            batch_transactions = await rpc_connection.listtransactions("*", 100000, num_skipped_transactions)
-            if not batch_transactions:
-                break
-            new_transactions.extend(batch_transactions)
-            num_skipped_transactions += len(batch_transactions)
+        logger.info(f"New blocks detected that aren't yet in the local database. Retrieving new burn transactions from block height {latest_db_block_height + 1:,} to {current_block_height:,}")
+        latest_db_block_hash = await rpc_connection.getblockhash(latest_db_block_height)
+        listsinceblock_output = await rpc_connection.listsinceblock(latest_db_block_hash, 1, True)
+        new_transactions = listsinceblock_output["transactions"]
         logger.info(f"Retrieved {len(new_transactions):,} new transactions from the Pastel blockchain")
         new_burn_transactions = [
             tx for tx in new_transactions
-            if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("blockheight", 0) > latest_db_block_height
+            if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height)
         ]
         logger.info(f"Filtered {len(new_burn_transactions):,} new burn transactions")
-        new_decoded_tx_data_list = await asyncio.gather(*[get_and_decode_raw_transaction(tx["txid"]) for tx in new_burn_transactions])
+        chunk_size = 100  # Adjust the chunk size as needed
+        new_decoded_tx_data_list = await process_transactions_in_chunks(new_burn_transactions, chunk_size)
         logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions")
         async with db_code.Session() as db:
             for decoded_tx_data in new_decoded_tx_data_list:
@@ -4005,7 +4014,10 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
                     tracking_address=tracking_address,
                     amount=sum(vout["value"] for vout in decoded_tx_data["vout"] if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address)
                 )
-                db.add(burn_transaction)
+                try:
+                    db.add(burn_transaction)
+                except Exception as e: # noqa: F841
+                    pass
             await db.commit()
         logger.info(f"Added {len(new_decoded_tx_data_list):,} new burn transactions to the database")
         query = await db.exec(
@@ -4023,7 +4035,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
         logger.info(f"Stored block hashes from block height {latest_db_block_height + 1:,} to {current_block_height:,} in the database")
     current_credit_balance = initial_credit_balance - total_credits_consumed
     number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
-    logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,}, Total credits consumed: {total_credits_consumed:,}, Current credit balance: {current_credit_balance:,}")
+    logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,}; Total credits consumed: {total_credits_consumed:,}; Current credit balance: {current_credit_balance:,}")
     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
 
 async def update_inference_sn_reputation_score(supernode_pastelid: str, reputation_score: float) -> bool:
@@ -4234,10 +4246,8 @@ async def get_transaction_details(txid: str, include_watchonly: bool = False) ->
     try:
         # Call the 'gettransaction' RPC method with the provided txid and includeWatchonly flag
         transaction_details = await rpc_connection.gettransaction(txid, include_watchonly)
-        
         # Log the retrieved transaction details
         logger.info(f"Retrieved transaction details for {txid}: {transaction_details}")
-
         return transaction_details
     except Exception as e:
         logger.error(f"Error retrieving transaction details for {txid}: {e}")
