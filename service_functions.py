@@ -3883,10 +3883,12 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
 
 async def process_transactions_in_chunks(transactions, chunk_size):
     decoded_tx_data_list = []
+    chunk_count = 0
     for i in range(0, len(transactions), chunk_size):
         chunk = transactions[i:i + chunk_size]
+        chunk_count += 1
         decoded_chunk = await asyncio.gather(*[get_and_decode_raw_transaction(tx["txid"]) for tx in chunk])
-        logger.info(f"Decoded {len(decoded_chunk)} transactions in chunk {i+1} out of a total of {math.ceil(len(transactions)/chunk_size)} chunks...")
+        logger.info(f"Decoded {len(decoded_chunk)} transactions in chunk {chunk_count} out of a total of {math.ceil(len(transactions)/chunk_size)} chunks...")
         decoded_tx_data_list.extend(decoded_chunk)
     return decoded_tx_data_list
 
@@ -3894,7 +3896,7 @@ async def full_rescan_burn_transactions():
     current_block_height = await get_current_pastel_block_height_func()
     transactions = await rpc_connection.listtransactions("*", 1000000, 0)
     burn_transactions = [tx for tx in transactions if tx.get("address") == burn_address and tx.get("category") == "receive"]
-    chunk_size = 100  # Adjust the chunk size as needed
+    chunk_size = 250  # Adjust the chunk size as needed
     decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size)
     async with db_code.Session() as db:
         for decoded_tx_data in decoded_tx_data_list:
@@ -3958,8 +3960,11 @@ async def store_block_hash(block_height: int, block_hash: str):
             return
         # If the block hash doesn't exist, insert it into the database
         block_hash_obj = db_code.BlockHash(block_height=block_height, block_hash=block_hash)
-        db.add(block_hash_obj)
-        await db.commit()
+        try:
+            db.add(block_hash_obj)
+            await db.commit()
+        except Exception as e:  # noqa: E722
+            logger.error(f"Error storing block hash: {str(e)}")
         
 async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_txid: str, burn_address: str):
     """
@@ -4003,7 +4008,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
             if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height)
         ]
         logger.info(f"Filtered {len(new_burn_transactions):,} new burn transactions")
-        chunk_size = 100  # Adjust the chunk size as needed
+        chunk_size = 250  # Adjust the chunk size as needed
         new_decoded_tx_data_list = await process_transactions_in_chunks(new_burn_transactions, chunk_size)
         logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions")
         async with db_code.Session() as db:
