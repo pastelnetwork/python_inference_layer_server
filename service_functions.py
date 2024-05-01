@@ -3907,11 +3907,9 @@ async def process_transactions_in_chunks(transactions, chunk_size, db_code, rpc_
             for transaction in chunk:
                 if transaction['category'] == 'receive' and transaction['amount'] > 0:
                     txid = transaction['txid']
-                    # Check if transaction already exists in the database
                     stmt = select(db_code.BurnAddressTransaction).where(db_code.BurnAddressTransaction.txid == txid)
                     existing_transaction = await db.execute(stmt)
                     if existing_transaction.scalars().first() is not None:
-                        logger.info(f"Transaction {txid} already exists in the database, skipping.")
                         continue
                     tx_details = await rpc_connection.gettransaction(txid, True)  # Get verbose transaction details
                     block_info = await rpc_connection.getblock(tx_details['blockhash'])
