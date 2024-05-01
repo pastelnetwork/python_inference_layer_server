@@ -4039,7 +4039,10 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
                     if idx % 100 == 0:
                         logger.info(f"Added {successful_transaction_additions:,} new burn transactions to the database successfully ({idx - successful_transaction_additions:,} transactions failed to add)")
                 except Exception as e:  # noqa: F841
+                    logger.error(f"Error adding new burn transaction to the database: {str(e)}")
                     pass
+        wal_consolidate_results = await db_code.consolidate_wal_data()
+        logger.info(f"WAL consolidation results: {wal_consolidate_results}")
         logger.info(f"Added {len(new_decoded_tx_data_list):,} new burn transactions to the database")
         query = await db.exec(
             select(db_code.BurnAddressTransaction)

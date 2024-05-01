@@ -894,3 +894,18 @@ async def initialize_db():
     except Exception as e:
         logger.error(f"Database Initialization Error: {e}")
         return False
+    
+async def consolidate_wal_data():
+    """
+    Forces SQLite to consolidate all data in the WAL/shm files into the main database file.
+    """
+    consolidate_command = "PRAGMA wal_checkpoint(FULL);"
+    try:
+        async with engine.begin() as conn:  # Use the existing engine for connection
+            result = await conn.execute(sql_text(consolidate_command))
+            result_fetch = await result.fetchone()
+            logger.info(f"WAL consolidation result: {result_fetch}")
+            return result_fetch  # This typically returns (0, 0, 0) on success
+    except Exception as e:
+        logger.error(f"Error during WAL consolidation: {e}")
+        return None
