@@ -4059,7 +4059,7 @@ async def detect_chain_reorg_and_rescan():
                 await full_rescan_burn_transactions()
         await asyncio.sleep(6000)  # Check for chain reorg every 6000 seconds
                 
-async def fetch_and_insert_block_hashes(start_height, end_height, batch_size=100):
+async def fetch_and_insert_block_hashes(start_height, end_height, batch_size=300):
     current_height = max(start_height - 1, 0)
     total_inserted = 0
     batch_counter = 0
