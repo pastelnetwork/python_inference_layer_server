@@ -5,11 +5,9 @@ import io
 import asyncio
 import base64
 import json
-import pickle
 import random
 import time
 import traceback
-from datetime import datetime
 from binascii import unhexlify, hexlify
 import urllib.parse as urlparse
 from decimal import Decimal
@@ -19,7 +17,6 @@ import tempfile
 import zstandard as zstd
 from httpx import AsyncClient, Limits, Timeout
 from logger_config import logger
-from sqlmodel import select, delete
 import database_code as db_code
 
 base_transaction_amount = Decimal(0.1)
@@ -46,6 +43,12 @@ def get_network_info(rpc_port):
     else:
         raise ValueError(f"Unknown RPC port: {rpc_port}")
     return network, burn_address
+
+def required_collateral(network):
+    if network == 'mainnet':
+        return 5000000  # 5 million PSL for mainnet
+    else:
+        return 1000000  # 1 million PSL for testnet/devnet
 
 class JSONRPCException(Exception):
     def __init__(self, rpc_error):
@@ -508,6 +511,7 @@ def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~
 
 rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
 network, burn_address = get_network_info(rpc_port)
+masternode_collateral_amount = required_collateral(network)
 rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
 use_direct_ticket_scanning = 0
 

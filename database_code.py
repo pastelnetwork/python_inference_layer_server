@@ -274,7 +274,6 @@ class BurnAddressTransaction(SQLModel, table=True):
     tracking_address: str = Field(index=True)
     amount: float
     timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
-    
     class Config:
         json_schema_extra = {
             "example": {
@@ -293,20 +292,21 @@ class MNIDTicketDetails(SQLModel, table=True):
     pastel_id: str
     address: str
     pq_key: str
+    outpoint: str
     block_height: int
     timestamp: datetime
-
     class Config:
         json_schema_extra = {
             "example": {
                 "txid": "a55a83125475d78a76d9c9f406b111b35609a4f25855bacfe62fb9db8d1bb340",
                 "pastel_id": "jXanJYsUZLLm54tgKvDMjrZrHMdrKB8X3itB1hvDoaD7fUp23D6LDPxbFcUrAMwRUdTrBPzS6oKpfpTSvBbot4",
                 "address": "PtZt2Lqe8aKypGFhUckwFf22EPyZSpbPBep",
-                "pq_key": "ExxdG2AkNG...<abbreviated>...1CbkB867XBNuRuWCmEK",
+                "pq_key": "ExxdG2...KoxrruxMS4vxBWnWc",
+                "outpoint": "b12c660af935bed3bea15a29135512675ad64e8a2e820901baf7cea38430ba0e-0",
                 "block_height": 319474,
-                "timestamp": "2023-05-01T12:00:00Z"
+                "timestamp": "2023-06-01T12:00:00Z"
             }
-        }        
+        }
 #_________________________________________________________________________________________
 # Credit pack related models:
 

@@ -25,7 +25,7 @@ import httpx
 from httpx import AsyncClient, Limits, Timeout
 import urllib.parse as urlparse
 from logger_config import logger
-from blockchain_ticket_storage import store_data_in_blockchain, retrieve_data_from_blockchain
+from blockchain_ticket_storage import store_data_in_blockchain, retrieve_data_from_blockchain, masternode_collateral_amount
 import zstandard as zstd
 from sqlalchemy.exc import OperationalError, InvalidRequestError
 from typing import List, Tuple, Dict, Union, Optional
@@ -3971,7 +3971,7 @@ async def full_rescan_burn_transactions():
     if not block_hash_exists:
         logger.info("No block hash records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
-        logger.info(f"Now getting block hashes for {len(decoded_tx_data_list):,} new block heights (from {current_block_height - len(decoded_tx_data_list) + 1:,} to {current_block_height:,}) and storing in the DB...")
+        logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
         await fetch_block_hashes_and_bulk_insert(0, current_block_height, 100)
         logger.info("Block hashes updated successfully.")
     else:
@@ -3983,24 +3983,63 @@ async def fetch_all_mnid_tickets_details():
         return []
     tickets_data = {ticket['txid']: ticket for ticket in mnid_response}
     async with db_code.Session() as session:
-        existing_txids = await session.exec(select(db_code.MNIDTicketDetails.txid).where(db_code.MNIDTicketDetails.txid.in_(tickets_data.keys())))
-        existing_txids_set = set(txid[0] for txid in existing_txids.all())
-        new_tickets_to_insert = []
-        for txid, ticket in tickets_data.items():
-            if txid not in existing_txids_set:
-                new_ticket = db_code.MNIDTicketDetails(
-                    txid=txid,
-                    pastel_id=ticket['ticket']['pastelID'],
-                    address=ticket['ticket']['address'],
-                    pq_key=ticket['ticket']['pq_key'],
-                    block_height=ticket['height'],
-                    timestamp=datetime.utcfromtimestamp(int(ticket['ticket']['timeStamp']))
-                )
-                new_tickets_to_insert.append(new_ticket)
-        if new_tickets_to_insert:
-            session.add_all(new_tickets_to_insert)
-            await session.commit()
+        async with session.begin():
+            result = await session.execute(select(db_code.MNIDTicketDetails.txid).where(db_code.MNIDTicketDetails.txid.in_(tickets_data.keys())))
+            existing_txids = result.scalars().all()  # Correct method to fetch scalar results directly
+            existing_txids_set = set(existing_txids)
+            new_tickets_to_insert = []
+            for txid, ticket in tickets_data.items():
+                if txid not in existing_txids_set:
+                    new_ticket = db_code.MNIDTicketDetails(
+                        txid=txid,
+                        pastel_id=ticket['ticket']['pastelID'],
+                        address=ticket['ticket']['address'],
+                        pq_key=ticket['ticket']['pq_key'],
+                        outpoint=ticket['ticket']['outpoint'],
+                        block_height=ticket['height'],
+                        timestamp=datetime.utcfromtimestamp(int(ticket['ticket']['timeStamp']))
+                    )
+                    new_tickets_to_insert.append(new_ticket)
+            if new_tickets_to_insert:
+                try:
+                    session.add_all(new_tickets_to_insert)
+                    await session.commit()
+                except IntegrityError as e:
+                    await session.rollback()
+                    logger.error(f"Error inserting new tickets due to a unique constraint failure: {e}")
     return new_tickets_to_insert
+
+async def fetch_active_supernodes_count_and_details(block_height: int):
+    async with db_code.Session() as session:
+        async with session.begin():
+            # Fetch all mnid tickets created up to the specified block height
+            result = await session.execute(
+                select(db_code.MNIDTicketDetails)
+                .where(db_code.MNIDTicketDetails.block_height <= block_height)
+            )
+            mnid_tickets = result.scalars().all()
+            active_supernodes = []
+            # Check if the outpoints for these tickets are still unspent
+            for ticket in mnid_tickets:
+                try:
+                    tx_info = await rpc_connection.getrawtransaction(ticket.outpoint.split('-')[0], 1)
+                    vout = int(ticket.outpoint.split('-')[1])
+                    # Check if the outpoint is still unspent and meets collateral requirements
+                    if tx_info['vout'][vout]['n'] == vout and tx_info['vout'][vout]['value'] >= masternode_collateral_amount:
+                        supernode_details = {
+                            "txid": ticket.txid,
+                            "pastel_id": ticket.pastel_id,
+                            "address": ticket.address,
+                            "pq_key": ticket.pq_key,
+                            "outpoint": ticket.outpoint,
+                            "block_height": ticket.block_height,
+                            "timestamp": datetime.utcfromtimestamp(int(ticket.timestamp))
+                        }
+                        active_supernodes.append(supernode_details)
+                except Exception as e:
+                    print(f"Error processing transaction for txid {ticket.txid}: {e}")
+    active_supernodes_count = len(active_supernodes)
+    return active_supernodes_count, active_supernodes
 
 async def detect_chain_reorg_and_rescan():
     while True:
@@ -4021,17 +4060,47 @@ async def detect_chain_reorg_and_rescan():
         await asyncio.sleep(6000)  # Check for chain reorg every 6000 seconds
                 
 async def fetch_block_hashes_and_bulk_insert(start_height, end_height, batch_size=100):
-    all_block_hashes = []
-    for i in range(start_height, end_height + 1, batch_size):
-        batch_end = min(i + batch_size, end_height + 1)
-        height_batch = range(i, batch_end)
-        tasks = [asyncio.create_task(rpc_connection.getblockhash(height)) for height in height_batch]
-        batch_hashes = await asyncio.gather(*tasks)
-        all_block_hashes.extend([(height, block_hash) for height, block_hash in zip(height_batch, batch_hashes) if block_hash])
-        logger.info(f"Fetched {len(batch_hashes):,} block hashes for {len(height_batch):,} heights in total.")
-    if all_block_hashes:
-        await bulk_insert_block_hashes(all_block_hashes)
-        logger.info(f"Bulk inserted {len(all_block_hashes):,} block hashes in total.")
+    # Adjust start_height to ensure you always get the previous block, unless starting from the genesis block
+    adjusted_start = max(start_height - 1, 0)
+    current_height = adjusted_start
+    total_inserted = 0  # Total number of block hashes inserted
+    batch_counter = 0   # Counts the number of hashes inserted since the last log
+    # Initialize the process by fetching the first block explicitly if starting from the genesis block
+    if start_height == 0:
+        current_block = await rpc_connection.getblock(0)
+        await bulk_insert_block_hashes([(0, current_block['hash'])])
+        total_inserted += 1
+        batch_counter += 1
+        current_height += 1  # Adjust to start from the next relevant block
+    while current_height <= end_height:
+        try: # Fetch the block data
+            current_block = await rpc_connection.getblock(current_height)
+            # Prepare the list of block hashes to insert
+            blocks_to_insert = []
+            # Append the previous block hash if it's within the range
+            if current_height > start_height and 'previousblockhash' in current_block:
+                blocks_to_insert.append((current_height - 1, current_block['previousblockhash']))
+            # Current block hash
+            blocks_to_insert.append((current_height, current_block['hash']))
+            # Next block hash - only if it does not exceed end_height
+            if current_height < end_height and 'nextblockhash' in current_block:
+                blocks_to_insert.append((current_height + 1, current_block['nextblockhash']))
+            # Insert the collected hashes into the database
+            if blocks_to_insert:
+                await bulk_insert_block_hashes(blocks_to_insert)
+                total_inserted += len(blocks_to_insert)
+                batch_counter += len(blocks_to_insert)
+            # Log progress every 500 inserts
+            if batch_counter >= 500:
+                blocks_left = end_height - current_height + 1
+                logger.info(f"Fetched {batch_counter:,} block hashes; {total_inserted:,} total block hashes in total, leaving {blocks_left:,} blocks left to process...")
+                batch_counter = 0  # Reset the batch counter after logging
+            # Increment to skip the next block since it's already handled
+            current_height += 2
+        except Exception as e:
+            logger.error(f"Error fetching or inserting block hash for block at height {current_height}: {e}")
+            # Move to the next block in case of failure
+            current_height += 1
                     
 async def bulk_insert_block_hashes(block_hashes):
     async with db_code.Session() as db:
