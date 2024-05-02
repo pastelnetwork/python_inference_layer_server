@@ -4067,50 +4067,52 @@ async def fetch_and_insert_block_hashes(start_height, end_height, batch_size=300
         tasks = [asyncio.create_task(rpc_connection.getblock(h, 1)) for h in range(current_height, min(current_height + batch_size, end_height + 1), 3)]
         results = await asyncio.gather(*tasks)
         blocks_to_insert = []
-        # Fetch unique heights from the results to prevent duplicates
-        unique_heights = set()
+        # Collect potential blocks to insert
         for result in results:
             if result:
-                unique_heights.update([
-                    result['height'] - 1 if 'previousblockhash' in result and result['height'] > start_height else None,
-                    result['height'],
-                    result['height'] + 1 if 'nextblockhash' in result and result['height'] < end_height else None
-                ])
-        # Filter out None values and check database for existing heights
-        unique_heights.discard(None)
-        async with db_code.Session() as db:
-            existing_heights = {h[0] for h in (await db.execute(select(db_code.BlockHash.block_height).where(db_code.BlockHash.block_height.in_(unique_heights)))).scalars().all()}
-        # Prepare insertable blocks considering existing heights
-        for result in results:
-            if result:
-                if 'previousblockhash' in result and result['height'] - 1 not in existing_heights:
+                if 'previousblockhash' in result and result['height'] > start_height:
                     blocks_to_insert.append((result['height'] - 1, result['previousblockhash']))
-                if result['height'] not in existing_heights:
-                    blocks_to_insert.append((result['height'], result['hash']))
-                if 'nextblockhash' in result and result['height'] + 1 not in existing_heights:
+                blocks_to_insert.append((result['height'], result['hash']))
+                if 'nextblockhash' in result and result['height'] < end_height:
                     blocks_to_insert.append((result['height'] + 1, result['nextblockhash']))
-        # Insert blocks
-        if blocks_to_insert:
-            await bulk_insert_block_hashes(blocks_to_insert)
-            inserted_count = len(blocks_to_insert)
+        # Filter out duplicate heights from the batch itself
+        unique_blocks = {block[0]: block for block in blocks_to_insert}.values()
+        # Check database for existing heights from the refined list
+        unique_heights = {height for height, _ in unique_blocks}
+        async with db_code.Session() as db:
+            existing_query = await db.execute(select(db_code.BlockHash.block_height).where(db_code.BlockHash.block_height.in_(unique_heights)))
+            existing_heights = set(existing_query.scalars().all())
+        # Filter out existing block heights
+        final_blocks_to_insert = [block for block in unique_blocks if block[0] not in existing_heights]
+        # Bulk insert new blocks
+        if final_blocks_to_insert:
+            await bulk_insert_block_hashes(final_blocks_to_insert)
+            inserted_count = len(final_blocks_to_insert)
             total_inserted += inserted_count
             batch_counter += inserted_count
-        # Log progress
+        # Log progress for every 500 inserts or as needed
         if batch_counter >= 500:
-            blocks_left = end_height - current_height
+            blocks_left = end_height - current_height + 1
             logger.info(f"Fetched and inserted {batch_counter:,} block hashes; {total_inserted:,} total block hashes in total, {blocks_left:,} blocks left to process...")
             batch_counter = 0
-        current_height += batch_size * 3  # Skip ahead by 3x batch size to optimize RPC calls
+        # Move to the next range, skipping ahead to optimize RPC calls
+        current_height += batch_size * 3
 
 async def bulk_insert_block_hashes(block_hashes):
     async with db_code.Session() as db:
-        db.add_all([db_code.BlockHash(block_height=height, block_hash=hash) for height, hash in block_hashes])
-        try:
-            await db.commit()
-            await db_code.consolidate_wal_data()  # Consolidate WAL after processing each chunk
-        except Exception as e:
-            await db.rollback()
-            logger.error(f"Error during bulk insert of block hashes: {str(e)}")
+        # Recheck existing heights just before inserting to handle race conditions
+        heights_to_check = [block[0] for block in block_hashes]
+        existing_query = await db.execute(select(db_code.BlockHash.block_height).where(db_code.BlockHash.block_height.in_(heights_to_check)))
+        existing_heights = set(existing_query.scalars().all())
+        new_blocks = [db_code.BlockHash(block_height=height, block_hash=hash) for height, hash in block_hashes if height not in existing_heights]
+        if new_blocks:
+            db.add_all(new_blocks)
+            try:
+                await db.commit()
+                logger.info(f"Successfully inserted {len(new_blocks)} new block hashes.")
+            except Exception as e:
+                await db.rollback()
+                logger.error(f"Error during bulk insert of block hashes: {str(e)}")
 
 async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_txid: str, burn_address: str):
     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
@@ -4127,7 +4129,9 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
         )
         db_transactions = db_transactions_result.all()
     total_credits_consumed = sum(tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
-    latest_db_block_height = max(tx.block_height for tx in db_transactions) if db_transactions else 0
+    async with db_code.Session() as db:
+        query_results = await db.execute(select(db_code.BlockHash.block_height))
+        latest_db_block_height = max(query_results.scalars().all())
     current_block_height = await get_current_pastel_block_height_func()
     if current_block_height > latest_db_block_height:
         logger.info(f"New blocks detected that aren't yet in the local database. Retrieving new burn transactions from block height {latest_db_block_height + 1:,} to {current_block_height:,}")
