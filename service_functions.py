@@ -40,7 +40,7 @@ from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
 import database_code as db_code
-from sqlmodel import select, delete, func, SQLModel
+from sqlmodel import select, delete, update, func, or_, SQLModel
 from sqlalchemy.exc import IntegrityError
 
 encryption_key = None
@@ -169,6 +169,7 @@ BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS = config.get("BURN_TRANSACTION_MAXIMUM_AGE_
 SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE", default=0.51, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE", default=0.85, cast=float)
 SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK = 1
+COIN = 100000 # patoshis in 1 PSL
 challenge_store = {}
 
 def parse_timestamp(timestamp_str):
@@ -3278,7 +3279,7 @@ async def process_inference_confirmation(inference_request_id: str, inference_co
         if matching_transaction_found:
             logger.info(f"Found correct inference request confirmation tracking transaction in burn address (with {num_confirmations} confirmation blocks so far)! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};")
             computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(inference_request.credit_pack_ticket_pastel_txid, burn_address)
-            logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address} tracking transactions from tracking address to burn address.")       
+            logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance:,} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} tracking transactions from tracking address to burn address.")       
             # Update the inference request status to "confirmed"
             inference_request.status = "confirmed"
             async with db_code.Session() as db:
@@ -3925,18 +3926,19 @@ async def create_transaction_task(transaction, burn_address):
         if stmt_output.scalars().first():
             return None  # Skip if transaction already exists in the database
         raw_tx = await rpc_connection.getrawtransaction(txid, 1)
-        if 'blockhash' not in raw_tx:
-            logger.error(f"Blockhash not found in transaction details for txid: {txid}")
-            return None
-        block_info = await rpc_connection.getblock(raw_tx['blockhash'])
-        block_height = block_info['height']
+        block_height = raw_tx.get('height', None)
         input_addresses = await gather_input_addresses(raw_tx['vin'])
         if len(input_addresses) == 1:
             tracking_address = next(iter(input_addresses))
             amount = sum(vout['value'] for vout in raw_tx['vout'] if burn_address in vout['scriptPubKey'].get('addresses', []))
             return db_code.BurnAddressTransaction(
-                txid=txid, block_height=block_height, burn_address=burn_address,
-                tracking_address=tracking_address, amount=amount)
+                txid=txid,
+                block_height=block_height,
+                burn_address=burn_address,
+                tracking_address=tracking_address,
+                amount=amount,
+                pending=block_height is None
+            )
         return None
 
 async def gather_input_addresses(vins):
@@ -4128,13 +4130,12 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
             .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
         )
         db_transactions = db_transactions_result.all()
-    total_credits_consumed = sum(tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
+    total_credits_consumed = sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
     async with db_code.Session() as db:
         query_results = await db.execute(select(db_code.BlockHash.block_height))
         latest_db_block_height = max(query_results.scalars().all())
     current_block_height = await get_current_pastel_block_height_func()
     if current_block_height > latest_db_block_height:
-        logger.info(f"New blocks detected that aren't yet in the local database. Retrieving new burn transactions from block height {latest_db_block_height + 1:,} to {current_block_height:,}")
         async with db_code.Session() as db:
             existing_transactions_query = select(db_code.BurnAddressTransaction)
             existing_transactions_result = await db.execute(existing_transactions_query)
@@ -4155,22 +4156,58 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
                 select(db_code.BurnAddressTransaction)
                 .where(db_code.BurnAddressTransaction.burn_address == burn_address)
                 .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-                .where(db_code.BurnAddressTransaction.block_height > latest_db_block_height)
+                .where(
+                    or_(
+                        db_code.BurnAddressTransaction.block_height > latest_db_block_height,
+                        db_code.BurnAddressTransaction.pending == True  # noqa: E712
+                    )
+                )
             )
             new_tracking_transactions = new_tracking_transactions_results.all()
-        total_credits_consumed += sum(tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_tracking_transactions)
-        async with db_code.Session() as db:
-            existing_block_hash_results = await db.exec( select(db_code.BlockHash) )
-            existing_block_hash_heights = [block_hash.block_height for block_hash in existing_block_hash_results.all()]
-        new_block_heights_to_get_block_hash_for = [height for height in range(1, current_block_height) if height not in existing_block_hash_heights]
-        logger.info(f"Now getting block hashes for {len(new_block_heights_to_get_block_hash_for):,} new block heights (from {new_block_heights_to_get_block_hash_for[0]:,} to {current_block_height:,}) and storing in the DB...")
-        await fetch_and_insert_block_hashes(new_block_heights_to_get_block_hash_for[0], current_block_height)
-        logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
+        total_credits_consumed += sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_tracking_transactions)
+        use_update_block_hashes = 0
+        if use_update_block_hashes:
+            async with db_code.Session() as db:
+                existing_block_hash_results = await db.exec( select(db_code.BlockHash) )
+                existing_block_hash_heights = [block_hash.block_height for block_hash in existing_block_hash_results.all()]
+            new_block_heights_to_get_block_hash_for = [height for height in range(1, current_block_height) if height not in existing_block_hash_heights]
+            logger.info(f"Now getting block hashes for {len(new_block_heights_to_get_block_hash_for):,} new block heights (from {new_block_heights_to_get_block_hash_for[0]:,} to {current_block_height:,}) and storing in the DB...")
+            await fetch_and_insert_block_hashes(new_block_heights_to_get_block_hash_for[0], current_block_height)
+            logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
     current_credit_balance = initial_credit_balance - total_credits_consumed
     number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
-    logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,}; Total credits consumed: {total_credits_consumed:,}; Current credit balance: {current_credit_balance:,}")
+    logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,}; Total credits consumed: {total_credits_consumed:,} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,}")
     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
 
+async def update_pending_transactions():
+    while True:
+        async with db_code.Session() as db:
+            # Query for pending transactions
+            pending_transactions_result = await db.exec(
+                select(db_code.BurnAddressTransaction)
+                .where(db_code.BurnAddressTransaction.pending == True)  # noqa: E712
+            )
+            pending_transactions = pending_transactions_result.all()
+        for transaction in pending_transactions:
+            try:
+                # Retrieve the raw transaction data from the RPC
+                raw_tx = await rpc_connection.getrawtransaction(transaction.txid, 1)
+                block_height = raw_tx.get('height', None)
+                if block_height is not None:
+                    # Update the transaction's block height and pending status
+                    async with db_code.Session() as db:
+                        stmt = (
+                            update(db_code.BurnAddressTransaction)
+                            .where(db_code.BurnAddressTransaction.txid == transaction.txid)
+                            .values(block_height=block_height, pending=False)
+                        )
+                        await db.exec(stmt)
+                        await db.commit()
+            except Exception as e:
+                logger.error(f"Error updating pending transaction {transaction.txid}: {str(e)}")
+        # Sleep for a certain interval before the next update
+        await asyncio.sleep(60)  # Adjust the interval as needed
+        
 async def update_inference_sn_reputation_score(supernode_pastelid: str, reputation_score: float) -> bool:
     try:
         # TODO: Implement the logic to update the inference SN reputation score
