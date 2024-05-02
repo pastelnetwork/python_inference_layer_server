@@ -3882,7 +3882,7 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
             raise ValueError("Unauthorized access to inference output results")
         return inference_output_result
 
-async def extract_transaction_details(decoded_tx_data, rpc_connection, burn_address):
+async def extract_transaction_details(decoded_tx_data, burn_address):
     tracking_address = None
     for vin in decoded_tx_data["vin"]:
         if "address" in vin:
@@ -3902,66 +3902,105 @@ async def process_transactions_in_chunks(transactions, chunk_size, burn_address)
         chunk = transactions[i:i + chunk_size]
         chunk_count += 1
         logger.info(f"Processing chunk {chunk_count} of {math.ceil(len(transactions) / chunk_size)}...")
-        successful_transaction_additions = 0
-        async with db_code.Session() as db:
-            for transaction in chunk:
-                txid = transaction['txid']
-                if transaction['category'] == 'receive' and transaction['amount'] > 0:
-                    raw_tx = await rpc_connection.getrawtransaction(txid, 1)  # Get the raw transaction data with verbose mode
-                    if 'blockhash' not in raw_tx:
-                        logger.error(f"Blockhash not found in transaction details for txid: {txid}")
-                        continue
-                    block_info = await rpc_connection.getblock(raw_tx['blockhash'])
-                    block_height = block_info['height']
-                    input_addresses = set()
-                    try:
-                        for vin in raw_tx['vin']:
-                            if 'txid' in vin:
-                                prev_raw_tx = await rpc_connection.getrawtransaction(vin['txid'], 1)
-                                prev_output = prev_raw_tx['vout'][vin['vout']]
-                                if 'scriptPubKey' in prev_output and 'addresses' in prev_output['scriptPubKey']:
-                                    input_addresses.update(prev_output['scriptPubKey']['addresses'])
-                        if len(input_addresses) == 1:
-                            tracking_address = next(iter(input_addresses))
-                            amount = sum(vout['value'] for vout in raw_tx['vout'] if burn_address in vout['scriptPubKey'].get('addresses', []))
-                            burn_transaction = db_code.BurnAddressTransaction(
-                                txid=txid,
-                                block_height=block_height,
-                                burn_address=burn_address,
-                                tracking_address=tracking_address,
-                                amount=amount
-                            )
-                            db.add(burn_transaction)
-                            await db.commit()
-                            successful_transaction_additions += 1
-                    except Exception as e:
-                        logger.error(f"Error processing transaction {txid}: {str(e)}")
-                        db.rollback()
-                else:
-                    logger.info(f"Skipping transaction {txid} as it already exists in the database.")
-            logger.info(f"Added {successful_transaction_additions} new burn transactions to the database successfully.")
-            _ = await db_code.consolidate_wal_data()
-        decoded_tx_data_list.extend(chunk)
+        # Create tasks for each transaction that needs processing
+        tasks = [create_transaction_task(transaction, burn_address) for transaction in chunk if transaction['category'] == 'receive' and transaction['amount'] > 0]
+        transactions_to_insert = await asyncio.gather(*tasks)
+        # Filter out None values and prepare to bulk insert
+        transactions_to_insert = [txn for txn in transactions_to_insert if txn]
+        if transactions_to_insert:
+            async with db_code.Session() as db:
+                db.add_all(transactions_to_insert)
+                await db.commit()
+                logger.info(f"Added {len(transactions_to_insert)} new burn transactions to the database successfully.")
+        await db_code.consolidate_wal_data()  # Consolidate WAL after processing each chunk
+        decoded_tx_data_list.extend(chunk)  # Optional: Keep track of processed chunks
     return decoded_tx_data_list
 
-async def full_rescan_burn_transactions():
+async def create_transaction_task(transaction, burn_address):
+    txid = transaction['txid']
     async with db_code.Session() as db:
-        # Check if there are any records in BurnAddressTransaction or BlockHash tables
-        burn_tx_exists = (await db.execute(select(db_code.BurnAddressTransaction).limit(1))).first()
-        block_hash_exists = (await db.execute(select(db_code.BlockHash).limit(1))).first()
-    if not burn_tx_exists and not block_hash_exists:
-        logger.info("No records found in database, proceeding with full rescan...")
+        # Check if transaction already exists
+        stmt = select(db_code.BurnAddressTransaction).where(db_code.BurnAddressTransaction.txid == txid)
+        stmt_output = await db.execute(stmt)
+        if stmt_output.scalars().first():
+            return None  # Skip if transaction already exists in the database
+        raw_tx = await rpc_connection.getrawtransaction(txid, 1)
+        if 'blockhash' not in raw_tx:
+            logger.error(f"Blockhash not found in transaction details for txid: {txid}")
+            return None
+        block_info = await rpc_connection.getblock(raw_tx['blockhash'])
+        block_height = block_info['height']
+        input_addresses = await gather_input_addresses(raw_tx['vin'])
+        if len(input_addresses) == 1:
+            tracking_address = next(iter(input_addresses))
+            amount = sum(vout['value'] for vout in raw_tx['vout'] if burn_address in vout['scriptPubKey'].get('addresses', []))
+            return db_code.BurnAddressTransaction(
+                txid=txid, block_height=block_height, burn_address=burn_address,
+                tracking_address=tracking_address, amount=amount)
+        return None
+
+async def gather_input_addresses(vins):
+    input_addresses = set()
+    tasks = [fetch_input_address(vin) for vin in vins if 'txid' in vin]
+    vin_results = await asyncio.gather(*tasks)
+    for addresses in vin_results:
+        input_addresses.update(addresses)
+    return input_addresses
+
+async def fetch_input_address(vin):
+    prev_tx_details = await rpc_connection.getrawtransaction(vin['txid'], 1)
+    prev_output = prev_tx_details['vout'][vin['vout']]
+    return prev_output['scriptPubKey'].get('addresses', []) if 'scriptPubKey' in prev_output and 'addresses' in prev_output['scriptPubKey'] else []
+
+async def full_rescan_burn_transactions():
+    async with db_code.Session() as db: # Check if there are any records in BurnAddressTransaction or BlockHash tables
+        burn_address_query_results = await db.execute(select(db_code.BurnAddressTransaction).limit(1))
+        burn_tx_exists = burn_address_query_results.first()
+        block_hash_query_results = await db.execute(select(db_code.BlockHash).limit(1))
+        block_hash_exists = block_hash_query_results.first()
+    if not burn_tx_exists:
+        logger.info("No burn transaction records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
-        transactions = await rpc_connection.listtransactions("*", 1000000, 0)  # List all transactions up to the maximum
-        burn_transactions = [tx for tx in transactions if tx.get("address") == burn_address and tx.get("category") == "receive"]
+        first_block_hash = await rpc_connection.getblockhash(0)
+        listsinceblock_output = await rpc_connection.listsinceblock(first_block_hash, 1, True)
+        all_transactions = listsinceblock_output["transactions"]        
+        burn_transactions = [tx for tx in all_transactions if tx.get("address") == burn_address]
         chunk_size = 100  # Adjust the chunk size as needed
         decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, burn_address)
         logger.info(f"Decoded {len(decoded_tx_data_list):,} new burn transactions in total!")
-        # Fetch and store block hashes for all processed blocks using the optimized function
+    if not block_hash_exists:
+        logger.info("No block hash records found in database, proceeding with full rescan...")
+        current_block_height = await get_current_pastel_block_height_func()
+        logger.info(f"Now getting block hashes for {len(decoded_tx_data_list):,} new block heights (from {current_block_height - len(decoded_tx_data_list) + 1:,} to {current_block_height:,}) and storing in the DB...")
         await fetch_block_hashes_and_bulk_insert(0, current_block_height, 100)
         logger.info("Block hashes updated successfully.")
     else:
         logger.info("Existing records found. Skipping full rescan.")
+
+async def fetch_all_mnid_tickets_details():
+    mnid_response = await rpc_connection.tickets('list', 'id', 'mn')
+    if mnid_response is None or len(mnid_response) == 0:
+        return []
+    tickets_data = {ticket['txid']: ticket for ticket in mnid_response}
+    async with db_code.Session() as session:
+        existing_txids = await session.exec(select(db_code.MNIDTicketDetails.txid).where(db_code.MNIDTicketDetails.txid.in_(tickets_data.keys())))
+        existing_txids_set = set(txid[0] for txid in existing_txids.all())
+        new_tickets_to_insert = []
+        for txid, ticket in tickets_data.items():
+            if txid not in existing_txids_set:
+                new_ticket = db_code.MNIDTicketDetails(
+                    txid=txid,
+                    pastel_id=ticket['ticket']['pastelID'],
+                    address=ticket['ticket']['address'],
+                    pq_key=ticket['ticket']['pq_key'],
+                    block_height=ticket['height'],
+                    timestamp=datetime.utcfromtimestamp(int(ticket['ticket']['timeStamp']))
+                )
+                new_tickets_to_insert.append(new_ticket)
+        if new_tickets_to_insert:
+            session.add_all(new_tickets_to_insert)
+            await session.commit()
+    return new_tickets_to_insert
 
 async def detect_chain_reorg_and_rescan():
     while True:
@@ -3989,9 +4028,11 @@ async def fetch_block_hashes_and_bulk_insert(start_height, end_height, batch_siz
         tasks = [asyncio.create_task(rpc_connection.getblockhash(height)) for height in height_batch]
         batch_hashes = await asyncio.gather(*tasks)
         all_block_hashes.extend([(height, block_hash) for height, block_hash in zip(height_batch, batch_hashes) if block_hash])
+        logger.info(f"Fetched {len(batch_hashes):,} block hashes for {len(height_batch):,} heights in total.")
     if all_block_hashes:
         await bulk_insert_block_hashes(all_block_hashes)
-
+        logger.info(f"Bulk inserted {len(all_block_hashes):,} block hashes in total.")
+                    
 async def bulk_insert_block_hashes(block_hashes):
     async with db_code.Session() as db:
         block_hash_objects = []

@@ -252,32 +252,6 @@ class ReputationScoreUpdate(SQLModel):
             }
         }
             
-class MasternodeTransaction(SQLModel, table=True):
-    id: str = Field(primary_key=True, index=True)
-    txid: str = Field(index=True)
-    vout: int
-    receiving_address: str = Field(index=True)
-    block_height: int = Field(index=True)
-    block_datetime: datetime
-    moved: bool = Field(default=False)
-    additional_data: dict = Field(sa_column=Column(JSON), default={})
-    __table_args__ = (
-        UniqueConstraint("txid", "vout", name="unique_txid_vout"),
-    )
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "id": "txid-vout",
-                "txid": "0x1234...",
-                "vout": 0,
-                "receiving_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
-                "block_height": 123456,
-                "block_datetime": "2023-06-01T12:00:00Z",
-                "moved": False,
-                "additional_data": {}
-            }
-        }
-        
 class BlockHash(SQLModel, table=True):
     id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     block_height: int = Field(index=True, unique=True)
@@ -312,6 +286,27 @@ class BurnAddressTransaction(SQLModel, table=True):
                 "timestamp": "2023-06-01T12:00:00Z"
             }
         }                
+        
+class MNIDTicketDetails(SQLModel, table=True):
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    txid: str = Field(index=True, unique=True)
+    pastel_id: str
+    address: str
+    pq_key: str
+    block_height: int
+    timestamp: datetime
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "txid": "a55a83125475d78a76d9c9f406b111b35609a4f25855bacfe62fb9db8d1bb340",
+                "pastel_id": "jXanJYsUZLLm54tgKvDMjrZrHMdrKB8X3itB1hvDoaD7fUp23D6LDPxbFcUrAMwRUdTrBPzS6oKpfpTSvBbot4",
+                "address": "PtZt2Lqe8aKypGFhUckwFf22EPyZSpbPBep",
+                "pq_key": "ExxdG2AkNG...<abbreviated>...1CbkB867XBNuRuWCmEK",
+                "block_height": 319474,
+                "timestamp": "2023-05-01T12:00:00Z"
+            }
+        }        
 #_________________________________________________________________________________________
 # Credit pack related models:
 

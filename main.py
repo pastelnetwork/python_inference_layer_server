@@ -12,8 +12,8 @@ import uvloop
 from uvicorn import Config, Server
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from database_code import initialize_db
-from service_functions import monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value, detect_chain_reorg_and_rescan, full_rescan_burn_transactions
-from setup_swiss_army_llama import check_and_setup_swiss_army_llama #, setup_background_services
+from service_functions import monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value, detect_chain_reorg_and_rescan, full_rescan_burn_transactions, fetch_all_mnid_tickets_details
+from setup_swiss_army_llama import check_and_setup_swiss_army_llama
 from blockchain_ticket_storage import process_blocks_for_masternode_transactions
 
 config = DecoupleConfig(RepositoryEnv('.env'))
@@ -75,11 +75,10 @@ async def startup():
         encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
         decrypt_sensitive_fields() # Now decrypt sensitive fields        
         asyncio.create_task(monitor_new_messages())  # Create a background task
-        # asyncio.create_task(process_blocks_for_masternode_transactions())  # Create a background task
         asyncio.create_task(detect_chain_reorg_and_rescan())
         asyncio.create_task(full_rescan_burn_transactions())
+        asyncio.create_task(fetch_all_mnid_tickets_details())
         asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
-        # asyncio.create_task(asyncio.to_thread(setup_background_services, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Setup background services
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         
