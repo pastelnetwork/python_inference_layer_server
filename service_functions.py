@@ -3972,7 +3972,7 @@ async def full_rescan_burn_transactions():
         logger.info("No block hash records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
         logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        await fetch_block_hashes_and_bulk_insert(0, current_block_height, 100)
+        await fetch_and_insert_block_hashes(0, current_block_height, 100)
         logger.info("Block hashes updated successfully.")
     else:
         logger.info("Existing records found. Skipping full rescan.")
@@ -4059,65 +4059,59 @@ async def detect_chain_reorg_and_rescan():
                 await full_rescan_burn_transactions()
         await asyncio.sleep(6000)  # Check for chain reorg every 6000 seconds
                 
-async def fetch_block_hashes_and_bulk_insert(start_height, end_height, batch_size=100):
-    # Adjust start_height to ensure you always get the previous block, unless starting from the genesis block
-    adjusted_start = max(start_height - 1, 0)
-    current_height = adjusted_start
-    total_inserted = 0  # Total number of block hashes inserted
-    batch_counter = 0   # Counts the number of hashes inserted since the last log
-    # Initialize the process by fetching the first block explicitly if starting from the genesis block
-    if start_height == 0:
-        current_block = await rpc_connection.getblock(0)
-        await bulk_insert_block_hashes([(0, current_block['hash'])])
-        total_inserted += 1
-        batch_counter += 1
-        current_height += 1  # Adjust to start from the next relevant block
+async def fetch_and_insert_block_hashes(start_height, end_height, batch_size=100):
+    current_height = max(start_height - 1, 0)
+    total_inserted = 0
+    batch_counter = 0
     while current_height <= end_height:
-        try: # Fetch the block data
-            current_block = await rpc_connection.getblock(current_height)
-            # Prepare the list of block hashes to insert
-            blocks_to_insert = []
-            # Append the previous block hash if it's within the range
-            if current_height > start_height and 'previousblockhash' in current_block:
-                blocks_to_insert.append((current_height - 1, current_block['previousblockhash']))
-            # Current block hash
-            blocks_to_insert.append((current_height, current_block['hash']))
-            # Next block hash - only if it does not exceed end_height
-            if current_height < end_height and 'nextblockhash' in current_block:
-                blocks_to_insert.append((current_height + 1, current_block['nextblockhash']))
-            # Insert the collected hashes into the database
-            if blocks_to_insert:
-                await bulk_insert_block_hashes(blocks_to_insert)
-                total_inserted += len(blocks_to_insert)
-                batch_counter += len(blocks_to_insert)
-            # Log progress every 500 inserts
-            if batch_counter >= 500:
-                blocks_left = end_height - current_height + 1
-                logger.info(f"Fetched {batch_counter:,} block hashes; {total_inserted:,} total block hashes in total, leaving {blocks_left:,} blocks left to process...")
-                batch_counter = 0  # Reset the batch counter after logging
-            # Increment to skip the next block since it's already handled
-            current_height += 2
-        except Exception as e:
-            logger.error(f"Error fetching or inserting block hash for block at height {current_height}: {e}")
-            # Move to the next block in case of failure
-            current_height += 1
-                    
+        tasks = [asyncio.create_task(rpc_connection.getblock(h, 1)) for h in range(current_height, min(current_height + batch_size, end_height + 1), 3)]
+        results = await asyncio.gather(*tasks)
+        blocks_to_insert = []
+        # Fetch unique heights from the results to prevent duplicates
+        unique_heights = set()
+        for result in results:
+            if result:
+                unique_heights.update([
+                    result['height'] - 1 if 'previousblockhash' in result and result['height'] > start_height else None,
+                    result['height'],
+                    result['height'] + 1 if 'nextblockhash' in result and result['height'] < end_height else None
+                ])
+        # Filter out None values and check database for existing heights
+        unique_heights.discard(None)
+        async with db_code.Session() as db:
+            existing_heights = {h[0] for h in (await db.execute(select(db_code.BlockHash.block_height).where(db_code.BlockHash.block_height.in_(unique_heights)))).scalars().all()}
+        # Prepare insertable blocks considering existing heights
+        for result in results:
+            if result:
+                if 'previousblockhash' in result and result['height'] - 1 not in existing_heights:
+                    blocks_to_insert.append((result['height'] - 1, result['previousblockhash']))
+                if result['height'] not in existing_heights:
+                    blocks_to_insert.append((result['height'], result['hash']))
+                if 'nextblockhash' in result and result['height'] + 1 not in existing_heights:
+                    blocks_to_insert.append((result['height'] + 1, result['nextblockhash']))
+        # Insert blocks
+        if blocks_to_insert:
+            await bulk_insert_block_hashes(blocks_to_insert)
+            inserted_count = len(blocks_to_insert)
+            total_inserted += inserted_count
+            batch_counter += inserted_count
+        # Log progress
+        if batch_counter >= 500:
+            blocks_left = end_height - current_height
+            logger.info(f"Fetched and inserted {batch_counter:,} block hashes; {total_inserted:,} total block hashes in total, {blocks_left:,} blocks left to process...")
+            batch_counter = 0
+        current_height += batch_size * 3  # Skip ahead by 3x batch size to optimize RPC calls
+
 async def bulk_insert_block_hashes(block_hashes):
     async with db_code.Session() as db:
-        block_hash_objects = []
-        for height, block_hash in block_hashes:
-            if not await db.execute(select(db_code.BlockHash).where(db_code.BlockHash.block_height == height, db_code.BlockHash.block_hash == block_hash)).scalars().first():
-                block_hash_objects.append(db_code.BlockHash(block_height=height, block_hash=block_hash))
-        if block_hash_objects:
-            db.add_all(block_hash_objects)
-            try:
-                await db.commit()
-            except Exception as e:
-                logger.error(f"Error during bulk insert of block hashes: {str(e)}")
-                await db.rollback()
-            else:
-                logger.info(f"Successfully inserted {len(block_hash_objects)} block hashes.")
-        
+        db.add_all([db_code.BlockHash(block_height=height, block_hash=hash) for height, hash in block_hashes])
+        try:
+            await db.commit()
+            await db_code.consolidate_wal_data()  # Consolidate WAL after processing each chunk
+        except Exception as e:
+            await db.rollback()
+            logger.error(f"Error during bulk insert of block hashes: {str(e)}")
+
 async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_txid: str, burn_address: str):
     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
     credit_pack_purchase_request_response_object = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
@@ -4166,7 +4160,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
             existing_block_hash_heights = [block_hash.block_height for block_hash in existing_block_hash_results.all()]
         new_block_heights_to_get_block_hash_for = [height for height in range(1, current_block_height) if height not in existing_block_hash_heights]
         logger.info(f"Now getting block hashes for {len(new_block_heights_to_get_block_hash_for):,} new block heights (from {new_block_heights_to_get_block_hash_for[0]:,} to {current_block_height:,}) and storing in the DB...")
-        await fetch_block_hashes_and_bulk_insert(new_block_heights_to_get_block_hash_for[0], current_block_height)
+        await fetch_and_insert_block_hashes(new_block_heights_to_get_block_hash_for[0], current_block_height)
         logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
     current_credit_balance = initial_credit_balance - total_credits_consumed
     number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
