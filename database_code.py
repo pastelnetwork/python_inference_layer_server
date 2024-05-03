@@ -520,9 +520,9 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     request_response_pastel_block_height: int
     credit_purchase_request_response_message_version_string: str
     responding_supernode_pastelid: str = Field(index=True)
+    list_of_potentially_agreeing_supernodes: str = Field(sa_column=Column(JSON))
     list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms: str = Field(sa_column=Column(JSON))
-    list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash: str = Field(sa_column=Column(JSON))
-    list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    agreeing_supernodes_signatures_dict: str = Field(sa_column=Column(JSON))
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(unique=True, index=True)
     responding_supernode_signature_on_credit_pack_purchase_request_response_hash: str
     class Config:
@@ -538,9 +538,9 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
                 "request_response_pastel_block_height": 123457,
                 "credit_purchase_request_response_message_version_string": "1.0",
                 "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "list_of_potentially_agreeing_supernodes": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP"],
                 "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP"],
-                "list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash": ["0x1234...", "0x5678..."],
-                "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json": ["0xabcd...", "0xef01..."],
+                "agreeing_supernodes_signatures_dict": "['jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_signature': '0x5678...'}, 'jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_signature': '0x5678...'}]",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x9abc...",
                 "responding_supernode_signature_on_credit_pack_purchase_request_response_hash": "0xdef0..."
             }
