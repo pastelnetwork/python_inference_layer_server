@@ -1407,18 +1407,6 @@ async def check_credit_pack_purchase_request_status(credit_pack_purchase_request
                     else:
                         return "failed"
                     
-def transform_credit_pack_purchase_request_response(result: dict) -> dict:
-    transformed_result = result.copy()
-    fields_to_convert = [
-        "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms",
-        "list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash",
-        "list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json"
-    ]
-    for field in fields_to_convert:
-        if field in transformed_result:
-            transformed_result[field] = json.dumps(transformed_result[field])
-    return transformed_result                    
-
 async def calculate_preliminary_psl_price_per_credit():
     try:
         # Get the current PSL market price in USD
@@ -1590,11 +1578,6 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
             decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
             if decoded_reconstructed_file_data == credit_pack_purchase_request_response_json:
                 logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
-                use_test_reconstruction_of_object_from_json = 0
-                if use_test_reconstruction_of_object_from_json:
-                    credit_pack_purchase_request_response_json_transformed = transform_credit_pack_purchase_request_response(json.loads(credit_pack_purchase_request_response_json))
-                    credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_json_transformed)
-                    logger.info(f"Reconstructed credit pack ticket data: {credit_pack_purchase_request_response}")
             else:
                 logger.error("Failed to verify that the stored blockchain ticket data can be reconstructed exactly!")
                 storage_validation_error_string = "Failed to verify that the stored blockchain ticket data can be reconstructed exactly! Difference: " + str(set(decoded_reconstructed_file_data).symmetric_difference(set(credit_pack_purchase_request_response_json)))
@@ -1926,7 +1909,16 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
         price_agreement_request_responses = await send_price_agreement_request_to_supernodes(price_agreement_request, potentially_agreeing_supernodes)
         # Process the price agreement request responses
         valid_price_agreement_request_responses = []
+        use_manual_signature_validation = 0
         for current_price_agreement_response in price_agreement_request_responses:
+            if use_manual_signature_validation:
+                agreeing_supernode_pastelid = current_price_agreement_response.responding_supernode_pastelid
+                sha3_256_hash_of_price_agreement_request_response_fields = current_price_agreement_response.sha3_256_hash_of_price_agreement_request_response_fields
+                responding_supernode_signature_on_price_agreement_request_response_hash = current_price_agreement_response.responding_supernode_signature_on_price_agreement_request_response_hash
+                is_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, sha3_256_hash_of_price_agreement_request_response_fields, responding_supernode_signature_on_price_agreement_request_response_hash)
+                if not is_signature_valid:
+                    logger.warning(f"Error validating price agreement request response signature from supernode {current_price_agreement_response.responding_supernode_pastelid}")
+                    continue
             response_validation_errors = await validate_credit_pack_ticket_message_data_func(current_price_agreement_response)
             if not response_validation_errors:
                 valid_price_agreement_request_responses.append(current_price_agreement_response)
@@ -2016,9 +2008,12 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             request_response_pastel_block_height=await get_current_pastel_block_height_func(),
             credit_purchase_request_response_message_version_string="1.0",
             responding_supernode_pastelid=MY_PASTELID,
-            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms=list_of_agreeing_supernodes,
-            list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash=list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash,
-            list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json=list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json,
+            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms=json.dumps(list_of_agreeing_supernodes),
+            list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash=json.dumps(list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash),
+            list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json=json.dumps(list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json),
+            # list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms=list_of_agreeing_supernodes,
+            # list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash=list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash,
+            # list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json=list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json,
             sha3_256_hash_of_credit_pack_purchase_request_response_fields="",
             responding_supernode_signature_on_credit_pack_purchase_request_response_hash=""
         )
@@ -2449,31 +2444,11 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         # Retrieve the credit pack ticket data from the blockchain
         reconstructed_file_data = await retrieve_data_from_blockchain(credit_pack_ticket_txid)
         decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
-        credit_pack_purchase_request_response_json_transformed = transform_credit_pack_purchase_request_response(json.loads(decoded_reconstructed_file_data))
-        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_json_transformed)
+        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**decoded_reconstructed_file_data)
         validation_results = {
             "credit_pack_ticket_is_valid": True,
             "validation_checks": []
         }
-        active_supernodes_count, active_supernodes = await fetch_active_supernodes_count_and_details(credit_pack_purchase_request_response.request_response_pastel_block_height)
-        # Validate the signatures
-        for agreeing_supernode_pastelid, signature in zip(json.loads(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms), json.loads(credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json)):
-            #First check if the pastelid was a valid supernode at the time:
-            list_of_active_supernode_pastelids = [x["pastel_id"] for x in active_supernodes]
-            agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height = agreeing_supernode_pastelid in list_of_active_supernode_pastelids
-            validation_results["validation_checks"].append({
-                "check_name": f"Agreeing supernode with pastelid {agreeing_supernode_pastelid} was in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}",
-                "is_valid": agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height
-            })            
-            if not agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height:
-                validation_results["credit_pack_ticket_is_valid"] = False
-            is_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json, signature)
-            validation_results["validation_checks"].append({
-                "check_name": f"Signature validation for agreeing supernode {agreeing_supernode_pastelid}",
-                "is_valid": is_signature_valid
-            })
-            if not is_signature_valid:
-                validation_results["credit_pack_ticket_is_valid"] = False
         # Validate the hashes
         computed_hash = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_purchase_request_response)
         is_hash_valid = computed_hash == credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields
@@ -2496,6 +2471,41 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         })
         if not (matching_transaction_found or exceeding_transaction_found):
             validation_results["credit_pack_ticket_is_valid"] = False
+        active_supernodes_count, active_supernodes = await fetch_active_supernodes_count_and_details(credit_pack_purchase_request_response.request_response_pastel_block_height)
+        # Validate the signatures
+        for agreeing_supernode_pastelid, signature in zip(json.loads(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms), json.loads(credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json)):
+            # First check if the pastelid was a valid supernode at the time:
+            list_of_active_supernode_pastelids = [x["pastel_id"] for x in active_supernodes]
+            agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height = agreeing_supernode_pastelid in list_of_active_supernode_pastelids
+            validation_results["validation_checks"].append({
+                "check_name": f"Agreeing supernode with pastelid {agreeing_supernode_pastelid} was in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}",
+                "is_valid": agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height
+            })
+            if not agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height:
+                validation_results["credit_pack_ticket_is_valid"] = False
+            logger.info(f"Verifying signature for agreeing supernode {agreeing_supernode_pastelid}")
+            logger.info(f"Message to verify: {credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_fields}")
+            logger.info(f"Signature: {signature}")
+            is_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json, signature)
+            logger.info(f"Signature validation result: {is_signature_valid}")
+            validation_results["validation_checks"].append({
+                "check_name": f"Signature validation for agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request fields hash",
+                "is_valid": is_signature_valid
+            })
+            if not is_signature_valid:
+                validation_results["credit_pack_ticket_is_valid"] = False
+        for agreeing_supernode_pastelid, signature in zip(json.loads(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms), json.loads(credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_price_agreement_request_response_hash)):
+            logger.info(f"Verifying signature for agreeing supernode {agreeing_supernode_pastelid}")
+            logger.info(f"Message to verify: {credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields}")
+            logger.info(f"Signature: {signature}")
+            is_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields, signature)
+            logger.info(f"Signature validation result: {is_signature_valid}")
+            validation_results["validation_checks"].append({
+                "check_name": f"Signature validation for agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request response hash",
+                "is_valid": is_signature_valid
+            })
+            if not is_signature_valid:
+                validation_results["credit_pack_ticket_is_valid"] = False
         # Validate the agreeing supernodes
         num_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
         agreeing_percentage = num_agreeing_supernodes / active_supernodes_count
@@ -3252,7 +3262,7 @@ async def check_burn_address_for_tracking_transaction(
                         else:
                             transaction_block_height = 0
                         if ((num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK) and transaction_block_height <= max_block_height:
-                            logger.info(f"Matching confirmed transaction found with {num_confirmations} confirmation blocks, greater than or equal to the required confirmation blocks of {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION}!")
+                            logger.info(f"Matching confirmed transaction found with {num_confirmations:,} confirmation blocks, greater than or equal to the required confirmation blocks of {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION}!")
                             return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
                         else:
                             logger.info(f"Matching unconfirmed transaction found! Waiting for it to be mined in a block with at least {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION} confirmation blocks! (Currently it has only {num_confirmations} confirmation blocks)")
