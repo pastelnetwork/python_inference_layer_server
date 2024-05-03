@@ -1429,7 +1429,7 @@ async def calculate_preliminary_psl_price_per_credit():
         cost_per_credit_psl = cost_per_credit_usd / psl_price_usd
         # Round the cost per credit to the nearest 0.1
         rounded_cost_per_credit_psl = round(cost_per_credit_psl, 1)
-        logger.info(f"Calculated preliminary price per credit: {rounded_cost_per_credit_psl:.1f} PSL")
+        logger.info(f"Calculated preliminary price per credit: {rounded_cost_per_credit_psl:,.1f} PSL")
         return rounded_cost_per_credit_psl
     except (ValueError, ZeroDivisionError) as e:
         logger.error(f"Error calculating preliminary price per credit: {str(e)}")
@@ -1445,9 +1445,9 @@ async def determine_agreement_with_proposed_price(proposed_psl_price_per_credit:
         max_acceptable_price = local_price_per_credit * (1.0 + MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING)
         # Determine if the proposed price is within the acceptable range
         agree_with_proposed_price = min_acceptable_price <= proposed_psl_price_per_credit <= max_acceptable_price
-        logger.info(f"Proposed price per credit: {proposed_psl_price_per_credit:.1f} PSL")
-        logger.info(f"Local price per credit: {local_price_per_credit:.1f} PSL")
-        logger.info(f"Acceptable price range: [{min_acceptable_price:.1f}, {max_acceptable_price:.1f}] PSL")
+        logger.info(f"Proposed price per credit: {proposed_psl_price_per_credit:,.1f} PSL")
+        logger.info(f"Local price per credit: {local_price_per_credit:,.1f} PSL")
+        logger.info(f"Acceptable price range: [{min_acceptable_price:,.1f}, {max_acceptable_price:,.1f}] PSL")
         logger.info(f"Agreement with proposed price: {agree_with_proposed_price}")
         return agree_with_proposed_price
     except Exception as e:
@@ -2455,8 +2455,18 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             "credit_pack_ticket_is_valid": True,
             "validation_checks": []
         }
+        active_supernodes_count, active_supernodes = await fetch_active_supernodes_count_and_details(credit_pack_purchase_request_response.request_response_pastel_block_height)
         # Validate the signatures
-        for agreeing_supernode_pastelid, signature in zip(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms, credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json):
+        for agreeing_supernode_pastelid, signature in zip(json.loads(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms), json.loads(credit_pack_purchase_request_response.list_of_agreeing_supernode_pastelids_signatures_on_credit_pack_purchase_request_fields_json)):
+            #First check if the pastelid was a valid supernode at the time:
+            list_of_active_supernode_pastelids = [x["pastel_id"] for x in active_supernodes]
+            agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height = agreeing_supernode_pastelid in list_of_active_supernode_pastelids
+            validation_results["validation_checks"].append({
+                "check_name": f"Agreeing supernode with pastelid {agreeing_supernode_pastelid} was in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}",
+                "is_valid": agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height
+            })            
+            if not agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height:
+                validation_results["credit_pack_ticket_is_valid"] = False
             is_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json, signature)
             validation_results["validation_checks"].append({
                 "check_name": f"Signature validation for agreeing supernode {agreeing_supernode_pastelid}",
@@ -2475,7 +2485,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             validation_results["credit_pack_ticket_is_valid"] = False
         # Validate the payment
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_transaction(
-            credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
+            None,
             credit_pack_purchase_request_response.credit_usage_tracking_psl_address,
             credit_pack_purchase_request_response.proposed_total_cost_of_credit_pack_in_psl,
             credit_pack_purchase_request_response.request_response_pastel_block_height
@@ -2488,10 +2498,8 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             validation_results["credit_pack_ticket_is_valid"] = False
         # Validate the agreeing supernodes
         num_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
-        # total_supernodes = len(await get_all_supernode_pastelids())
-        total_supernodes = 10
-        agreeing_percentage = num_agreeing_supernodes / total_supernodes #TODO: Fix this
-        is_agreeing_percentage_valid = agreeing_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE
+        agreeing_percentage = num_agreeing_supernodes / active_supernodes_count
+        is_agreeing_percentage_valid = agreeing_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE*SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE
         validation_results["validation_checks"].append({
             "check_name": "Agreeing supernodes percentage validation",
             "is_valid": is_agreeing_percentage_valid,
@@ -3120,11 +3128,20 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         if detected_data_type == "txt":
             input_data = input_data_binary.decode("utf-8")
         proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, input_data)
+        # Check if the credit pack is valid:
+        validation_results = await validate_existing_credit_pack_ticket(credit_pack_ticket_pastel_txid)
+        if not validation_results["credit_pack_ticket_is_valid"]:
+            logger.warning(f"Invalid credit pack ticket: {validation_results['validation_checks']}")
+            return False, 0, 0
+        else:
+            logger.info(f"Credit pack ticket with txid {credit_pack_ticket_pastel_txid} passed all validation checks: {validation_results['validation_checks']}")
         # Check if the credit pack has sufficient credits for the request
         current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_pastel_txid, burn_address)
         if proposed_cost_in_credits >= current_credit_balance:
             logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {current_credit_balance}")
             return False, proposed_cost_in_credits, current_credit_balance
+        else:
+            logger.info(f"Credit pack ticket has sufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {current_credit_balance}")
         # Calculate the remaining credits after the request
         remaining_credits_after_request = current_credit_balance - proposed_cost_in_credits
         return True, proposed_cost_in_credits, remaining_credits_after_request
@@ -3184,7 +3201,7 @@ async def check_burn_address_for_tracking_transaction(
     burn_address: str,
     tracking_address: str,
     expected_amount: float,
-    txid: str,
+    txid: Optional[str],
     max_block_height: int,
     max_retries: int = 10,
     initial_retry_delay: int = 25
@@ -3194,60 +3211,79 @@ async def check_burn_address_for_tracking_transaction(
     retry_delay = initial_retry_delay
     total_amount_to_burn_address = 0.0
     while try_count < max_retries:
-        # Retrieve and decode the transaction details using the txid
-        if len(txid) > 0:
-            decoded_tx_data = await get_and_decode_raw_transaction(txid)
-            if decoded_tx_data:
-                # Check if the transaction matches the specified criteria
-                if any(vout["scriptPubKey"].get("addresses", [None])[0] == burn_address for vout in decoded_tx_data["vout"]):
-                    # Calculate the total amount sent to the burn address in the transaction
-                    total_amount_to_burn_address = sum(
-                        vout["value"] for vout in decoded_tx_data["vout"]
-                        if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address
-                    )
-                    if total_amount_to_burn_address == expected_amount:
-                        # Retrieve the transaction details using gettransaction RPC method
-                        tx_info = await rpc_connection.gettransaction(txid)
-                        if tx_info:
-                            num_confirmations = tx_info.get("confirmations", 0)
-                            transaction_block_hash = tx_info.get("blockhash", None)
-                            if transaction_block_hash:
-                                transaction_block_height = await get_block_height_from_block_hash(transaction_block_hash)
-                            else:
-                                transaction_block_height = 0
-                            if ((num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK) and transaction_block_height <= max_block_height:
-                                logger.info(f"Matching confirmed transaction found with {num_confirmations} confirmation blocks, greater than or equal to the required confirmation blocks of {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION}!")
-                                return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
-                            else:
-                                logger.info(f"Matching unconfirmed transaction found! Waiting for it to be mined in a block with at least {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION} confirmation blocks! (Currently it has only {num_confirmations} confirmation blocks)")
-                                return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
-                    elif total_amount_to_burn_address >= expected_amount:
-                        # Retrieve the transaction details using gettransaction RPC method
-                        tx_info = await rpc_connection.gettransaction(txid)
-                        if tx_info:
-                            num_confirmations = tx_info.get("confirmations", 0)
-                            transaction_block_hash = tx_info.get("blockhash", None)
-                            if transaction_block_hash:
-                                transaction_block_height = await get_block_height_from_block_hash(transaction_block_hash)
-                            else:
-                                transaction_block_height = 0                                                            
-                            if ((num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK) and transaction_block_height <= max_block_height:
-                                logger.info(f"Matching confirmed transaction was not found, but we did find a confirmed (with {num_confirmations} confirmation blocks) burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
-                                return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address
-                            else:
-                                logger.info(f"Matching unconfirmed transaction was not found, but we did find an unconfirmed burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
-                                return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address                        
-                    else:
-                        logger.warning(f"Transaction {txid} found, but the amount sent to the burn address ({total_amount_to_burn_address}) is less than the expected amount ({expected_amount})")
+        if txid is None: # If txid is not provided, search for transactions using listsinceblock RPC method
+            start_block_hash = await rpc_connection.getblockhash(0)
+            listsinceblock_output = await rpc_connection.listsinceblock(start_block_hash, 1, True)
+            all_transactions = listsinceblock_output["transactions"]
+            all_burn_transactions = [
+                tx for tx in all_transactions
+                if tx.get("address") == burn_address and tx.get("category") == "receive"
+            ]
+            all_burn_transactions_df = pd.DataFrame.from_records(all_burn_transactions)
+            all_burn_transactions_df_filtered = all_burn_transactions_df[all_burn_transactions_df['amount']==expected_amount]
+            if len(all_burn_transactions_df_filtered)==1:
+                txid = all_burn_transactions_df_filtered['txid'].values[0]
+            else:
+                latest_block_height = await get_current_pastel_block_height_func()
+                min_confirmations = latest_block_height - max_block_height
+                max_confirmations = latest_block_height - (max_block_height - MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET)
+                all_burn_transactions_df_filtered2 = all_burn_transactions_df_filtered[all_burn_transactions_df_filtered['confirmations']<=max_confirmations]
+                all_burn_transactions_df_filtered3 = all_burn_transactions_df_filtered2[all_burn_transactions_df_filtered2['confirmations']>=min_confirmations]
+                if len(all_burn_transactions_df_filtered3) > 1:
+                    logger.warning(f"Multiple transactions found with the same amount and confirmations, but the most recent one is {all_burn_transactions_df_filtered3['txid'].values[0]}")
+                txid = all_burn_transactions_df_filtered3['txid'].values[0]
+        decoded_tx_data = await get_and_decode_raw_transaction(txid)
+        if decoded_tx_data:
+            # Check if the transaction matches the specified criteria
+            if any(vout["scriptPubKey"].get("addresses", [None])[0] == burn_address for vout in decoded_tx_data["vout"]):
+                # Calculate the total amount sent to the burn address in the transaction
+                total_amount_to_burn_address = sum(
+                    vout["value"] for vout in decoded_tx_data["vout"]
+                    if vout["scriptPubKey"].get("addresses", [None])[0] == burn_address
+                )
+                if total_amount_to_burn_address == expected_amount:
+                    # Retrieve the transaction details using gettransaction RPC method
+                    tx_info = await rpc_connection.gettransaction(txid)
+                    if tx_info:
+                        num_confirmations = tx_info.get("confirmations", 0)
+                        transaction_block_hash = tx_info.get("blockhash", None)
+                        if transaction_block_hash:
+                            transaction_block_height = await get_block_height_from_block_hash(transaction_block_hash)
+                        else:
+                            transaction_block_height = 0
+                        if ((num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK) and transaction_block_height <= max_block_height:
+                            logger.info(f"Matching confirmed transaction found with {num_confirmations} confirmation blocks, greater than or equal to the required confirmation blocks of {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION}!")
+                            return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
+                        else:
+                            logger.info(f"Matching unconfirmed transaction found! Waiting for it to be mined in a block with at least {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION} confirmation blocks! (Currently it has only {num_confirmations} confirmation blocks)")
+                            return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
+                elif total_amount_to_burn_address >= expected_amount:
+                    # Retrieve the transaction details using gettransaction RPC method
+                    tx_info = await rpc_connection.gettransaction(txid)
+                    if tx_info:
+                        num_confirmations = tx_info.get("confirmations", 0)
+                        transaction_block_hash = tx_info.get("blockhash", None)
+                        if transaction_block_hash:
+                            transaction_block_height = await get_block_height_from_block_hash(transaction_block_hash)
+                        else:
+                            transaction_block_height = 0                                                            
+                        if ((num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK) and transaction_block_height <= max_block_height:
+                            logger.info(f"Matching confirmed transaction was not found, but we did find a confirmed (with {num_confirmations} confirmation blocks) burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
+                            return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address
+                        else:
+                            logger.info(f"Matching unconfirmed transaction was not found, but we did find an unconfirmed burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
+                            return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address                        
                 else:
-                    logger.warning(f"Transaction {txid} does not send funds to the specified burn address")
-            # If the transaction is not found or does not match the criteria, wait before retrying
-            logger.info(f"WAITING {retry_delay} seconds before checking transaction {txid} status again...")
-            await asyncio.sleep(retry_delay)
-            try_count += 1
-            retry_delay *= 1.15  # Optional: increase delay between retries
+                    logger.warning(f"Transaction {txid} found, but the amount sent to the burn address ({total_amount_to_burn_address}) is less than the expected amount ({expected_amount})")
+            else:
+                logger.warning(f"Transaction {txid} does not send funds to the specified burn address")
         else:
-            logger.error(f"Invalid txid for tracking transaction: {txid}")
+            logger.warning(f"Transaction {txid} not found.")
+        # If the transaction is not found or does not match the criteria, wait before retrying
+        logger.info(f"WAITING {retry_delay} seconds before checking transaction status again...")
+        await asyncio.sleep(retry_delay)
+        try_count += 1
+        retry_delay *= 1.15  # Optional: increase delay between retries
     logger.info(f"Transaction not found or did not match the criteria after {max_retries} attempts.")
     return False, False, None, None, total_amount_to_burn_address
 
@@ -4010,19 +4046,17 @@ async def fetch_all_mnid_tickets_details():
                     await session.rollback()
                     logger.error(f"Error inserting new tickets due to a unique constraint failure: {e}")
     return new_tickets_to_insert
-
+                    
 async def fetch_active_supernodes_count_and_details(block_height: int):
     async with db_code.Session() as session:
-        async with session.begin():
-            # Fetch all mnid tickets created up to the specified block height
+        async with session.begin(): # Fetch all mnid tickets created up to the specified block height
             result = await session.execute(
                 select(db_code.MNIDTicketDetails)
                 .where(db_code.MNIDTicketDetails.block_height <= block_height)
             )
             mnid_tickets = result.scalars().all()
             active_supernodes = []
-            # Check if the outpoints for these tickets are still unspent
-            for ticket in mnid_tickets:
+            for ticket in mnid_tickets: 
                 try:
                     tx_info = await rpc_connection.getrawtransaction(ticket.outpoint.split('-')[0], 1)
                     vout = int(ticket.outpoint.split('-')[1])
@@ -4035,7 +4069,8 @@ async def fetch_active_supernodes_count_and_details(block_height: int):
                             "pq_key": ticket.pq_key,
                             "outpoint": ticket.outpoint,
                             "block_height": ticket.block_height,
-                            "timestamp": datetime.utcfromtimestamp(int(ticket.timestamp))
+                            # Convert datetime to timestamp
+                            "timestamp": datetime.utcfromtimestamp(ticket.timestamp.timestamp() if isinstance(ticket.timestamp, datetime) else int(ticket.timestamp))
                         }
                         active_supernodes.append(supernode_details)
                 except Exception as e:
@@ -4122,7 +4157,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_response_object.credit_pack_purchase_request_fields_json)
     initial_credit_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
     credit_usage_tracking_psl_address = credit_pack_purchase_request_response_object.credit_usage_tracking_psl_address
-    logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,}, Tracking address: {credit_usage_tracking_psl_address}")
+    logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,.1f}, Tracking address: {credit_usage_tracking_psl_address}")
     async with db_code.Session() as db:
         db_transactions_result = await db.exec(
             select(db_code.BurnAddressTransaction)
@@ -4176,7 +4211,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
             logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
     current_credit_balance = initial_credit_balance - total_credits_consumed
     number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
-    logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,}; Total credits consumed: {total_credits_consumed:,} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,}")
+    logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
 
 async def update_pending_transactions():

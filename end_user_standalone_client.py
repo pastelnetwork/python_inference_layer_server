@@ -25,7 +25,7 @@ from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from httpx import AsyncClient, Limits, Timeout
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from pydantic import field_validator
-from sqlmodel import SQLModel, Field, Column, JSON, UUID
+from sqlmodel import SQLModel, Field, Column, JSON
 
 # Note: you must have `minrelaytxfee=0.00001` in your pastel.conf to allow "dust" transactions for the inference request confirmation transactions to work!
 
@@ -2406,7 +2406,7 @@ async def main():
             logger.info(f"Not enough balance in tracking address: {credit_usage_tracking_psl_address}; current balance: {credit_usage_tracking_psl_address_current_balance}; Now sending more coin to the tracking address...")
             await send_to_address_func(credit_usage_tracking_psl_address, 10.0, "Sending more coin to the tracking address")
         initial_credit_pack_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
-        logger.info(f"Credit pack ticket data retrieved with initial balance {initial_credit_pack_balance} and credit tracking PSL address of {credit_usage_tracking_psl_address}")
+        logger.info(f"Credit pack ticket data retrieved with initial balance {initial_credit_pack_balance:,.1f} and credit tracking PSL address of {credit_usage_tracking_psl_address}")
         logger.info(f"Corresponding credit pack request dict: {credit_pack_purchase_request_dict}")
         end_time = time.time()
         duration_in_seconds = (end_time - start_time)
