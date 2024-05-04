@@ -2461,6 +2461,7 @@ async def process_credit_pack_storage_retry_completion_announcement(retry_comple
     
 async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> dict:
     try:
+        use_verbose_validation = 0
         logger.info(f"Validating credit pack ticket with TXID: {credit_pack_ticket_txid}")
         # Retrieve the credit pack ticket data from the blockchain
         reconstructed_file_data = await retrieve_data_from_blockchain(credit_pack_ticket_txid)
@@ -2509,9 +2510,10 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         # Validate the signatures
         for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
             signatures = agreeing_supernodes_signatures_dict[agreeing_supernode_pastelid]
-            logger.info(f"Verifying signature for agreeing supernode {agreeing_supernode_pastelid}")
-            logger.info(f"Message to verify: {credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json}")
-            logger.info(f"Signature: {signatures['credit_pack_purchase_request_fields_json_signature']}")
+            if use_verbose_validation:
+                logger.info(f"Verifying signature for agreeing supernode {agreeing_supernode_pastelid}")
+                logger.info(f"Message to verify: {credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json}")
+                logger.info(f"Signature: {signatures['credit_pack_purchase_request_fields_json_signature']}")
             is_fields_json_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, 
                                                                                         credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json,
                                                                                         signatures['credit_pack_purchase_request_fields_json_signature'])
