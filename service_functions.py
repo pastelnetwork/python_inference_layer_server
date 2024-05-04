@@ -2517,7 +2517,8 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             is_fields_json_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, 
                                                                                         credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json,
                                                                                         signatures['credit_pack_purchase_request_fields_json_signature'])
-            logger.info(f"Signature validation result: {is_fields_json_signature_valid}")
+            if use_verbose_validation:
+                logger.info(f"Signature validation result: {is_fields_json_signature_valid}")
             validation_results["validation_checks"].append({
                 "check_name": f"Signature validation for agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request fields json",
                 "is_valid": is_fields_json_signature_valid
