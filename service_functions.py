@@ -2484,7 +2484,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         if not (matching_transaction_found or exceeding_transaction_found):
             validation_results["credit_pack_ticket_is_valid"] = False
         active_supernodes_count_at_the_time, active_supernodes_at_the_time = await fetch_active_supernodes_count_and_details(credit_pack_purchase_request_response.request_response_pastel_block_height)
-        list_of_active_supernode_pastelids_at_the_time = [x["pastel_id"] for x in active_supernodes_count_at_the_time]
+        list_of_active_supernode_pastelids_at_the_time = [x["pastel_id"] for x in active_supernodes_at_the_time]
         list_of_potentially_agreeing_supernodes = json.loads(credit_pack_purchase_request_response.list_of_potentially_agreeing_supernodes)
         list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = json.loads(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
         agreeing_supernodes_signatures_dict = json.loads(credit_pack_purchase_request_response.agreeing_supernodes_signatures_dict)

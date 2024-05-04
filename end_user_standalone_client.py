@@ -2387,7 +2387,7 @@ async def main():
         else:
             logger.error("Credit pack ticket storage failed!")
 
-    if 'credit_pack_purchase_request_confirmation_response' in globals():
+    if 'credit_pack_purchase_request_confirmation_response' in locals():
         credit_pack_ticket_pastel_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
     else:
         credit_pack_ticket_pastel_txid = "c7b16865e0860acb136e6f0a7e503acbefc124a183f3680f297c859ade3a2f46" # "44oZnTrqgCF8wF2AyCzqTJKRioYLq3Wosv1M"
