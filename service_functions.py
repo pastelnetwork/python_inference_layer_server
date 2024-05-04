@@ -2471,15 +2471,6 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             "credit_pack_ticket_is_valid": True,
             "validation_checks": []
         }
-        # Validate the hashes
-        computed_hash = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_purchase_request_response)
-        is_hash_valid = computed_hash == credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields
-        validation_results["validation_checks"].append({
-            "check_name": "Hash validation of credit pack purchase request response fields",
-            "is_valid": is_hash_valid
-        })
-        if not is_hash_valid:
-            validation_results["credit_pack_ticket_is_valid"] = False
         # Validate the payment
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_transaction(
             None,
