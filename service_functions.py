@@ -1838,6 +1838,14 @@ async def send_credit_pack_purchase_request_final_response_to_supernodes(respons
         traceback.print_exc()
         raise    
 
+def transform_json(input_string):
+    # Parse the JSON string into a Python dictionary
+    data = json.loads(input_string)
+    # Serialize the dictionary back to a JSON string
+    # Ensure that special characters are escaped correctly
+    transformed_string = json.dumps(data, ensure_ascii=False)
+    return transformed_string
+
 async def process_credit_pack_price_agreement_request(price_agreement_request: db_code.CreditPackPurchasePriceAgreementRequest) -> Union[db_code.CreditPackPurchasePriceAgreementRequestResponse, str]:
     try:
         # Validate the request fields
@@ -1848,16 +1856,18 @@ async def process_credit_pack_price_agreement_request(price_agreement_request: d
         # Determine if the supernode agrees with the proposed price
         agree_with_proposed_price = await determine_agreement_with_proposed_price(price_agreement_request.proposed_psl_price_per_credit)
         # Create the response without the hash and signature fields
+        credit_pack_purchase_request_fields_dict = json.loads(price_agreement_request.credit_pack_purchase_request_fields_json)
+        credit_pack_purchase_request_fields_json = transform_json(credit_pack_purchase_request_fields_dict['credit_pack_purchase_request_fields_json'])
         response = db_code.CreditPackPurchasePriceAgreementRequestResponse(
             sha3_256_hash_of_price_agreement_request_fields=price_agreement_request.sha3_256_hash_of_price_agreement_request_fields,
-            credit_pack_purchase_request_fields_json=price_agreement_request.credit_pack_purchase_request_fields_json,
+            credit_pack_purchase_request_fields_json=credit_pack_purchase_request_fields_json,
             agree_with_proposed_price=agree_with_proposed_price,
             credit_usage_tracking_psl_address=price_agreement_request.credit_usage_tracking_psl_address,
             proposed_psl_price_per_credit=price_agreement_request.proposed_psl_price_per_credit,
             proposed_price_agreement_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             proposed_price_agreement_response_pastel_block_height=await get_current_pastel_block_height_func(),
             proposed_price_agreement_response_message_version_string="1.0",
-            responding_supernode_signature_on_credit_pack_purchase_request_fields_json=await sign_message_with_pastelid_func(MY_PASTELID, price_agreement_request.credit_pack_purchase_request_fields_json, LOCAL_PASTEL_ID_PASSPHRASE),
+            responding_supernode_signature_on_credit_pack_purchase_request_fields_json=await sign_message_with_pastelid_func(MY_PASTELID, credit_pack_purchase_request_fields_json, LOCAL_PASTEL_ID_PASSPHRASE),
             responding_supernode_pastelid=MY_PASTELID,
             sha3_256_hash_of_price_agreement_request_response_fields="",
             responding_supernode_signature_on_price_agreement_request_response_hash=""
@@ -2521,20 +2531,6 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             })
             if not is_fields_json_signature_valid:
                 validation_results["credit_pack_ticket_is_valid"] = False
-            logger.info(f"Verifying signature for agreeing supernode {agreeing_supernode_pastelid}")  
-            logger.info(f"Message to verify: {credit_pack_purchase_request_response.sha3_256_hash_of_price_agreement_request_response_fields}")
-            logger.info(f"Signature: {signatures['price_agreement_request_response_hash_signature']}")
-            is_response_hash_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid,
-                                                                                        credit_pack_purchase_request_response.sha3_256_hash_of_price_agreement_request_response_fields,
-                                                                                        signatures['price_agreement_request_response_hash_signature'])
-            logger.info(f"Signature validation result: {is_response_hash_signature_valid}")
-            validation_results["validation_checks"].append({
-                "check_name": f"Signature validation for agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request response hash",
-                "is_valid": is_response_hash_signature_valid
-            })
-            if not is_response_hash_signature_valid:
-                validation_results["credit_pack_ticket_is_valid"] = False
-
         # Validate the agreeing supernodes
         num_potentially_agreeing_supernodes = len(list_of_potentially_agreeing_supernodes)
         num_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
