@@ -341,7 +341,7 @@ class CreditPackPurchaseRequest(SQLModel, table=True):
 
 class CreditPackPurchaseRequestRejection(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     rejection_reason_string: str
     rejection_timestamp_utc_iso_string: str
     rejection_pastel_block_height: int
@@ -353,7 +353,7 @@ class CreditPackPurchaseRequestRejection(SQLModel, table=True):
         json_schema_extra = {
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "rejection_reason_string": "Invalid credit usage tracking PSL address",
                 "rejection_timestamp_utc_iso_string": "2023-06-01T12:10:00Z",
                 "rejection_pastel_block_height": 123457,
@@ -367,7 +367,7 @@ class CreditPackPurchaseRequestRejection(SQLModel, table=True):
 class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
     credit_usage_tracking_psl_address: str = Field(index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     preliminary_quoted_price_per_credit_in_psl: float
     preliminary_total_cost_of_credit_pack_in_psl: float
     preliminary_price_quote_timestamp_utc_iso_string: str
@@ -381,7 +381,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel, table=True):
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "preliminary_quoted_price_per_credit_in_psl": 0.1,
                 "preliminary_total_cost_of_credit_pack_in_psl": 100,
                 "preliminary_price_quote_timestamp_utc_iso_string": "2023-06-01T12:05:00Z",
@@ -396,7 +396,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel, table=True):
 class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields: str = Field(index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     agree_with_preliminary_price_quote: bool
     credit_usage_tracking_psl_address: str = Field(index=True)
     preliminary_quoted_price_per_credit_in_psl: float
@@ -411,7 +411,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel, table=Tru
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields": "0x5678...",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "agree_with_preliminary_price_quote": True,
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
                 "preliminary_quoted_price_per_credit_in_psl": 0.1,
@@ -428,7 +428,7 @@ class CreditPackPurchasePriceAgreementRequest(SQLModel, table=True):
     id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(index=True)
     supernode_requesting_price_agreement_pastelid: str = Field(index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     credit_usage_tracking_psl_address: str = Field(index=True)
     proposed_psl_price_per_credit: float
     price_agreement_request_timestamp_utc_iso_string: str
@@ -442,7 +442,7 @@ class CreditPackPurchasePriceAgreementRequest(SQLModel, table=True):
                 "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x1234...",
                 "supernode_requesting_price_agreement_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
                 "proposed_psl_price_per_credit": 0.1,
                 "price_agreement_request_timestamp_utc_iso_string": "2023-06-01T12:20:00Z",
@@ -455,14 +455,14 @@ class CreditPackPurchasePriceAgreementRequest(SQLModel, table=True):
         
 class CreditPackPurchasePriceAgreementRequestResponse(SQLModel, table=True):
     sha3_256_hash_of_price_agreement_request_fields: str = Field(primary_key=True, index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     agree_with_proposed_price: bool
     credit_usage_tracking_psl_address: str = Field(unique=True,index=True)
     proposed_psl_price_per_credit: float
     proposed_price_agreement_response_timestamp_utc_iso_string: str
     proposed_price_agreement_response_pastel_block_height: int
     proposed_price_agreement_response_message_version_string: str
-    responding_supernode_signature_on_credit_pack_purchase_request_fields_json: str
+    responding_supernode_signature_on_credit_pack_purchase_request_fields_json_b64: str
     responding_supernode_pastelid: str = Field(index=True)
     sha3_256_hash_of_price_agreement_request_response_fields: str = Field(unique=True, index=True)
     responding_supernode_signature_on_price_agreement_request_response_hash: str
@@ -470,14 +470,14 @@ class CreditPackPurchasePriceAgreementRequestResponse(SQLModel, table=True):
         json_schema_extra = {
             "example": {
                 "sha3_256_hash_of_price_agreement_request_fields": "0x1234...",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "agree_with_proposed_price": True,
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
                 "proposed_psl_price_per_credit": 0.1,
                 "proposed_price_agreement_response_timestamp_utc_iso_string": "2023-06-01T12:25:00Z",
                 "proposed_price_agreement_response_pastel_block_height": 123458,
                 "proposed_price_agreement_response_message_version_string": "1.0",
-                "responding_supernode_signature_on_credit_pack_purchase_request_fields_json": "0x1234...",
+                "responding_supernode_signature_on_credit_pack_purchase_request_fields_json_b64": "0x1234...",
                 "responding_supernode_pastelid": "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP",
                 "sha3_256_hash_of_price_agreement_request_response_fields": "0xabcd...",
                 "responding_supernode_signature_on_price_agreement_request_response_hash": "0xdef0...",
@@ -486,7 +486,7 @@ class CreditPackPurchasePriceAgreementRequestResponse(SQLModel, table=True):
         
 class CreditPackPurchaseRequestResponseTermination(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     termination_reason_string: str
     termination_timestamp_utc_iso_string: str
     termination_pastel_block_height: int
@@ -498,7 +498,7 @@ class CreditPackPurchaseRequestResponseTermination(SQLModel, table=True):
         json_schema_extra = {
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "termination_reason_string": "Insufficient agreeing supernodes",
                 "termination_timestamp_utc_iso_string": "2023-06-01T12:30:00Z",
                 "termination_pastel_block_height": 123459,
@@ -512,7 +512,7 @@ class CreditPackPurchaseRequestResponseTermination(SQLModel, table=True):
 class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     psl_cost_per_credit: float
     proposed_total_cost_of_credit_pack_in_psl: float
     credit_usage_tracking_psl_address: str = Field(index=True)
@@ -530,7 +530,7 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
             "example": {
                 "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
-                "credit_pack_purchase_request_fields_json": '{"requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "psl_cost_per_credit": 0.1,
                 "proposed_total_cost_of_credit_pack_in_psl": 100,
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
@@ -540,7 +540,7 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
                 "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "list_of_potentially_agreeing_supernodes": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP"],
                 "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP"],
-                "agreeing_supernodes_signatures_dict": "['jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_signature': '0x5678...'}, 'jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_signature': '0x5678...'}]",
+                "agreeing_supernodes_signatures_dict": "['jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_b64_signature': '0x5678...'}, 'jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_signature': '0x5678...'}]",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x9abc...",
                 "responding_supernode_signature_on_credit_pack_purchase_request_response_hash": "0xdef0..."
             }
@@ -561,7 +561,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
     id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     requesting_end_user_pastelid: str = Field(index=True)
     txid_of_credit_purchase_burn_transaction: str = Field(index=True)
     credit_purchase_request_confirmation_utc_iso_string: str
@@ -575,7 +575,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
                 "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x5678...",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "txid_of_credit_purchase_burn_transaction": "0xabcd...",
                 "credit_purchase_request_confirmation_utc_iso_string": "2023-06-01T12:30:00Z",
@@ -660,7 +660,7 @@ class CreditPackPurchaseRequestStatus(SQLModel, table=True):
 
 class CreditPackStorageRetryRequest(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(primary_key=True, index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     requesting_end_user_pastelid: str = Field(index=True)
     closest_agreeing_supernode_to_retry_storage_pastelid: str = Field(index=True)
     credit_pack_storage_retry_request_timestamp_utc_iso_string: str
@@ -672,7 +672,7 @@ class CreditPackStorageRetryRequest(SQLModel, table=True):
         json_schema_extra = {
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x1234...",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "closest_agreeing_supernode_to_retry_storage_pastelid": "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP",
                 "credit_pack_storage_retry_request_timestamp_utc_iso_string": "2023-06-01T12:50:00Z",

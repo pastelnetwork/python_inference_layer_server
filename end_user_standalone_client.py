@@ -282,33 +282,40 @@ def get_sha256_hash_of_input_data_func(input_data_or_string):
     sha256_hash_of_input_data = hashlib.sha3_256(input_data_or_string).hexdigest()
     return sha256_hash_of_input_data
 
+def base64_encode_json(json_input):
+    return base64.b64encode(json.dumps(json_input, sort_keys=True).encode('utf-8')).decode('utf-8')
+
 async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance: SQLModel) -> str:
     response_fields = {}
     last_hash_field_name = None
-    last_signature_field_name = None
-    # Find the last hash field and the last signature field
+    last_signature_field_names = []
     for field_name in model_instance.__fields__.keys():
         if field_name.startswith("sha3_256_hash_of"):
             last_hash_field_name = field_name
         elif "_signature_on_" in field_name:
-            last_signature_field_name = field_name
-    # Iterate over the model fields and exclude the last hash, last signature, 'id', and fields containing '_sa_instance_state'
+            last_signature_field_names.append(field_name)
+    fields_to_exclude = [last_hash_field_name, last_signature_field_names[-1], 'id']
     for field_name, field_value in model_instance.__dict__.items():
-        if field_name in [last_hash_field_name, last_signature_field_name, 'id'] or '_sa_instance_state' in field_name:
+        if field_name in fields_to_exclude or '_sa_instance_state' in field_name:
             continue
         if field_value is not None:
             if isinstance(field_value, (datetime, date)):
                 response_fields[field_name] = field_value.isoformat()
             elif isinstance(field_value, (list, dict)):
-                response_fields[field_name] = json.dumps(field_value, sort_keys=True)
+                response_fields[field_name] = json.dumps(field_value, ensure_ascii=False, sort_keys=True)
             elif isinstance(field_value, decimal.Decimal):
                 response_fields[field_name] = str(field_value)
+            elif field_name.endswith('_json') and isinstance(field_value, str):
+                try: # Parse and re-encode into base64
+                    parsed_json = json.loads(field_value)
+                    response_fields[field_name] = base64_encode_json(parsed_json)
+                except json.JSONDecodeError:
+                    # Fallback in case parsing fails
+                    response_fields[field_name] = field_value
             else:
                 response_fields[field_name] = field_value
-    # Sort the response fields by field name to ensure a consistent order
     sorted_response_fields = dict(sorted(response_fields.items()))
-    # Convert the sorted response fields to a JSON string
-    return json.dumps(sorted_response_fields, sort_keys=True)
+    return json.dumps(sorted_response_fields, ensure_ascii=False, sort_keys=True)
 
 async def compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance: SQLModel) -> str:
     response_fields_json = await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance)
@@ -953,7 +960,7 @@ class CreditPackPurchaseRequest(SQLModel, table=True):
 
 class CreditPackPurchaseRequestRejection(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     rejection_reason_string: str
     rejection_timestamp_utc_iso_string: str
     rejection_pastel_block_height: int
@@ -965,7 +972,7 @@ class CreditPackPurchaseRequestRejection(SQLModel, table=True):
         json_schema_extra = {
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "rejection_reason_string": "Invalid credit usage tracking PSL address",
                 "rejection_timestamp_utc_iso_string": "2023-06-01T12:10:00Z",
                 "rejection_pastel_block_height": 123457,
@@ -979,7 +986,7 @@ class CreditPackPurchaseRequestRejection(SQLModel, table=True):
 class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
     credit_usage_tracking_psl_address: str = Field(index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     preliminary_quoted_price_per_credit_in_psl: float
     preliminary_total_cost_of_credit_pack_in_psl: float
     preliminary_price_quote_timestamp_utc_iso_string: str
@@ -993,7 +1000,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel, table=True):
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "preliminary_quoted_price_per_credit_in_psl": 0.1,
                 "preliminary_total_cost_of_credit_pack_in_psl": 100,
                 "preliminary_price_quote_timestamp_utc_iso_string": "2023-06-01T12:05:00Z",
@@ -1008,7 +1015,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuote(SQLModel, table=True):
 class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields: str = Field(index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     agree_with_preliminary_price_quote: bool
     credit_usage_tracking_psl_address: str = Field(index=True)
     preliminary_quoted_price_per_credit_in_psl: float
@@ -1023,7 +1030,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel, table=Tru
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields": "0x5678...",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "agree_with_preliminary_price_quote": True,
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
                 "preliminary_quoted_price_per_credit_in_psl": 0.1,
@@ -1038,7 +1045,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel, table=Tru
 
 class CreditPackPurchaseRequestResponseTermination(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     termination_reason_string: str
     termination_timestamp_utc_iso_string: str
     termination_pastel_block_height: int
@@ -1050,7 +1057,7 @@ class CreditPackPurchaseRequestResponseTermination(SQLModel, table=True):
         json_schema_extra = {
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "termination_reason_string": "Insufficient agreeing supernodes",
                 "termination_timestamp_utc_iso_string": "2023-06-01T12:30:00Z",
                 "termination_pastel_block_height": 123459,
@@ -1064,7 +1071,7 @@ class CreditPackPurchaseRequestResponseTermination(SQLModel, table=True):
 class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     psl_cost_per_credit: float
     proposed_total_cost_of_credit_pack_in_psl: float
     credit_usage_tracking_psl_address: str = Field(index=True)
@@ -1082,7 +1089,7 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
             "example": {
                 "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
-                "credit_pack_purchase_request_fields_json": '{"requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "psl_cost_per_credit": 0.1,
                 "proposed_total_cost_of_credit_pack_in_psl": 100,
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
@@ -1092,7 +1099,7 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
                 "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "list_of_potentially_agreeing_supernodes": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP"],
                 "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP"],
-                "agreeing_supernodes_signatures_dict": "['jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_signature': '0x5678...'}, 'jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_signature': '0x5678...'}]",
+                "agreeing_supernodes_signatures_dict": "['jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_b64_signature': '0x5678...'}, 'jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_signature': '0x5678...'}]",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x9abc...",
                 "responding_supernode_signature_on_credit_pack_purchase_request_response_hash": "0xdef0..."
             }
@@ -1102,7 +1109,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
     id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     requesting_end_user_pastelid: str = Field(index=True)
     txid_of_credit_purchase_burn_transaction: str = Field(index=True)
     credit_purchase_request_confirmation_utc_iso_string: str
@@ -1116,7 +1123,7 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
                 "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x5678...",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "txid_of_credit_purchase_burn_transaction": "0xabcd...",
                 "credit_purchase_request_confirmation_utc_iso_string": "2023-06-01T12:30:00Z",
@@ -1201,7 +1208,7 @@ class CreditPackPurchaseRequestStatus(SQLModel, table=True):
 
 class CreditPackStorageRetryRequest(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(primary_key=True, index=True)
-    credit_pack_purchase_request_fields_json: str = Field(sa_column=Column(JSON))
+    credit_pack_purchase_request_fields_json_b64: str
     requesting_end_user_pastelid: str = Field(index=True)
     closest_agreeing_supernode_to_retry_storage_pastelid: str = Field(index=True)
     credit_pack_storage_retry_request_timestamp_utc_iso_string: str
@@ -1213,7 +1220,7 @@ class CreditPackStorageRetryRequest(SQLModel, table=True):
         json_schema_extra = {
             "example": {
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x1234...",
-                "credit_pack_purchase_request_fields_json": '{"sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...", ...}',
+                "credit_pack_purchase_request_fields_json_b64": 'eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9',
                 "requesting_end_user_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "closest_agreeing_supernode_to_retry_storage_pastelid": "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP",
                 "credit_pack_storage_retry_request_timestamp_utc_iso_string": "2023-06-01T12:50:00Z",
@@ -1515,7 +1522,8 @@ class PastelInferenceClient:
         quoted_price_per_credit = preliminary_price_quote.preliminary_quoted_price_per_credit_in_psl
         quoted_total_price = preliminary_price_quote.preliminary_total_cost_of_credit_pack_in_psl
         # Parse the credit pack purchase request fields JSON
-        request_fields = json.loads(preliminary_price_quote.credit_pack_purchase_request_fields_json)
+        credit_pack_purchase_request_fields_json = base64.b64decode(preliminary_price_quote.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
+        request_fields = json.loads(credit_pack_purchase_request_fields_json)
         requested_credits = request_fields["requested_initial_credits_in_credit_pack"]
         # Calculate the missing maximum price parameter if not provided
         if maximum_total_credit_pack_price_in_psl is None:
@@ -1565,7 +1573,7 @@ class PastelInferenceClient:
         price_quote_response = CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(
             sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
             sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields=preliminary_price_quote.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields,
-            credit_pack_purchase_request_fields_json=preliminary_price_quote.credit_pack_purchase_request_fields_json,
+            credit_pack_purchase_request_fields_json_b64=preliminary_price_quote.credit_pack_purchase_request_fields_json_b64,
             agree_with_preliminary_price_quote=agree_with_preliminary_price_quote,
             credit_usage_tracking_psl_address=preliminary_price_quote.credit_usage_tracking_psl_address,
             preliminary_quoted_price_per_credit_in_psl=preliminary_price_quote.preliminary_quoted_price_per_credit_in_psl,
@@ -2135,7 +2143,7 @@ async def handle_credit_pack_ticket_end_to_end(
     credit_pack_purchase_request_confirmation = CreditPackPurchaseRequestConfirmation(
         sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
         sha3_256_hash_of_credit_pack_purchase_request_response_fields=signed_credit_pack_ticket.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
-        credit_pack_purchase_request_fields_json=signed_credit_pack_ticket.credit_pack_purchase_request_fields_json,
+        credit_pack_purchase_request_fields_json_b64=signed_credit_pack_ticket.credit_pack_purchase_request_fields_json_b64,
         requesting_end_user_pastelid=MY_LOCAL_PASTELID,
         txid_of_credit_purchase_burn_transaction=burn_transaction_txid,
         credit_purchase_request_confirmation_utc_iso_string=datetime.now(dt.UTC).isoformat(),
@@ -2173,7 +2181,7 @@ async def handle_credit_pack_ticket_end_to_end(
         closest_agreeing_supernode_pastelid = await get_closest_supernode_pastelid_from_list(MY_LOCAL_PASTELID, signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
         credit_pack_storage_retry_request = CreditPackStorageRetryRequest(
             sha3_256_hash_of_credit_pack_purchase_request_response_fields=signed_credit_pack_ticket.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
-            credit_pack_purchase_request_fields_json=signed_credit_pack_ticket.credit_pack_purchase_request_fields_json,
+            credit_pack_purchase_request_fields_json_b64=signed_credit_pack_ticket.credit_pack_purchase_request_fields_json_b64,
             requesting_end_user_pastelid=MY_LOCAL_PASTELID,
             closest_agreeing_supernode_to_retry_storage_pastelid=closest_agreeing_supernode_pastelid,
             credit_pack_storage_retry_request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
@@ -2398,7 +2406,8 @@ async def main():
     if use_test_credit_pack_ticket_usage:
         start_time = time.time()
         credit_ticket_object = await get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid)
-        credit_pack_purchase_request_dict = json.loads(credit_ticket_object.credit_pack_purchase_request_fields_json)
+        credit_pack_purchase_request_fields_json = base64.b64decode(credit_ticket_object.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
+        credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_fields_json)
         credit_usage_tracking_psl_address = credit_pack_purchase_request_dict['credit_usage_tracking_psl_address']
         credit_usage_tracking_psl_address_current_balance = await check_psl_address_balance_alternative_func(credit_usage_tracking_psl_address)
         min_psl_balance_in_tracking_address = 10.0 
