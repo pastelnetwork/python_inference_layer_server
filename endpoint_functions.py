@@ -801,8 +801,8 @@ async def retrieve_inference_output_results_endpoint(
         inference_usage_request_object = await service_functions.get_inference_api_usage_request_for_audit(inference_output_results_dict['inference_request_id'])
         inference_usage_request_dict = inference_usage_request_object.model_dump()
         inference_usage_request_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in inference_usage_request_dict.items()}
-        # Add model_parameters_json and other fields to the inference output results dict:
-        inference_output_results_dict['model_parameters_json'] = inference_usage_request_dict['model_parameters_json']
+        # Add model_parameters_json_b64 and other fields to the inference output results dict:
+        inference_output_results_dict['model_parameters_json_b64'] = inference_usage_request_dict['model_parameters_json_b64']
         inference_output_results_dict['requested_model_canonical_string'] = inference_usage_request_dict['requested_model_canonical_string']
         inference_output_results_dict['model_inference_type_string'] = inference_usage_request_dict['model_inference_type_string']
         # Abbreviate the 'inference_result_json_base64' field to the first 32 characters
