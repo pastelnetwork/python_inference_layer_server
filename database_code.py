@@ -722,7 +722,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
     credit_pack_ticket_pastel_txid: str = Field(index=True)
     requested_model_canonical_string: str
     model_inference_type_string: str
-    model_parameters_json: str  # Store the dict serialized as a JSON string
+    model_parameters_json_b64: str
     model_input_data_json_b64: str
     inference_request_utc_iso_string: str
     inference_request_pastel_block_height: int
@@ -730,17 +730,6 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
     inference_request_message_version_string: str
     sha3_256_hash_of_inference_request_fields: str
     requesting_pastelid_signature_on_request_hash: str
-    @field_validator("model_parameters_json", mode="before")
-    def serialize_dict_to_json(cls, v):
-        if isinstance(v, dict):
-            return json.dumps(v)
-        return v
-    @field_validator("model_parameters_json", mode="after")
-    def deserialize_json_to_dict(cls, v):
-        try:
-            return json.loads(v)
-        except ValueError:
-            return {}
     class Config:
         protected_namespaces = ()
         json_schema_extra = {
@@ -751,7 +740,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
                 "credit_pack_ticket_pastel_txid": "0x5678...",
                 "requested_model_canonical_string": "gpt-3.5-turbo",
                 "model_inference_type_string": "text-completion",
-                "model_parameters_json": '{"max_tokens": 100, "temperature": 0.7}',
+                "model_parameters_json_b64": "eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9",
                 "model_input_data_json_b64": "eyJwcm9tcHQiOiAiSGVsbG8sIGhvdyBhcmUgeW91PyJ9",
                 "inference_request_utc_iso_string": "2023-06-01T12:00:00Z",
                 "inference_request_pastel_block_height": 123456,

@@ -805,7 +805,7 @@ async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_past
     message_body_dict = json.loads(message_body) # Extract the desired model information from the message_body
     desired_model_canonical_string = message_body_dict.get('requested_model_canonical_string')
     desired_model_inference_type_string = message_body_dict.get('model_inference_type_string')
-    desired_model_parameters_json = message_body_dict.get('model_parameters_json')
+    desired_model_parameters_json = base64.b64decode(message_body_dict.get('model_parameters_json_b64')).decode('utf-8') 
     async def is_model_supported_async(supernode_ip_and_port, model_canonical_string, model_inference_type_string, model_parameters_json): # Filter supernodes based on model support
         supernode_ip = supernode_ip_and_port.split(':')[0]
         supernode_url = f"http://{supernode_ip}:7123"
@@ -1858,8 +1858,6 @@ async def process_credit_pack_price_agreement_request(price_agreement_request: d
         # Determine if the supernode agrees with the proposed price
         agree_with_proposed_price = await determine_agreement_with_proposed_price(price_agreement_request.proposed_psl_price_per_credit)
         # Create the response without the hash and signature fields
-        # credit_pack_purchase_request_fields_dict = json.loads(price_agreement_request.credit_pack_purchase_request_fields_json)
-        # credit_pack_purchase_request_fields_json = transform_json(credit_pack_purchase_request_fields_dict['credit_pack_purchase_request_fields_json'])
         response = db_code.CreditPackPurchasePriceAgreementRequestResponse(
             sha3_256_hash_of_price_agreement_request_fields=price_agreement_request.sha3_256_hash_of_price_agreement_request_fields,
             credit_pack_purchase_request_fields_json_b64=price_agreement_request.credit_pack_purchase_request_fields_json_b64,
@@ -1960,7 +1958,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             logger.info("Responding to end user with termination message...")
             termination_message = db_code.CreditPackPurchaseRequestResponseTermination(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
-                credit_pack_purchase_request_fields_json_b64=base64.b64encode(preliminary_price_quote_response.credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
+                credit_pack_purchase_request_fields_json_b64=base64.b64encode(credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
                 termination_reason_string="Not enough supernodes responded with valid price agreement responses",
                 termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
@@ -1990,7 +1988,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             logger.info("Responding to end user with termination message...")
             termination_message = db_code.CreditPackPurchaseRequestResponseTermination(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
-                credit_pack_purchase_request_fields_json_b64=base64.b64encode(preliminary_price_quote_response.credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
+                credit_pack_purchase_request_fields_json_b64=base64.b64encode(credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
                 termination_reason_string="Not enough supernodes agreed to the proposed pricing",
                 termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
@@ -3113,7 +3111,7 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         credit_pack_ticket_pastel_txid = inference_api_usage_request.credit_pack_ticket_pastel_txid
         requested_model = inference_api_usage_request.requested_model_canonical_string
         model_inference_type_string = inference_api_usage_request.model_inference_type_string
-        model_parameters = inference_api_usage_request.model_parameters_json
+        model_parameters = base64.b64decode(inference_api_usage_request.model_parameters_json_b64).decode('utf-8')  
         input_data = inference_api_usage_request.model_input_data_json_b64
         if not validate_pastel_txid_string(credit_pack_ticket_pastel_txid):
             logger.error(f"Invalid Pastel TXID: {credit_pack_ticket_pastel_txid}")
@@ -3414,7 +3412,7 @@ def get_claude3_model_name(model_name: str) -> str:
 async def submit_inference_request_to_stability_api(inference_request):
     # Integrate with the Stability API to perform the image generation task
     if inference_request.model_inference_type_string == "text_to_image":
-        model_parameters = json.loads(inference_request.model_parameters_json)
+        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
         if "stability-core" in inference_request.requested_model_canonical_string:
             async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
@@ -3445,7 +3443,7 @@ async def submit_inference_request_to_stability_api(inference_request):
                     logger.error(f"Error generating image from Stability API: {response.text}")
                     return None, None
         else:
-            model_parameters = json.loads(inference_request.model_parameters_json)
+            model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
             prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             engine_id = inference_request.requested_model_canonical_string
             api_host = "https://api.stability.ai"
@@ -3488,7 +3486,7 @@ async def submit_inference_request_to_stability_api(inference_request):
                     logger.error(f"Error generating image from Stability API: {response.text}")
                     return None, None
     elif inference_request.model_inference_type_string == "creative_upscale" and "stability-core" in inference_request.requested_model_canonical_string:
-        model_parameters = json.loads(inference_request.model_parameters_json)
+        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         input_image = base64.b64decode(inference_request.model_input_data_json_b64)
         prompt = model_parameters.get("prompt", "")
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
@@ -3539,7 +3537,7 @@ async def submit_inference_request_to_openai_api(inference_request):
     # Integrate with the OpenAI API to perform the inference task
     logger.info("Now accessing OpenAI API...")
     if inference_request.model_inference_type_string == "text_completion":
-        model_parameters = json.loads(inference_request.model_parameters_json)
+        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
         num_completions = model_parameters.get("number_of_completions_to_generate", 1)
         output_results = []
@@ -3613,7 +3611,7 @@ async def submit_inference_request_to_openai_api(inference_request):
 async def submit_inference_request_to_openrouter(inference_request):
     logger.info("Now accessing OpenRouter...")
     if inference_request.model_inference_type_string == "text_completion":
-        model_parameters = json.loads(inference_request.model_parameters_json)
+        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))       
         messages = [{"role": "user", "content": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")}]
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -3650,7 +3648,7 @@ async def submit_inference_request_to_mistral_api(inference_request):
     logger.info("Now accessing Mistral API...")
     client = MistralAsyncClient(api_key=MISTRAL_API_KEY)
     if inference_request.model_inference_type_string == "text_completion":
-        model_parameters = json.loads(inference_request.model_parameters_json)
+        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))        
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
         num_completions = model_parameters.get("number_of_completions_to_generate", 1)
         output_results = []
@@ -3711,7 +3709,7 @@ async def submit_inference_request_to_groq_api(inference_request):
     logger.info("Now accessing Groq API...")
     client = AsyncGroq(api_key=GROQ_API_KEY)
     if inference_request.model_inference_type_string == "text_completion":
-        model_parameters = json.loads(inference_request.model_parameters_json)
+        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
         num_completions = model_parameters.get("number_of_completions_to_generate", 1)
         output_results = []
@@ -3763,7 +3761,7 @@ async def submit_inference_request_to_claude_api(inference_request):
     client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
     claude3_model_id_string = get_claude3_model_name(inference_request.requested_model_canonical_string)
     if inference_request.model_inference_type_string == "text_completion":
-        model_parameters = json.loads(inference_request.model_parameters_json)
+        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
         num_completions = model_parameters.get("number_of_completions_to_generate", 1)
         output_results = []
@@ -3812,7 +3810,7 @@ async def submit_inference_request_to_claude_api(inference_request):
 
 async def submit_inference_request_to_swiss_army_llama(inference_request):
     logger.info(f"Now calling Swiss Army Llama with model {inference_request.requested_model_canonical_string}")
-    model_parameters = json.loads(inference_request.model_parameters_json)
+    model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
     async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*12)) as client:
         if inference_request.model_inference_type_string == "text_completion":
             payload = {
