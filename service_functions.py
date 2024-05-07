@@ -3176,10 +3176,10 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         # Check if the credit pack has sufficient credits for the request
         current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_pastel_txid, burn_address)
         if proposed_cost_in_credits >= current_credit_balance:
-            logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {current_credit_balance}")
+            logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits:,}, Available: {current_credit_balance:,}")
             return False, proposed_cost_in_credits, current_credit_balance
         else:
-            logger.info(f"Credit pack ticket has sufficient credits for the request. Required: {proposed_cost_in_credits}, Available: {current_credit_balance}")
+            logger.info(f"Credit pack ticket has sufficient credits for the request. Required: {proposed_cost_in_credits:,}, Available: {current_credit_balance:,}")
         # Calculate the remaining credits after the request
         remaining_credits_after_request = current_credit_balance - proposed_cost_in_credits
         return True, proposed_cost_in_credits, remaining_credits_after_request
@@ -4558,9 +4558,6 @@ def get_sha256_hash_of_input_data_func(input_data_or_string):
     sha256_hash_of_input_data = hashlib.sha3_256(input_data_or_string).hexdigest()
     return sha256_hash_of_input_data
 
-def base64_encode_json(json_input):
-    return base64.b64encode(json.dumps(json_input, sort_keys=True).encode('utf-8')).decode('utf-8')
-
 async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance: SQLModel) -> str:
     response_fields = {}
     last_hash_field_name = None
@@ -4584,13 +4581,8 @@ async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_f
                 response_fields[field_name] = json.dumps(field_value, ensure_ascii=False, sort_keys=True)
             elif isinstance(field_value, decimal.Decimal):
                 response_fields[field_name] = str(field_value)
-            elif field_name.endswith('_json') and isinstance(field_value, str):
-                try: # Parse and re-encode into base64
-                    parsed_json = json.loads(field_value)
-                    response_fields[field_name] = base64_encode_json(parsed_json)
-                except json.JSONDecodeError:
-                    # Fallback in case parsing fails
-                    response_fields[field_name] = field_value
+            elif isinstance(field_value, bool):
+                response_fields[field_name] = int(field_value)
             else:
                 response_fields[field_name] = field_value
     sorted_response_fields = dict(sorted(response_fields.items()))

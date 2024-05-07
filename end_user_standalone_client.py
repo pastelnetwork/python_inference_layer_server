@@ -24,7 +24,6 @@ from typing import List, Dict, Union, Any, Optional, Tuple
 from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 from httpx import AsyncClient, Limits, Timeout
 from decouple import Config as DecoupleConfig, RepositoryEnv
-from pydantic import field_validator
 from sqlmodel import SQLModel, Field, Column, JSON
 
 # Note: you must have `minrelaytxfee=0.00001` in your pastel.conf to allow "dust" transactions for the inference request confirmation transactions to work!
@@ -305,13 +304,8 @@ async def extract_response_fields_from_credit_pack_ticket_message_data_as_json_f
                 response_fields[field_name] = json.dumps(field_value, ensure_ascii=False, sort_keys=True)
             elif isinstance(field_value, decimal.Decimal):
                 response_fields[field_name] = str(field_value)
-            elif field_name.endswith('_json') and isinstance(field_value, str):
-                try: # Parse and re-encode into base64
-                    parsed_json = json.loads(field_value)
-                    response_fields[field_name] = base64_encode_json(parsed_json)
-                except json.JSONDecodeError:
-                    # Fallback in case parsing fails
-                    response_fields[field_name] = field_value
+            elif isinstance(field_value, bool):
+                response_fields[field_name] = int(field_value)
             else:
                 response_fields[field_name] = field_value
     sorted_response_fields = dict(sorted(response_fields.items()))
