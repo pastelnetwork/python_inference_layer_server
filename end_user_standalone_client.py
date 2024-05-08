@@ -221,27 +221,25 @@ async def check_supernode_list_func():
     masternode_list_full_df.columns = ['supernode_status', 'protocol_version', 'supernode_psl_address', 'lastseentime', 'activeseconds', 'lastpaidtime', 'lastpaidblock', 'ipaddress:port', 'txid_vout']
     masternode_list_full_df.index = masternode_list_full_df['txid_vout']
     masternode_list_full_df.drop(columns=['txid_vout'], inplace=True)
-    for current_row in masternode_list_full_df.iterrows():
-            current_row_df = pd.DataFrame(current_row[1]).T
-            current_txid_vout = current_row_df.index[0]
-            current_rank = masternode_list_rank_command_output[current_txid_vout]
-            current_pubkey = masternode_list_pubkey_command_output[current_txid_vout]
-            current_extra = masternode_list_extra_command_output[current_txid_vout]
-            masternode_list_full_df.loc[current_row[0], 'rank'] = current_rank
-            masternode_list_full_df.loc[current_row[0], 'pubkey'] = current_pubkey
-            masternode_list_full_df.loc[current_row[0], 'extAddress'] = current_extra['extAddress']
-            masternode_list_full_df.loc[current_row[0], 'extP2P'] = current_extra['extP2P']
-            masternode_list_full_df.loc[current_row[0], 'extKey'] = current_extra['extKey']
-    masternode_list_full_df['lastseentime'] = pd.to_numeric(masternode_list_full_df['lastseentime'], downcast='integer')            
-    masternode_list_full_df['lastpaidtime'] = pd.to_numeric(masternode_list_full_df['lastpaidtime'], downcast='integer')            
+    for txid_vout in masternode_list_full_df.index:
+        rank = masternode_list_rank_command_output.get(txid_vout)
+        pubkey = masternode_list_pubkey_command_output.get(txid_vout)
+        extra = masternode_list_extra_command_output.get(txid_vout, {})
+        masternode_list_full_df.at[txid_vout, 'rank'] = rank if rank is not None else 'Unknown'
+        masternode_list_full_df.at[txid_vout, 'pubkey'] = pubkey if pubkey is not None else 'Unknown'
+        masternode_list_full_df.at[txid_vout, 'extAddress'] = extra.get('extAddress', 'Unknown')
+        masternode_list_full_df.at[txid_vout, 'extP2P'] = extra.get('extP2P', 'Unknown')
+        masternode_list_full_df.at[txid_vout, 'extKey'] = extra.get('extKey', 'Unknown')
+    masternode_list_full_df['lastseentime'] = pd.to_numeric(masternode_list_full_df['lastseentime'], downcast='integer')
+    masternode_list_full_df['lastpaidtime'] = pd.to_numeric(masternode_list_full_df['lastpaidtime'], downcast='integer')
     masternode_list_full_df['lastseentime'] = pd.to_datetime(masternode_list_full_df['lastseentime'], unit='s')
     masternode_list_full_df['lastpaidtime'] = pd.to_datetime(masternode_list_full_df['lastpaidtime'], unit='s')
     masternode_list_full_df['activeseconds'] = masternode_list_full_df['activeseconds'].astype(int)
     masternode_list_full_df['lastpaidblock'] = masternode_list_full_df['lastpaidblock'].astype(int)
-    masternode_list_full_df['activedays'] = [float(x)/86400.0 for x in masternode_list_full_df['activeseconds'].values.tolist()]
-    masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int)
+    masternode_list_full_df['activedays'] = masternode_list_full_df['activeseconds'].apply(lambda x: float(x)/86400.0)
+    masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int, errors='ignore')
     masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['supernode_status'].isin(['ENABLED', 'PRE_ENABLED'])]
-    masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['ipaddress:port'] != '154.38.164.75:29933'] #TODO: Remove this
+    masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['ipaddress:port'] != '154.38.164.75:29933']  # TODO: Remove this
     masternode_list_full_df__json = masternode_list_full_df.to_json(orient='index')
     return masternode_list_full_df, masternode_list_full_df__json
 
@@ -1526,7 +1524,7 @@ class PastelInferenceClient:
             logger.info(f"Preliminary price quote is within the acceptable range: {quoted_price_per_credit} PSL per credit, {quoted_total_price:,} PSL total, which is within the maximum of {maximum_per_credit_price_in_psl} PSL per credit and {maximum_total_credit_pack_price_in_psl:,} PSL total. The price difference from the estimated fair market price is {100*price_difference_percentage:.2f}%, which is within the allowed maximum of {100*MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING:.2f}%.")
             return True
         else:
-            logger.warning(f"Preliminary price quote exceeds the maximum acceptable price or the price difference from the estimated fair price is too high! Quoted price: {quoted_price_per_credit} PSL per credit, {quoted_total_price} PSL total, maximum price: {maximum_per_credit_price_in_psl} PSL per credit, {maximum_total_credit_pack_price_in_psl} PSL total. The price difference from the estimated fair market price is {100*price_difference_percentage:.2f}%, which exceeds the allowed maximum of {100*MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING:.2f}%.")
+            logger.warning(f"Preliminary price quote exceeds the maximum acceptable price or the price difference from the estimated fair price is too high! Quoted price: {quoted_price_per_credit} PSL per credit, {quoted_total_price:,.1f} PSL total, maximum price: {maximum_per_credit_price_in_psl:,.1f} PSL per credit, {maximum_total_credit_pack_price_in_psl:,.1f} PSL total. The price difference from the estimated fair market price is {100*price_difference_percentage:.2f}%, which exceeds the allowed maximum of {100*MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING:.2f}%.")
             return False
         
     async def internal_estimate_of_credit_pack_ticket_cost_in_psl(self, desired_number_of_credits: float, price_cushion_pct: float):
@@ -2139,7 +2137,8 @@ async def handle_credit_pack_ticket_end_to_end(
     credit_pack_purchase_request_confirmation.requesting_end_user_pastelid_signature_on_sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields = await sign_message_with_pastelid_func(MY_LOCAL_PASTELID, credit_pack_purchase_request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields, MY_PASTELID_PASSPHRASE)
     credit_pack_purchase_request_confirmation_response = await inference_client.confirm_credit_purchase_request(highest_ranked_supernode_url, credit_pack_purchase_request_confirmation)
     # Send the credit pack purchase completion announcement to the responding supernode:
-    for supernode_pastelid in signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
+    list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = json.loads(signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
+    for supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
         try:
             is_valid_pastelid = check_if_pastelid_is_valid_func(supernode_pastelid)
             if is_valid_pastelid:
@@ -2161,7 +2160,7 @@ async def handle_credit_pack_ticket_end_to_end(
     if credit_pack_purchase_request_status.status != "completed":
         logger.error(f"Credit pack purchase request failed: {credit_pack_purchase_request_status.status}")
         # Retry the storage with the closest agreeing supernode
-        closest_agreeing_supernode_pastelid = await get_closest_supernode_pastelid_from_list(MY_LOCAL_PASTELID, signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
+        closest_agreeing_supernode_pastelid = await get_closest_supernode_pastelid_from_list(MY_LOCAL_PASTELID, list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
         credit_pack_storage_retry_request = CreditPackStorageRetryRequest(
             sha3_256_hash_of_credit_pack_purchase_request_response_fields=signed_credit_pack_ticket.sha3_256_hash_of_credit_pack_purchase_request_response_fields,
             credit_pack_purchase_request_fields_json_b64=signed_credit_pack_ticket.credit_pack_purchase_request_fields_json_b64,
@@ -2178,7 +2177,7 @@ async def handle_credit_pack_ticket_end_to_end(
         closest_agreeing_supernode_url = await get_supernode_url_from_pastelid_func(closest_agreeing_supernode_pastelid, supernode_list_df)
         credit_pack_storage_retry_request_response = await inference_client.credit_pack_storage_retry_request(closest_agreeing_supernode_url, credit_pack_storage_retry_request)
         # Send the credit pack purchase completion announcement to the responding supernode:
-        for supernode_pastelid in signed_credit_pack_ticket.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
+        for supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
             try:
                 is_valid_pastelid = check_if_pastelid_is_valid_func(supernode_pastelid)
                 if is_valid_pastelid:
@@ -2324,7 +2323,7 @@ async def handle_inference_request_end_to_end(
         else:
             logger.error(f"Invalid tracking transaction TXID: {tracking_transaction_txid}")
     else:
-        logger.info(f"Quoted price of {proposed_cost_in_credits} credits exceeds the maximum allowed cost of {maximum_inference_cost_in_credits} credits. Inference request not confirmed.")
+        logger.info(f"Quoted price of {proposed_cost_in_credits:,.1f} credits exceeds the maximum allowed cost of {maximum_inference_cost_in_credits:,.1f} credits. Inference request not confirmed.")
     return None, None, None
     
 async def main():
@@ -2363,8 +2362,8 @@ async def main():
         inference_client = PastelInferenceClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
         estimated_total_cost_in_psl_for_credit_pack = await inference_client.internal_estimate_of_credit_pack_ticket_cost_in_psl(desired_number_of_credits, credit_price_cushion_percentage)
         if estimated_total_cost_in_psl_for_credit_pack > maximum_total_amount_of_psl_to_fund_in_new_tracking_address:
-            logger.error(f"Estimated total cost of credit pack exceeds the maximum allowed amount of {maximum_total_amount_of_psl_to_fund_in_new_tracking_address} PSL")
-            raise ValueError(f"Estimated total cost of credit pack exceeds the maximum allowed amount of {maximum_total_amount_of_psl_to_fund_in_new_tracking_address} PSL")
+            logger.error(f"Estimated total cost of credit pack exceeds the maximum allowed amount of {maximum_total_amount_of_psl_to_fund_in_new_tracking_address:,.1f} PSL")
+            raise ValueError(f"Estimated total cost of credit pack exceeds the maximum allowed amount of {maximum_total_amount_of_psl_to_fund_in_new_tracking_address:,.1f} PSL")
         amount_to_fund_credit_tracking_address = round(amount_of_psl_for_tracking_transactions + estimated_total_cost_in_psl_for_credit_pack, 2)
         credit_usage_tracking_psl_address, _ = await create_and_fund_new_psl_credit_tracking_address(amount_to_fund_credit_tracking_address)
         credit_pack_purchase_request_confirmation_response = await handle_credit_pack_ticket_end_to_end(
