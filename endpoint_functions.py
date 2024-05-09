@@ -557,7 +557,7 @@ async def check_status_of_credit_purchase_request_endpoint(
         status = await service_functions.get_credit_purchase_request_status(credit_pack_request_status_check)
         status_dict = status.model_dump()
         status_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in status_dict.items()}
-        service_functions.log_action_with_payload("checked status of", "credit purchase request", status_dict)
+        service_functions.log_action_with_payload("checking status of", "credit purchase request", status_dict)
         return status
     except Exception as e:
         logger.error(f"Error checking status of credit purchase request: {str(e)}")

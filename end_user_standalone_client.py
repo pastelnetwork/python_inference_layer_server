@@ -1580,7 +1580,7 @@ class PastelInferenceClient:
         payload = price_quote_response.model_dump()
         payload = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in payload.items()}
         log_action_with_payload("sending", "price quote response to supernode", payload)
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*4)) as client:
             response = await client.post(
                 f"{supernode_url}/credit_purchase_preliminary_price_quote_response",
                 json={
@@ -2338,7 +2338,7 @@ async def main():
         burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
         
     use_test_messaging_functionality = 0
-    use_test_credit_pack_ticket_functionality = 0
+    use_test_credit_pack_ticket_functionality = 1
     use_test_credit_pack_ticket_usage = 1
     use_test_inference_request_functionality = 1
     use_test_llm_text_completion = 1
@@ -2358,7 +2358,7 @@ async def main():
         desired_number_of_credits = 1500
         amount_of_psl_for_tracking_transactions = 10.0
         credit_price_cushion_percentage = 0.15
-        maximum_total_amount_of_psl_to_fund_in_new_tracking_address = 120000.0
+        maximum_total_amount_of_psl_to_fund_in_new_tracking_address = 130000.0
         inference_client = PastelInferenceClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)       
         estimated_total_cost_in_psl_for_credit_pack = await inference_client.internal_estimate_of_credit_pack_ticket_cost_in_psl(desired_number_of_credits, credit_price_cushion_percentage)
         if estimated_total_cost_in_psl_for_credit_pack > maximum_total_amount_of_psl_to_fund_in_new_tracking_address:
@@ -2380,7 +2380,7 @@ async def main():
     if 'credit_pack_purchase_request_confirmation_response' in locals():
         credit_pack_ticket_pastel_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
     else:
-        credit_pack_ticket_pastel_txid = "c00569828149dd8d3c5be68ebda5e00599644a209865291abce244551702db75"
+        credit_pack_ticket_pastel_txid = "a037f4c1e691fad3c3ba57b7709c69b2f368ea4944fc4e67dd2c239ab32e908d"
     logger.info(f"Selected credit pack ticket transaction ID: {credit_pack_ticket_pastel_txid}") # Each credit pack ticket has a corresponding UNIQUE tracking PSL address that must be accessible within the wallet of the client machine.
     
     # TODO: Add all credit pack tickets we create to local client database and make function that can automatically select the credit pack ticket with the largest remaining balance of credits and its corresponding psl tracking address.

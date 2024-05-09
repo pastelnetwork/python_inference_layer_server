@@ -3210,10 +3210,10 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         # Check if the credit pack is valid:
         validation_results = await validate_existing_credit_pack_ticket(credit_pack_ticket_pastel_txid)
         if not validation_results["credit_pack_ticket_is_valid"]:
-            logger.warning(f"Invalid credit pack ticket: {validation_results['validation_checks']}")
+            logger.warning(f"Invalid credit pack ticket: {validation_results['validation_failure_reasons_list']}")
             return False, 0, 0
         else:
-            logger.info(f"Credit pack ticket with txid {credit_pack_ticket_pastel_txid} passed all validation checks: {validation_results['validation_checks']}")
+            logger.info(f"Credit pack ticket with txid {credit_pack_ticket_pastel_txid} passed all validation checks: {pretty_json_func(validation_results['validation_checks'])}")
         # Check if the credit pack has sufficient credits for the request
         current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_pastel_txid)
         if proposed_cost_in_credits >= current_credit_balance:
@@ -4349,6 +4349,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
             select(db_code.BurnAddressTransaction)
             .where(db_code.BurnAddressTransaction.burn_address == burn_address)
             .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
+            .where(db_code.BurnAddressTransaction.amount <= 1.0)
         )
         db_transactions = db_transactions_result.all()
     total_credits_consumed = sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
@@ -4366,7 +4367,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
         new_transactions = listsinceblock_output["transactions"]
         new_burn_transactions = [
             tx for tx in new_transactions
-            if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height)
+            if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height) and abs(tx.get("amount")) < 1.0
         ]
         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
         chunk_size = 100
