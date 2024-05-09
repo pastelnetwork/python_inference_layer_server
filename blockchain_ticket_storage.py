@@ -476,7 +476,7 @@ async def retrieve_data_from_blockchain(txid):
             logger.error("Uncompressed data hash verification failed")
             return None
         # Log successful retrieval and return the decompressed data
-        logger.info(f"Data retrieved successfully from the blockchain. Identifier: {identifier}, Length: {len(decompressed_data)} bytes")
+        logger.info(f"Data retrieved successfully from the blockchain. Identifier: {identifier}, Length: {len(decompressed_data):,} bytes")
         return decompressed_data
     except Exception as e:
         logger.error(f"Error occurred while retrieving data from the blockchain: {e}")

@@ -1660,7 +1660,7 @@ class PastelInferenceClient:
         challenge_signature = challenge_result["signature"]
         payload = credit_pack_purchase_request_confirmation.model_dump()
         payload = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in payload.items()}        
-        log_action_with_payload("sending", "purchase completion announcement message", payload)
+        # log_action_with_payload("sending", "purchase completion announcement message", payload)
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
                 f"{supernode_url}/credit_pack_purchase_completion_announcement",
@@ -2338,7 +2338,7 @@ async def main():
         burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
         
     use_test_messaging_functionality = 0
-    use_test_credit_pack_ticket_functionality = 1
+    use_test_credit_pack_ticket_functionality = 0
     use_test_credit_pack_ticket_usage = 1
     use_test_inference_request_functionality = 1
     use_test_llm_text_completion = 1
@@ -2380,7 +2380,7 @@ async def main():
     if 'credit_pack_purchase_request_confirmation_response' in locals():
         credit_pack_ticket_pastel_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
     else:
-        credit_pack_ticket_pastel_txid = "c7b16865e0860acb136e6f0a7e503acbefc124a183f3680f297c859ade3a2f46" # "44oZnTrqgCF8wF2AyCzqTJKRioYLq3Wosv1M"
+        credit_pack_ticket_pastel_txid = "c00569828149dd8d3c5be68ebda5e00599644a209865291abce244551702db75"
     logger.info(f"Selected credit pack ticket transaction ID: {credit_pack_ticket_pastel_txid}") # Each credit pack ticket has a corresponding UNIQUE tracking PSL address that must be accessible within the wallet of the client machine.
     
     # TODO: Add all credit pack tickets we create to local client database and make function that can automatically select the credit pack ticket with the largest remaining balance of credits and its corresponding psl tracking address.
