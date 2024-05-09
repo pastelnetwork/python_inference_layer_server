@@ -1902,12 +1902,11 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
         logger.info("Now selecting potentially agreeing supernodes to sign off on the proposed credit pricing for the credit pack purchase request...")
         potentially_agreeing_supernodes = await select_potentially_agreeing_supernodes()
         logger.info(f"Selected {len(potentially_agreeing_supernodes)} potentially agreeing supernodes: {potentially_agreeing_supernodes}")
-        credit_pack_purchase_request_fields_json = await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(preliminary_price_quote_response)
         # Create the price agreement request without the hash and signature fields
         price_agreement_request = db_code.CreditPackPurchasePriceAgreementRequest(
             sha3_256_hash_of_credit_pack_purchase_request_response_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_preliminary_price_quote_fields,
             supernode_requesting_price_agreement_pastelid=MY_PASTELID,
-            credit_pack_purchase_request_fields_json_b64=base64.b64encode(credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
+            credit_pack_purchase_request_fields_json_b64=preliminary_price_quote_response.credit_pack_purchase_request_fields_json_b64,
             credit_usage_tracking_psl_address=preliminary_price_quote_response.credit_usage_tracking_psl_address,
             proposed_psl_price_per_credit=preliminary_price_quote_response.preliminary_quoted_price_per_credit_in_psl,
             price_agreement_request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
@@ -1955,7 +1954,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             logger.info("Responding to end user with termination message...")
             termination_message = db_code.CreditPackPurchaseRequestResponseTermination(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
-                credit_pack_purchase_request_fields_json_b64=base64.b64encode(credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
+                credit_pack_purchase_request_fields_json_b64=preliminary_price_quote_response.credit_pack_purchase_request_fields_json_b64,
                 termination_reason_string="Not enough supernodes responded with valid price agreement responses",
                 termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
@@ -1985,7 +1984,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             logger.info("Responding to end user with termination message...")
             termination_message = db_code.CreditPackPurchaseRequestResponseTermination(
                 sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
-                credit_pack_purchase_request_fields_json_b64=base64.b64encode(credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
+                credit_pack_purchase_request_fields_json_b64=preliminary_price_quote_response.credit_pack_purchase_request_fields_json_b64,
                 termination_reason_string="Not enough supernodes agreed to the proposed pricing",
                 termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
@@ -2506,9 +2505,9 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             validation_results["validation_failure_reasons_list"].append(f"Invalid burn transaction for credit pack ticket with TXID: {credit_pack_ticket_txid}")
         active_supernodes_count_at_the_time, active_supernodes_at_the_time = await fetch_active_supernodes_count_and_details(credit_pack_purchase_request_response.request_response_pastel_block_height)
         list_of_active_supernode_pastelids_at_the_time = [x["pastel_id"] for x in active_supernodes_at_the_time]
-        list_of_potentially_agreeing_supernodes = json.loads(credit_pack_purchase_request_response.list_of_potentially_agreeing_supernodes)
-        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = json.loads(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
-        agreeing_supernodes_signatures_dict = json.loads(credit_pack_purchase_request_response.agreeing_supernodes_signatures_dict)
+        list_of_potentially_agreeing_supernodes = credit_pack_purchase_request_response.list_of_potentially_agreeing_supernodes
+        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms
+        agreeing_supernodes_signatures_dict = credit_pack_purchase_request_response.agreeing_supernodes_signatures_dict
         # First check if all included pastelids were valid supernodes at the time:
         for potentially_agreeing_supernode_pastelid in list_of_potentially_agreeing_supernodes:
             potentially_agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height = potentially_agreeing_supernode_pastelid in list_of_active_supernode_pastelids_at_the_time
