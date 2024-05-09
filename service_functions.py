@@ -2539,14 +2539,14 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         validation_errors_in_credit_pack_purchase_request_response = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_response)
         validation_errors_in_credit_pack_purchase_request_confirmation = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_confirmation) 
         if len(validation_errors_in_credit_pack_purchase_request_response) > 0:
-            logger.warning(f"Warning! Computed hash does not match for ticket request response object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_response")
+            logger.warning(f"Warning! Computed hash does not match for ticket request response object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_response}")
             validation_results["validation_checks"].append({
                 "check_name": f"Computed hash does not match for ticket request response object for credit pack ticket with txid: {validation_errors_in_credit_pack_purchase_request_response}",
                 "is_valid": False
             })            
             validation_results["credit_pack_ticket_is_valid"] = False
         if len(validation_errors_in_credit_pack_purchase_request_confirmation) > 0:
-            logger.warning(f"Warning! Computed hash does not match for ticket request confirmation object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_confirmation")
+            logger.warning(f"Warning! Computed hash does not match for ticket request confirmation object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_confirmation}")
             validation_results["validation_checks"].append({
                 "check_name": f"Computed hash does not match for ticket request confirmation object for credit pack ticket with txid: {validation_errors_in_credit_pack_purchase_request_confirmation}",
                 "is_valid": False
