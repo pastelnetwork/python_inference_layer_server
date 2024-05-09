@@ -1258,6 +1258,17 @@ async def get_credit_pack_purchase_request_confirmation(sha3_256_hash_of_credit_
         logger.error(f"Error getting credit pack purchase request confirmation: {str(e)}")
         raise
 
+async def get_credit_pack_purchase_request_confirmation_from_request_hash(sha3_256_hash_of_credit_pack_purchase_request_fields: str) -> db_code.CreditPackPurchaseRequestConfirmation:
+    try:
+        async with db_code.Session() as db_session:
+            result = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestConfirmation).where(db_code.CreditPackPurchaseRequestConfirmation.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
+            )
+            return result.one_or_none()
+    except Exception as e:
+        logger.error(f"Error getting credit pack purchase request confirmation: {str(e)}")
+        raise
+
 async def save_credit_pack_purchase_request_confirmation(credit_pack_purchase_request_confirmation: db_code.CreditPackPurchaseRequestConfirmation) -> None:
     try:
         async with db_code.Session() as db_session:
@@ -1550,10 +1561,10 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
         traceback.print_exc()        
         raise
 
-async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json: str) -> str:
+async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str) -> str:
     try:
         logger.info("Now attempting to write the ticket data to the blockchain...")
-        credit_pack_ticket_txid, total_bytes_used = await store_data_in_blockchain(credit_pack_purchase_request_response_json)
+        credit_pack_ticket_txid, total_bytes_used = await store_data_in_blockchain(credit_pack_combined_blockchain_ticket_data_json)
         logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data; total bytes used to store the data was {total_bytes_used:,}; now waiting for the transaction to be confirmed...")
         max_retries = 20
         retry_delay = 20
@@ -1585,7 +1596,7 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_re
             logger.info("Now verifying that we can reconstruct the original file written exactly...")
             reconstructed_file_data = await retrieve_data_from_blockchain(credit_pack_ticket_txid)
             decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
-            if decoded_reconstructed_file_data == credit_pack_purchase_request_response_json:
+            if decoded_reconstructed_file_data == credit_pack_combined_blockchain_ticket_data_json:
                 logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
                 use_test_reconstruction_of_object_from_json = 0
                 if use_test_reconstruction_of_object_from_json:
@@ -1835,7 +1846,7 @@ async def send_credit_pack_purchase_request_final_response_to_supernodes(respons
     except Exception as e:
         logger.error(f"Error sending final response announcement to supernodes: {str(e)}")
         traceback.print_exc()
-        raise    
+        raise
 
 def transform_json(input_string):
     # Parse the JSON string into a Python dictionary
@@ -1947,9 +1958,9 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             response_validation_errors = await validate_credit_pack_ticket_message_data_func(current_price_agreement_response)
             if not response_validation_errors:
                 valid_price_agreement_request_responses.append(current_price_agreement_response)
-        logger.info(f"Received {len(valid_price_agreement_request_responses)} valid price agreement responses from potentially agreeing supernodes out of {len(potentially_agreeing_supernodes)} asked.")                
-        # Check if enough supernodes responded with valid responses
         supernode_price_agreement_response_percentage_achieved = len(valid_price_agreement_request_responses) / len(potentially_agreeing_supernodes)
+        logger.info(f"Received {len(valid_price_agreement_request_responses)} valid price agreement responses from potentially agreeing supernodes out of {len(potentially_agreeing_supernodes)} asked, a quorum percentage of {supernode_price_agreement_response_percentage_achieved:.2%} (Required minimum quorum percentage is {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.2%})")              
+        # Check if enough supernodes responded with valid responses
         if supernode_price_agreement_response_percentage_achieved <= SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:
             logger.warning(f"Not enough supernodes responded with valid price agreement responses; only {supernode_price_agreement_response_percentage_achieved:.2%} of the supernodes responded, less than the required quorum percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.2%}")
             logger.info("Responding to end user with termination message...")
@@ -2037,6 +2048,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
         )
         logger.info(f"Now generating the final credit pack purchase request response and assembling the {len(list_of_agreeing_supernodes)} agreeing supernode signatures...")
         # Generate the hash and signature fields
+        response_fields_that_are_hashed = await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(credit_pack_purchase_request_response)
         credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_purchase_request_response)
         credit_pack_purchase_request_response.responding_supernode_signature_on_credit_pack_purchase_request_response_hash = await sign_message_with_pastelid_func(
             MY_PASTELID,
@@ -2243,17 +2255,22 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             current_block_height = await get_current_pastel_block_height_func()
         if matching_transaction_found or exceeding_transaction_found:
             # Store the credit pack ticket on the blockchain
+            credit_pack_purchase_request_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
+            credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_json)
             credit_pack_purchase_request_response_dict = credit_pack_purchase_request_response.model_dump()
             credit_pack_purchase_request_response_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in credit_pack_purchase_request_response_dict.items()}
-            credit_pack_purchase_request_response_json = json.dumps(credit_pack_purchase_request_response_dict)
-            credit_pack_ticket_bytes_before_compression = sys.getsizeof(credit_pack_purchase_request_response_json)
-            compressed_credit_pack_ticket, _ = await compress_data_with_zstd_func(credit_pack_purchase_request_response_json)
+            credit_pack_purchase_request_confirmation_dict = confirmation.model_dump()
+            credit_pack_purchase_request_confirmation_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in credit_pack_purchase_request_confirmation_dict.items()}
+            credit_pack_combined_blockchain_ticket_data = {"credit_pack_purchase_request_dict": credit_pack_purchase_request_dict, "credit_pack_purchase_request_response_dict": credit_pack_purchase_request_response_dict, "credit_pack_purchase_request_confirmation_dict": credit_pack_purchase_request_confirmation_dict}
+            credit_pack_combined_blockchain_ticket_data_json = json.dumps(credit_pack_combined_blockchain_ticket_data)
+            credit_pack_ticket_bytes_before_compression = sys.getsizeof(credit_pack_combined_blockchain_ticket_data_json)
+            compressed_credit_pack_ticket, _ = await compress_data_with_zstd_func(credit_pack_combined_blockchain_ticket_data_json)
             credit_pack_ticket_bytes_after_compression = sys.getsizeof(compressed_credit_pack_ticket)
             compression_ratio = credit_pack_ticket_bytes_before_compression / credit_pack_ticket_bytes_after_compression
             logger.info(f"Achieved a compression ratio of {compression_ratio:.2f} on credit pack ticket data!")
             logger.info(f"Required burn transaction confirmed with {num_confirmations} confirmations; now attempting to write the credit pack ticket to the blockchain (a total of {credit_pack_ticket_bytes_before_compression:,} bytes before compression and {credit_pack_ticket_bytes_after_compression:,} bytes after compression)...")
-            log_action_with_payload("Writing", "the credit pack ticket to the blockchain", credit_pack_purchase_request_response_json)
-            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_purchase_request_response_json)
+            log_action_with_payload("Writing", "the credit pack ticket to the blockchain", credit_pack_combined_blockchain_ticket_data_json)
+            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json)
             if storage_validation_error_string=="":
                 credit_pack_confirmation_outcome_string = "success"
                 await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, pastel_api_credit_pack_ticket_registration_txid)
@@ -2380,7 +2397,16 @@ async def process_credit_pack_storage_retry_request(storage_retry_request: db_co
         original_supernode_confirmed_storage = await check_original_supernode_storage_confirmation(storage_retry_request.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
         if not original_supernode_confirmed_storage:
             # Store the credit pack ticket on the blockchain
-            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(json.loads(storage_retry_request.credit_pack_purchase_request_response_json))
+            credit_pack_purchase_request_response = await get_credit_pack_purchase_request_response(storage_retry_request.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
+            credit_pack_purchase_request_response_dict = credit_pack_purchase_request_response.model_dump()
+            credit_pack_purchase_request_json = base64.b64decode(credit_pack_purchase_request_response_dict['credit_pack_purchase_request_fields_json_b64']).decode('utf-8')
+            credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_json)
+            credit_pack_purchase_request_confirmation = await get_credit_pack_purchase_request_confirmation_from_request_hash(credit_pack_purchase_request_response_dict['sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields'])
+            credit_pack_purchase_request_confirmation_dict = confirmation.model_dump()
+            credit_pack_purchase_request_confirmation_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in credit_pack_purchase_request_confirmation_dict.items()}
+            credit_pack_combined_blockchain_ticket_data = {"credit_pack_purchase_request_dict": credit_pack_purchase_request_dict, "credit_pack_purchase_request_response_dict": credit_pack_purchase_request_response_dict, "credit_pack_purchase_request_confirmation_dict": credit_pack_purchase_request_confirmation_dict}
+            credit_pack_combined_blockchain_ticket_data_json = json.dumps(credit_pack_combined_blockchain_ticket_data)
+            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json)
             if storage_validation_error_string=="":
                 credit_pack_confirmation_outcome_string = "success"
             else:
@@ -2463,22 +2489,26 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         # Retrieve the credit pack ticket data from the blockchain
         reconstructed_file_data = await retrieve_data_from_blockchain(credit_pack_ticket_txid)
         decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
-        credit_pack_purchase_request_response_json_transformed = transform_credit_pack_purchase_request_response(json.loads(decoded_reconstructed_file_data))
-        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_json_transformed)
-        logger.info(f"Credit pack ticket data for credit pack with TXID {credit_pack_ticket_txid}: {pretty_json_func(credit_pack_purchase_request_response_json_transformed)}")
+        decoded_reconstructed_file_data_dict = json.loads(decoded_reconstructed_file_data)
+        credit_pack_purchase_request_response_dict = decoded_reconstructed_file_data_dict["credit_pack_purchase_request_response_dict"]
+        credit_pack_purchase_request_response_dict_transformed = transform_credit_pack_purchase_request_response(credit_pack_purchase_request_response_dict)
+        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_dict_transformed)
+        credit_pack_purchase_request_confirmation_dict = decoded_reconstructed_file_data_dict["credit_pack_purchase_request_confirmation_dict"]
+        credit_pack_purchase_request_confirmation = db_code.CreditPackPurchaseRequestConfirmation(**credit_pack_purchase_request_confirmation_dict)
+        logger.info(f"Credit pack ticket data for credit pack with TXID {credit_pack_ticket_txid}:\n\nTicket Request Response:\n\n {pretty_json_func(credit_pack_purchase_request_response_dict_transformed)} \n\nTicket Request Confirmation:\n\n {pretty_json_func(credit_pack_purchase_request_confirmation_dict)}")
         validation_results = {
             "credit_pack_ticket_is_valid": True,
             "validation_checks": []
         }
         # Validate the payment
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_transaction(
-            None,
+            credit_pack_purchase_request_confirmation.txid_of_credit_purchase_burn_transaction,
             credit_pack_purchase_request_response.credit_usage_tracking_psl_address,
             credit_pack_purchase_request_response.proposed_total_cost_of_credit_pack_in_psl,
             credit_pack_purchase_request_response.request_response_pastel_block_height
         )
         validation_results["validation_checks"].append({
-            "check_name": "Payment validation",
+            "check_name": f"Ticket Payment Burn Transaction validation (Burn payment TXID: {credit_pack_purchase_request_confirmation.txid_of_credit_purchase_burn_transaction} sent with {amount_received_at_burn_address} PSL",
             "is_valid": matching_transaction_found or exceeding_transaction_found
         })
         if not (matching_transaction_found or exceeding_transaction_found):
@@ -2505,6 +2535,23 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             })
             if not agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height:
                 validation_results["credit_pack_ticket_is_valid"] = False            
+        #Validate the ticket response hashes:
+        validation_errors_in_credit_pack_purchase_request_response = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_response)
+        validation_errors_in_credit_pack_purchase_request_confirmation = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_confirmation) 
+        if len(validation_errors_in_credit_pack_purchase_request_response) > 0:
+            logger.warning(f"Warning! Computed hash does not match for ticket request response object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_response")
+            validation_results["validation_checks"].append({
+                "check_name": f"Computed hash does not match for ticket request response object for credit pack ticket with txid: {validation_errors_in_credit_pack_purchase_request_response}",
+                "is_valid": False
+            })            
+            validation_results["credit_pack_ticket_is_valid"] = False
+        if len(validation_errors_in_credit_pack_purchase_request_confirmation) > 0:
+            logger.warning(f"Warning! Computed hash does not match for ticket request confirmation object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_confirmation")
+            validation_results["validation_checks"].append({
+                "check_name": f"Computed hash does not match for ticket request confirmation object for credit pack ticket with txid: {validation_errors_in_credit_pack_purchase_request_confirmation}",
+                "is_valid": False
+            })            
+            validation_results["credit_pack_ticket_is_valid"] = False                
         # Validate the signatures
         for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
             signatures = agreeing_supernodes_signatures_dict[agreeing_supernode_pastelid]
@@ -2516,6 +2563,8 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             is_fields_json_b64_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, 
                                                                                         credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64,
                                                                                         signatures['credit_pack_purchase_request_fields_json_b64_signature'])
+            if not is_fields_json_b64_signature_valid:
+                logger.warning(f"Warning! Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
             if use_verbose_validation:
                 logger.info(f"Signature validation result: {is_fields_json_signature_valid}")
             validation_results["validation_checks"].append({
@@ -4293,7 +4342,7 @@ async def bulk_insert_block_hashes(block_hashes):
                 await db.rollback()
                 logger.error(f"Error during bulk insert of block hashes: {str(e)}")
 
-async def determine_current_credit_pack_balance_based_on_tracking_transactions_old(credit_pack_ticket_txid: str):
+async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_txid: str):
     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
     credit_pack_purchase_request_response_object = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
     credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response_object.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
@@ -4357,7 +4406,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions_o
     logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
 
-async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_txid: str):
+async def determine_current_credit_pack_balance_based_on_tracking_transactions_new(credit_pack_ticket_txid: str):
     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
     credit_pack_purchase_request_response_object = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
     credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response_object.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
@@ -4750,6 +4799,21 @@ async def compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance: SQLM
     response_fields_json = await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance)
     sha256_hash_of_response_fields = get_sha256_hash_of_input_data_func(response_fields_json)
     return sha256_hash_of_response_fields
+
+async def validate_credit_pack_blockchain_ticket_data_field_hashes(model_instance: SQLModel):
+    validation_errors = []
+    response_fields_json = await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance)
+    expected_hash = get_sha256_hash_of_input_data_func(response_fields_json)
+    hash_field_name = None
+    last_hash_field_name = None
+    for field_name in model_instance.__fields__:
+        if field_name.startswith("sha3_256_hash_of") and field_name.endswith("_fields"):
+            last_hash_field_name = field_name
+    if last_hash_field_name:
+        actual_hash = getattr(model_instance, last_hash_field_name)
+        if actual_hash != expected_hash:
+            validation_errors.append(f"SHA3-256 hash in field {last_hash_field_name} does not match the computed hash of the response fields")    
+    return validation_errors
 
 async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel):
     validation_errors = []
