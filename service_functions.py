@@ -2849,7 +2849,7 @@ def get_tokenizer(model_name: str):
         "mistral-7b-instruct": "mistralai/Mistral-7B-Instruct-v0.2",
         "phi": "TheBloke/phi-2-GGUF",
         "openai": "cl100k_base",
-        "groq-llama2": "TheBloke/Yarn-Llama-2-7B-128K-GGUF",
+        "groq-llama3": "meta-llama/Meta-Llama-3-70B",
         "groq-mixtral": "EleutherAI/gpt-neox-20b",
         "groq-gemma": "google/flan-ul2",
         "mistralapi": "mistralai/Mistral-7B-Instruct-v0.2",
@@ -2900,7 +2900,6 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
     # Define the pricing data for each API service and model
     logger.info(f"Evaluating API cost for model: {model_name}")
     pricing_data = {
-        "claude-instant": {"input_cost": 0.0008, "output_cost": 0.0024, "per_call_cost": 0.0013},
         "claude-2.1": {"input_cost": 0.008, "output_cost": 0.024, "per_call_cost": 0.0128},
         "claude3-haiku": {"input_cost": 0.00025, "output_cost": 0.00125, "per_call_cost": 0.0006},
         "claude3-sonnet": {"input_cost": 0.003, "output_cost": 0.015, "per_call_cost": 0.0078},
@@ -2920,8 +2919,8 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         "openai-gpt-3.5-turbo-0125": {"input_cost": 0.0005, "output_cost": 0.0015, "per_call_cost": 0},
         "openai-gpt-3.5-turbo-instruct": {"input_cost": 0.0015, "output_cost": 0.002, "per_call_cost": 0},
         "openai-text-embedding-ada-002": {"input_cost": 0.0004, "output_cost": 0, "per_call_cost": 0},
-        "groq-llama2-70b-4096": {"input_cost": 0.0007, "output_cost": 0.0008, "per_call_cost": 0},
-        "groq-llama2-7b-2048": {"input_cost": 0.0001, "output_cost": 0.0001, "per_call_cost": 0},
+        "groq-llama3-70b-8192": {"input_cost": 0.0007, "output_cost": 0.0008, "per_call_cost": 0},
+        "groq-llama3-8b-8192": {"input_cost": 0.0001, "output_cost": 0.0001, "per_call_cost": 0},
         "groq-mixtral-8x7b-32768": {"input_cost": 0.00027, "output_cost": 0.00027, "per_call_cost": 0},
         "groq-gemma-7b-it": {"input_cost": 0.0001, "output_cost": 0.0001, "per_call_cost": 0},
         "stability-core": {"credits_per_call": 3},
@@ -3143,6 +3142,44 @@ def validate_pastel_txid_string(input_string: str):
     # Sample txid: 625694b632a05f5df8d70904b9b3ff03d144aec0352b2290a275379586daf8db
     return re.match(r'^[0-9a-fA-F]{64}$', input_string) is not None
 
+async def check_if_input_text_would_get_rejected_from_api_services(input_text: str) -> bool:
+    inference_request_allowed = True
+    if is_swiss_army_llama_responding():
+        logger.info("Now checking suitability of requested inference for API services to avoid banning using Swiss Army Llama with model TinyLlama-1.1B-Chat...")
+        input_prompt = f"A user wants to do inference using the following prompt text using the OpenAI API; is the content or nature of the request problematic or offensive in any way that makes it likely that OpenAI will reject the request for safety reasons and potentially ban the API key for submitting it? Respond ONLY with a one word answer-- `REJECT` if the request will cause problems with OpenAI, or `ACCEPT` if it's unlikely to pose a problem. Here is the inference request submitted by the user:\n\n{input_text}"
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
+            payload = {
+                "input_prompt": input_prompt,
+                "llm_model_name": "TinyLlama-1.1B-Chat-v1.0",
+                "temperature": 0.7,
+                "number_of_tokens_to_generate": 3,
+                "number_of_completions_to_generate": 1,
+                "grammar_file_string": "accept_or_reject",
+            }
+            response = await client.post(
+                f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_text_completions_from_input_prompt/",
+                json=payload,
+                params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+            )
+            if response.status_code == 200:
+                output_results = response.json()
+                output_text = output_results[0]["generated_text"]
+                if output_text == "ACCEPT":
+                    logger.info("Inference request is not problematic, passing on to API service now...")
+                    return inference_request_allowed
+                if output_text == "REJECT":
+                    logger.error("Error! Inference request was determined to be problematic and likely to result in a rejection or ban from the API service!")
+                    inference_request_allowed = False
+                    return inference_request_allowed                
+                logger.warning(f"Warning! Inference check was supposed to result in either 'ACCEPT' or 'REJECT', but it instead returned: '{output_text}'")
+                return inference_request_allowed
+            else:
+                logger.error(f"Failed to execute inference check request with Swiss Army Llama: {response.text}")
+                return inference_request_allowed
+    else:
+        logger.error("Error! Swiss Army Llama is not responding, so we can't check if the inference request is problematic before sending to an API service!")
+        return inference_request_allowed
+
 async def validate_inference_api_usage_request(inference_api_usage_request: db_code.InferenceAPIUsageRequest) -> Tuple[bool, float, float]:
     try:
         validation_errors = await validate_inference_request_message_data_func(inference_api_usage_request)
@@ -3204,8 +3241,14 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         input_data_binary = base64.b64decode(input_data)
         result = magika.identify_bytes(input_data_binary)
         detected_data_type = result.output.ct_label
+        use_check_inference_requests_locally_before_sending_to_api_service = 1
         if detected_data_type == "txt":
             input_data = input_data_binary.decode("utf-8")
+            if is_api_based_model and use_check_inference_requests_locally_before_sending_to_api_service:
+                inference_request_allowed = await check_if_input_text_would_get_rejected_from_api_services(input_data)
+                if not inference_request_allowed:
+                    logger.error(f"Cannot proceed with inference request to model {requested_model} because of risk that it will be rejected and lead to banning!")
+                    return False, 0, 0                   
         proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, input_data)
         # Check if the credit pack is valid:
         validation_results = await validate_existing_credit_pack_ticket(credit_pack_ticket_pastel_txid)
@@ -3331,7 +3374,10 @@ async def check_burn_address_for_tracking_transaction(
                         else:
                             transaction_block_height = 0
                         if ((num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK) and transaction_block_height <= max_block_height:
-                            logger.info(f"Matching confirmed transaction found with {num_confirmations:,} confirmation blocks, greater than or equal to the required confirmation blocks of {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION}!")
+                            if SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK:
+                                logger.info(f"Matching confirmed transaction found with {num_confirmations:,} confirmation blocks, which is acceptable because the 'SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK' flag is set to TRUE...")
+                            else:
+                                logger.info(f"Matching confirmed transaction found with {num_confirmations:,} confirmation blocks, greater than or equal to the required confirmation blocks of {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION}!")
                             return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
                         else:
                             logger.info(f"Matching unconfirmed transaction found! Waiting for it to be mined in a block with at least {MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION} confirmation blocks! (Currently it has only {num_confirmations} confirmation blocks)")
@@ -4806,7 +4852,6 @@ async def validate_credit_pack_blockchain_ticket_data_field_hashes(model_instanc
     validation_errors = []
     response_fields_json = await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance)
     expected_hash = get_sha256_hash_of_input_data_func(response_fields_json)
-    hash_field_name = None
     last_hash_field_name = None
     for field_name in model_instance.__fields__:
         if field_name.startswith("sha3_256_hash_of") and field_name.endswith("_fields"):
