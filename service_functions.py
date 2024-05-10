@@ -4230,7 +4230,7 @@ async def process_transactions_in_chunks_old(transactions, chunk_size):
         decoded_tx_data_list.extend(chunk)  # Optional: Keep track of processed chunks
     return decoded_tx_data_list
 
-async def process_transactions_in_chunks(transactions, chunk_size):
+async def process_transactions_in_chunks(transactions, chunk_size, ignore_unconfirmed_transactions=0):
     decoded_tx_data_list = []
     chunk_count = 0
     all_seen_txids = set()  # Track all txids processed in this session
@@ -4238,7 +4238,10 @@ async def process_transactions_in_chunks(transactions, chunk_size):
         chunk = transactions[i:i + chunk_size]
         chunk_count += 1
         logger.info(f"Processing burn transactions chunk {chunk_count} of {math.ceil(len(transactions) / chunk_size)} (total transaction count of {len(transactions):,})...")
-        tasks = [create_transaction_task_old(transaction) for transaction in chunk if transaction['amount'] > 0] # TODO: Change to create_transaction_task from create_transaction_task_old
+        if ignore_unconfirmed_transactions:
+            tasks = [create_transaction_task(transaction) for transaction in chunk if transaction['amount'] > 0]
+        else:
+            tasks = [create_transaction_task_old(transaction) for transaction in chunk if transaction['amount'] > 0]
         transactions_to_insert = await asyncio.gather(*tasks)
         transactions_to_insert = [txn for txn in transactions_to_insert if txn]
         # Ensure no duplicates are inserted within the same batch
@@ -4355,8 +4358,9 @@ async def full_rescan_burn_transactions():
         logger.info("No burn transaction records found in database, proceeding with full rescan...")
         logger.info("Please wait, retrieving ALL burn transactions from ANY address starting with the genesis block (may take a while and cause high CPU usage...)")
         burn_transactions = await rpc_connection.scanburntransactions("*")
-        chunk_size = 5000  # Adjust the chunk size as needed
-        decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size)
+        chunk_size = 1000  # Adjust the chunk size as needed
+        ignore_unconfirmed_transactions = 1
+        decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, ignore_unconfirmed_transactions)
         logger.info(f"Decoded {len(decoded_tx_data_list):,} new burn transactions in total!")
     if not block_hash_exists:
         logger.info("No block hash records found in database, proceeding with full rescan...")
@@ -4582,7 +4586,8 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
         ]
         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
         chunk_size = 100
-        new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size)
+        ignore_unconfirmed_transactions = 0
+        new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
         logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
         async with db_code.Session() as db:
             new_tracking_transactions_results = await db.exec(
@@ -4639,8 +4644,9 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions_n
             existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
         new_burn_transactions = await rpc_connection.scanburntransactions("*", latest_db_block_height)     
         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
-        chunk_size = 5000
-        new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size)
+        chunk_size = 1000
+        ignore_unconfirmed_transactions = 0
+        new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
         logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
         async with db_code.Session() as db:
             new_tracking_transactions_results = await db.exec(
