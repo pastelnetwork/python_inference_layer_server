@@ -190,12 +190,22 @@ def setup_swiss_army_llama(security_token):
         status_output = run_command("sudo systemctl status swiss_army_llama", capture_output=True, timeout=5)
         logger.info(f"Status of swiss_army_llama service:\n{status_output.stdout}")
         
+def kill_running_instances_of_swiss_army_llama():
+    logger.info("Stopping Swiss Army Llama service...")
+    run_command("sudo systemctl stop swiss_army_llama", check=False)
+    logger.info("Killing any remaining Swiss Army Llama processes...")
+    run_command("ps -ef | grep 'swiss_army' | grep -v grep | awk '{print $2}' | xargs -r kill -9", check=False)
+            
 def check_and_setup_swiss_army_llama(security_token):
     swiss_army_llama_port = 8089
+    use_force_update_swiss_army_llama = 0
     external_ip = get_external_ip_func()
     if external_ip == "Unknown":
         logger.error("Unable to reach external network providers. Network may be unreachable.")
         return
+    if use_force_update_swiss_army_llama:
+        kill_running_instances_of_swiss_army_llama()
+        setup_swiss_army_llama(security_token)
     if is_swiss_army_llama_responding(external_ip, swiss_army_llama_port, security_token) and not is_port_available(swiss_army_llama_port):
         logger.info("Swiss Army Llama is already set up and running.")
     elif not is_port_available(swiss_army_llama_port):

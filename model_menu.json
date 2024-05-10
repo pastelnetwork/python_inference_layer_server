@@ -462,9 +462,9 @@
       }
     },
     {
-      "model_name": "groq-llama2-70b-4096",
+      "model_name": "groq-llama3-70b-8192",
       "model_url": "",
-      "description": "LLaMA2 70b is a powerful language model developed by Meta with a context window of 4,096 tokens.",
+      "description": "LLaMA3 70b is a powerful language model developed by Meta with a context window of 8,192 tokens.",
       "supported_inference_type_strings": [
         "text_completion",
         "embedding"
@@ -507,6 +507,52 @@
         "api_based_pricing": 1
       }
     },
+    {
+      "model_name": "groq-llama3-8b-8192",
+      "model_url": "",
+      "description": "LLaMA3 8b is a powerful but compact language model developed by Meta with a context window of 8,192 tokens.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },    
     {
       "model_name": "groq-mixtral-8x7b-32768",
       "model_url": "",
@@ -789,7 +835,7 @@
           "type": "string",
           "default": null,
           "description": "A blurb of text describing what you do not wish to see in the output image"
-        }                   
+        }
       ],
       "credit_costs": {
         "api_based_pricing": 1
@@ -1032,7 +1078,7 @@
         },
         {
           "name": "temperature",
-          "type": "float", 
+          "type": "float",
           "default": 0.7,
           "description": "The temperature for sampling"
         },
@@ -1461,7 +1507,7 @@
       ],
       "input_fields": [
         {
-          "name": "input_prompt", 
+          "name": "input_prompt",
           "file_type": "text",
           "optional": false
         }

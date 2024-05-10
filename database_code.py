@@ -1,4 +1,3 @@
-import json
 import warnings
 import uuid
 from logger_config import logger
@@ -6,10 +5,9 @@ from datetime import datetime
 import datetime as dt
 from typing import Optional
 from contextlib import asynccontextmanager
-from sqlmodel import Field, SQLModel, Relationship, Column, JSON, UniqueConstraint
+from sqlmodel import Field, SQLModel, Relationship, Column, JSON
 from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
 from sqlalchemy.orm import sessionmaker
-from pydantic import field_validator
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import create_async_engine
 from decouple import Config as DecoupleConfig, RepositoryEnv
