@@ -2309,8 +2309,8 @@ async def handle_inference_request_end_to_end(
                         inference_result_dict["inference_result_decoded"] = inference_result_decoded
                     use_audit_feature = 1
                     if use_audit_feature:
-                        logger.info("Waiting 5 seconds for audit results to be available...")
-                        await asyncio.sleep(5) # Wait for the audit results to be available
+                        logger.info("Waiting 3 seconds for audit results to be available...")
+                        await asyncio.sleep(3) # Wait for the audit results to be available
                         audit_results = await inference_client.audit_inference_request_response_id(inference_response_id, supernode_pastelid)
                         validation_results = validate_inference_data(inference_result_dict, audit_results)
                         logger.info(f"Validation results: {validation_results}")      
@@ -2338,7 +2338,7 @@ async def main():
         burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7' # https://blockchain-devel.slack.com/archives/C03Q2MCQG9K/p1705896449986459
         
     use_test_messaging_functionality = 0
-    use_test_credit_pack_ticket_functionality = 1
+    use_test_credit_pack_ticket_functionality = 0
     use_test_credit_pack_ticket_usage = 1
     use_test_inference_request_functionality = 1
     use_test_llm_text_completion = 1
@@ -2380,7 +2380,7 @@ async def main():
     if 'credit_pack_purchase_request_confirmation_response' in locals():
         credit_pack_ticket_pastel_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
     else:
-        credit_pack_ticket_pastel_txid = "a037f4c1e691fad3c3ba57b7709c69b2f368ea4944fc4e67dd2c239ab32e908d"
+        credit_pack_ticket_pastel_txid = "f0cc8eb36ebcea911eac58cee5fbd24e643e7bef6f526b22b7a4172adf37bb84"
     logger.info(f"Selected credit pack ticket transaction ID: {credit_pack_ticket_pastel_txid}") # Each credit pack ticket has a corresponding UNIQUE tracking PSL address that must be accessible within the wallet of the client machine.
     
     # TODO: Add all credit pack tickets we create to local client database and make function that can automatically select the credit pack ticket with the largest remaining balance of credits and its corresponding psl tracking address.

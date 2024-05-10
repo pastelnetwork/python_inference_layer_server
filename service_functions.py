@@ -3145,12 +3145,13 @@ def validate_pastel_txid_string(input_string: str):
 async def check_if_input_text_would_get_rejected_from_api_services(input_text: str) -> bool:
     inference_request_allowed = True
     if is_swiss_army_llama_responding():
-        logger.info("Now checking suitability of requested inference for API services to avoid banning using Swiss Army Llama with model TinyLlama-1.1B-Chat...")
+        start_time = time.time()
+        logger.info("Now checking suitability of requested inference for API services to avoid banning (using Swiss Army Llama with model TinyLlama-1.1B-Chat)...")
         input_prompt = f"A user wants to do inference using the following prompt text using the OpenAI API; is the content or nature of the request problematic or offensive in any way that makes it likely that OpenAI will reject the request for safety reasons and potentially ban the API key for submitting it? Respond ONLY with a one word answer-- `REJECT` if the request will cause problems with OpenAI, or `ACCEPT` if it's unlikely to pose a problem. Here is the inference request submitted by the user:\n\n{input_text}"
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
             payload = {
                 "input_prompt": input_prompt,
-                "llm_model_name": "TinyLlama-1.1B-Chat-v1.0",
+                "llm_model_name": "tinyllama-1.1b-chat-v1.0",
                 "temperature": 0.7,
                 "number_of_tokens_to_generate": 3,
                 "number_of_completions_to_generate": 1,
@@ -3164,6 +3165,9 @@ async def check_if_input_text_would_get_rejected_from_api_services(input_text: s
             if response.status_code == 200:
                 output_results = response.json()
                 output_text = output_results[0]["generated_text"]
+                end_time = time.time()
+                duration_in_seconds = (end_time - start_time)
+                logger.info(f"Total time taken for inference request content check: {round(duration_in_seconds, 2)} seconds")                
                 if output_text == "ACCEPT":
                     logger.info("Inference request is not problematic, passing on to API service now...")
                     return inference_request_allowed
@@ -3241,14 +3245,14 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         input_data_binary = base64.b64decode(input_data)
         result = magika.identify_bytes(input_data_binary)
         detected_data_type = result.output.ct_label
-        use_check_inference_requests_locally_before_sending_to_api_service = 1
+        use_check_inference_requests_locally_before_sending_to_api_service = 0
         if detected_data_type == "txt":
             input_data = input_data_binary.decode("utf-8")
             if is_api_based_model and use_check_inference_requests_locally_before_sending_to_api_service:
                 inference_request_allowed = await check_if_input_text_would_get_rejected_from_api_services(input_data)
                 if not inference_request_allowed:
                     logger.error(f"Cannot proceed with inference request to model {requested_model} because of risk that it will be rejected and lead to banning!")
-                    return False, 0, 0                   
+                    return False, 0, 0
         proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, input_data)
         # Check if the credit pack is valid:
         validation_results = await validate_existing_credit_pack_ticket(credit_pack_ticket_pastel_txid)
