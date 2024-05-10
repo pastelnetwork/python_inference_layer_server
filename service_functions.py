@@ -1549,10 +1549,59 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
         traceback.print_exc()        
         raise
 
-async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str) -> str:
+async def store_generic_ticket_data_in_blockchain(ticket_input_data: str, ticket_type_identifier: str, credit_usage_tracking_psl_address: str):
+    global rpc_connection
+    try:    
+        if not isinstance(ticket_input_data) == str:
+            error_message = "Ticket data must be a valid string!"
+            logger.error(error_message)
+            raise ValueError(error_message)
+        if not isinstance(ticket_type_identifier) == str:
+            error_message = "Ticket type identifier data must be a valid string!"
+            logger.error(error_message)
+            raise ValueError(error_message)
+        if not check_if_transparent_address_is_valid_func(credit_usage_tracking_psl_address):
+            error_message = f"Supplied PSL tracking address is not valid: {credit_usage_tracking_psl_address}"
+            logger.error(error_message)
+            raise ValueError(error_message)
+        ticket_type_identifier = ticket_type_identifier.upper()
+        ticket_input_data_sha3_256_hash = compute_sha3_256_hexdigest(ticket_input_data)
+        ticket_uncompressed_size_in_bytes = len(ticket_input_data.encode('utf-8'))
+        ticket_dict = {"ticket_identifier_string": ticket_type_identifier,
+                        "ticket_input_data_sha3_256_hash": ticket_input_data_sha3_256_hash,
+                        "ticket_uncompressed_size_in_bytes": ticket_uncompressed_size_in_bytes,
+                        "ticket_data": ticket_input_data}
+        ticket_json = json.dumps(ticket_dict, ensure_ascii=False, indent=4)
+        ticket_json_b64 = base64.b64encode(ticket_json.encode('utf-8')).decode('utf-8')
+        ticket_register_command_response = await rpc_connection.tickets('register', 'contract', ticket_json_b64, ticket_type_identifier, ticket_input_data_sha3_256_hash, credit_usage_tracking_psl_address)
+        return ticket_register_command_response, ticket_dict, ticket_json_b64
+    except Exception as e:
+        logger.error(f"Error occurred while storing ticket data in the blockchain: {e}")
+        traceback.print_exc()
+        return None
+
+async def retrieve_generic_ticket_data_from_blockchain(ticket_txid: str):
+    global rpc_connection
+    try:    
+        # ticket_dict = {"ticket_identifier_string": ticket_type_identifier,
+        #                 "ticket_input_data_sha3_256_hash": ticket_input_data_hash,
+        #                 "ticket_uncompressed_size_in_bytes": ticket_uncompressed_size_in_bytes,
+        #                 "ticket_data": ticket_input_data}
+        # ticket_json = json.dumps(ticket_dict, ensure_ascii=False, indent=4)
+        # ticket_json_b64 = base64.b64encode(ticket_json.encode('utf-8')).decode('utf-8')
+        ticket_get_command_response = await rpc_connection.tickets('get', 'contract', ticket_txid)
+        credit_pack_combined_blockchain_ticket_data_json = ""
+        return credit_pack_combined_blockchain_ticket_data_json
+    except Exception as e:
+        logger.error(f"Error occurred while storing ticket data in the blockchain: {e}")
+        traceback.print_exc()
+        return None
+    
+async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str, credit_usage_tracking_psl_address: str) -> str:
     try:
         logger.info("Now attempting to write the ticket data to the blockchain...")
-        credit_pack_ticket_txid, total_bytes_used = await store_data_in_blockchain(credit_pack_combined_blockchain_ticket_data_json)
+        ticket_type_identifier = "API_CREDIT_PACK_TICKET"
+        credit_pack_ticket_txid, total_bytes_used = await store_generic_ticket_data_in_blockchain(credit_pack_combined_blockchain_ticket_data_json, ticket_type_identifier, credit_usage_tracking_psl_address)
         logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data; total bytes used to store the data was {total_bytes_used:,}; now waiting for the transaction to be confirmed...")
         max_retries = 20
         retry_delay = 20
@@ -1582,7 +1631,7 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain
                 retry_delay *= 1.15  # Optional: increase delay between retries
         if (num_confirmations > 0) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK:
             logger.info("Now verifying that we can reconstruct the original file written exactly...")
-            reconstructed_file_data = await retrieve_data_from_blockchain(credit_pack_ticket_txid)
+            reconstructed_file_data = await retrieve_generic_ticket_data_from_blockchain(credit_pack_ticket_txid)
             decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
             if decoded_reconstructed_file_data == credit_pack_combined_blockchain_ticket_data_json:
                 logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
@@ -2258,7 +2307,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             logger.info(f"Achieved a compression ratio of {compression_ratio:.2f} on credit pack ticket data!")
             logger.info(f"Required burn transaction confirmed with {num_confirmations} confirmations; now attempting to write the credit pack ticket to the blockchain (a total of {credit_pack_ticket_bytes_before_compression:,} bytes before compression and {credit_pack_ticket_bytes_after_compression:,} bytes after compression)...")
             log_action_with_payload("Writing", "the credit pack ticket to the blockchain", credit_pack_combined_blockchain_ticket_data_json)
-            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json)
+            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json, credit_pack_purchase_request_response.credit_usage_tracking_psl_address)
             if storage_validation_error_string=="":
                 credit_pack_confirmation_outcome_string = "success"
                 await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, pastel_api_credit_pack_ticket_registration_txid)
@@ -2394,7 +2443,7 @@ async def process_credit_pack_storage_retry_request(storage_retry_request: db_co
             credit_pack_purchase_request_confirmation_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in credit_pack_purchase_request_confirmation_dict.items()}
             credit_pack_combined_blockchain_ticket_data = {"credit_pack_purchase_request_dict": credit_pack_purchase_request_dict, "credit_pack_purchase_request_response_dict": credit_pack_purchase_request_response_dict, "credit_pack_purchase_request_confirmation_dict": credit_pack_purchase_request_confirmation_dict}
             credit_pack_combined_blockchain_ticket_data_json = json.dumps(credit_pack_combined_blockchain_ticket_data)
-            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json)
+            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json, credit_pack_purchase_request_dict['credit_usage_tracking_psl_address'])
             if storage_validation_error_string=="":
                 credit_pack_confirmation_outcome_string = "success"
             else:
@@ -4607,6 +4656,19 @@ def check_if_transparent_lsp_address_is_valid_func(pastel_address_string):
     else:
         pastel_address_is_valid = 0
     return pastel_address_is_valid
+
+def check_if_transparent_address_is_valid_func(pastel_address_string):
+    pastel_address_is_valid = 0
+    if rpc_port == '9932':
+        if len(pastel_address_string) == 35 and (pastel_address_string[0:2] == 'Pt'):
+            pastel_address_is_valid = 1
+    elif rpc_port == '19932':
+        if len(pastel_address_string) == 35 and (pastel_address_string[0:2] == 'tP'):
+            pastel_address_is_valid = 1
+    elif rpc_port == '29932':
+        if len(pastel_address_string) == 36 and (pastel_address_string[0:2] == '44'):
+            pastel_address_is_valid = 1
+    return pastel_address_is_valid             
 
 async def get_df_json_from_tickets_list_rpc_response_func(rpc_response):
     tickets_df = pd.DataFrame.from_records([rpc_response[idx]['ticket'] for idx, x in enumerate(rpc_response)])
