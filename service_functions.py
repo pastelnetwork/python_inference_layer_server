@@ -560,7 +560,8 @@ async def check_supernode_list_func():
     masternode_list_full_df['activedays'] = masternode_list_full_df['activeseconds'].apply(lambda x: float(x)/86400.0)
     masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int, errors='ignore')
     masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['supernode_status'].isin(['ENABLED', 'PRE_ENABLED'])]
-    masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['ipaddress:port'] != '154.38.164.75:29933']  # TODO: Remove this
+    # If you need to temporarily exclude a given machine:
+    # masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['ipaddress:port'] != '154.38.164.75:29933']
     masternode_list_full_df__json = masternode_list_full_df.to_json(orient='index')
     return masternode_list_full_df, masternode_list_full_df__json
     
