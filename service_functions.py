@@ -26,7 +26,6 @@ import httpx
 from httpx import AsyncClient, Limits, Timeout
 import urllib.parse as urlparse
 from logger_config import logger
-from blockchain_ticket_storage import store_data_in_blockchain, retrieve_data_from_blockchain, masternode_collateral_amount
 import zstandard as zstd
 from sqlalchemy.exc import OperationalError, InvalidRequestError
 from typing import List, Tuple, Dict, Union, Optional
@@ -196,9 +195,13 @@ def parse_and_format(value):
     except (json.JSONDecodeError, TypeError):
         return value
 
+def format_list(input_list):
+    formatted_list = "[\n" + ",\n".join("    " + json.dumps(item, indent=4).replace("\n", "\n    ") for item in input_list) + "\n]"
+    return formatted_list
+
 def pretty_json_func(data):
     if isinstance(data, SQLModel):
-        data = data.dict()  # Assuming 'dict()' method provides serialization of SQLModel to dictionary
+        data = data.dict()  # Convert SQLModel instance to dictionary
     if isinstance(data, dict):
         formatted_data = {}
         for key, value in data.items():
@@ -206,11 +209,15 @@ def pretty_json_func(data):
                 formatted_data[key] = str(value)
             elif isinstance(value, dict):  # Recursively handle dictionary values
                 formatted_data[key] = pretty_json_func(value)
+            elif isinstance(value, list):  # Special handling for lists
+                formatted_data[key] = format_list(value)
             elif key.endswith("_json"):  # Handle keys that end with '_json'
                 formatted_data[key] = parse_and_format(value)
             else:  # Handle other types of values
                 formatted_data[key] = value
         return json.dumps(formatted_data, indent=4)
+    elif isinstance(data, list):  # Top-level list handling
+        return format_list(data)
     elif isinstance(data, str):  # Handle string type data separately
         return parse_and_format(data)
     else:
@@ -244,6 +251,26 @@ def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~
             current_value = line.strip().split('=')[1].strip()
             other_flags[current_flag] = current_value
     return rpchost, rpcport, rpcuser, rpcpassword, other_flags
+
+def get_network_info(rpc_port):
+    if rpc_port == '9932':
+        network = 'mainnet'
+        burn_address = 'PtpasteLBurnAddressXXXXXXXXXXbJ5ndd'
+    elif rpc_port == '19932':
+        network = 'testnet'
+        burn_address = 'tPpasteLBurnAddressXXXXXXXXXXX3wy7u'
+    elif rpc_port == '29932':
+        network = 'devnet'
+        burn_address = '44oUgmZSL997veFEQDq569wv5tsT6KXf9QY7'
+    else:
+        raise ValueError(f"Unknown RPC port: {rpc_port}")
+    return network, burn_address
+
+def required_collateral(network):
+    if network == 'mainnet':
+        return 5000000  # 5 million PSL for mainnet
+    else:
+        return 1000000  # 1 million PSL for testnet/devnet
 
 def write_rpc_settings_to_env_file_func(rpc_host, rpc_port, rpc_user, rpc_password, other_flags):
     with open('.env', 'w') as f:
@@ -1517,11 +1544,12 @@ def parse_sqlmodel_strings_into_lists_and_dicts_func(model_instance: SQLModel) -
         if isinstance(value, str):  # Check if the field value is a string
             try:
                 parsed_value = json.loads(value)  # Try to parse the string as JSON
-                # Check if the parsed value is indeed a list or dictionary
+                # Ensure the parsed value is a list or dictionary before setting it
                 if isinstance(parsed_value, (list, dict)):
-                    setattr(model_instance, field_name, parsed_value)  # Set the parsed list or dictionary
+                    setattr(model_instance, field_name, parsed_value)  # Replace the string with a list or dictionary
             except json.JSONDecodeError:
-                continue  # If it's not a valid JSON, do nothing and continue
+                # If parsing fails, skip this field and continue
+                continue
     return model_instance
         
 async def retrieve_credit_pack_ticket_from_blockchain_using_txid(txid: str) -> db_code.CreditPackPurchaseRequestResponse:
@@ -1573,13 +1601,14 @@ def recursively_parse_json(data):
     # Helper function to handle recursive parsing
     if isinstance(data, str):
         try:
-            # Attempt to parse the string as JSON
             parsed_data = json.loads(data)
-            # Recursively process the newly parsed data
-            return recursively_parse_json(parsed_data)
+            # After parsing, check if parsed_data is a dict or list, otherwise return the original string
+            if isinstance(parsed_data, (dict, list)):
+                return recursively_parse_json(parsed_data)
+            else:
+                return data  # Do not convert numbers, booleans, or nulls
         except json.JSONDecodeError:
-            # Return the original string if it's not JSON
-            return data
+            return data  # Return the original string if it's not JSON
     elif isinstance(data, dict):
         # Recursively process each key-value pair in the dictionary with sorted keys
         return {k: recursively_parse_json(data[k]) for k in sorted(data.keys())}
@@ -2417,6 +2446,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             )
             confirmation_response_validation_errors = await validate_credit_pack_ticket_message_data_func(confirmation_response)
             # Send the CreditPackPurchaseRequestConfirmationResponse to the agreeing supernodes
+            logger.info(f"Now attempting to send the credit pack storage completion announcement to the {len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)} agreeing Supernodes...")
             announcement_responses = await send_credit_pack_storage_completion_announcement_to_supernodes(confirmation_response, credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
             logger.info(f"Received {len(announcement_responses)} responses to the credit pack storage completion announcement, of which {len([response for response in announcement_responses if response.status_code == 200])} were successful")
         else:
@@ -2658,8 +2688,9 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
                 validation_results["validation_failure_reasons_list"].append(f"Agreeing supernode with pastelid {agreeing_supernode_pastelid} was NOT in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}")            
         #Validate the ticket response hashes:
         credit_pack_purchase_request_response_transformed = parse_sqlmodel_strings_into_lists_and_dicts_func(credit_pack_purchase_request_response)
+        credit_pack_purchase_request_confirmation_transformed = parse_sqlmodel_strings_into_lists_and_dicts_func(credit_pack_purchase_request_confirmation)
         validation_errors_in_credit_pack_purchase_request_response = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_response_transformed)
-        validation_errors_in_credit_pack_purchase_request_confirmation = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_confirmation) 
+        validation_errors_in_credit_pack_purchase_request_confirmation = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_confirmation_transformed) 
         if len(validation_errors_in_credit_pack_purchase_request_response) > 0:
             logger.warning(f"Warning! Computed hash does not match for ticket request response object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_response}")
             validation_results["validation_checks"].append({
@@ -4997,6 +5028,7 @@ async def compute_sha3_256_hash_of_sqlmodel_response_fields(model_instance: SQLM
 
 async def validate_credit_pack_blockchain_ticket_data_field_hashes(model_instance: SQLModel):
     validation_errors = []
+    # model_instance.credit_purchase_request_response_message_version_string = str(model_instance.credit_purchase_request_response_message_version_string)
     response_fields_json = await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(model_instance)
     expected_hash = get_sha256_hash_of_input_data_func(response_fields_json)
     last_hash_field_name = None
@@ -5165,6 +5197,8 @@ def highlight_rules_func(text):
 
 
 rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings_func()
+network, burn_address = get_network_info(rpc_port)
+masternode_collateral_amount = required_collateral(network)
 rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
 
 if rpc_port == '9932':
