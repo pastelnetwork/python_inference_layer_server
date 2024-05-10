@@ -17,6 +17,7 @@ import traceback
 import html
 import warnings
 import pytz
+from collections.abc import Iterable
 from urllib.parse import quote_plus, unquote_plus
 from datetime import datetime, timedelta, date
 import datetime as dt
@@ -1506,7 +1507,7 @@ def turn_lists_and_dicts_into_strings_func(data: bytes) -> str:
         
 async def retrieve_credit_pack_ticket_from_blockchain_using_txid(txid: str) -> db_code.CreditPackPurchaseRequestResponse:
     try:
-        retrieved_data = await retrieve_data_from_blockchain(txid)
+        retrieved_data = await retrieve_generic_ticket_data_from_blockchain(txid)
         transformed_retrieved_data = turn_lists_and_dicts_into_strings_func(retrieved_data)        
         credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(transformed_retrieved_data)
         return credit_pack_purchase_request_response
@@ -1549,32 +1550,91 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
         traceback.print_exc()        
         raise
 
-async def store_generic_ticket_data_in_blockchain(ticket_input_data: str, ticket_type_identifier: str, credit_usage_tracking_psl_address: str):
+def recursively_parse_json(data):
+    # Helper function to handle recursive parsing
+    if isinstance(data, str):
+        try:
+            # Attempt to parse the string as JSON
+            parsed_data = json.loads(data)
+            # Recursively process the newly parsed data
+            return recursively_parse_json(parsed_data)
+        except json.JSONDecodeError:
+            # Return the original string if it's not JSON
+            return data
+    elif isinstance(data, dict):
+        # Recursively process each key-value pair in the dictionary with sorted keys
+        return {k: recursively_parse_json(data[k]) for k in sorted(data.keys())}
+    elif isinstance(data, list):
+        # Recursively process each element in the list
+        return [recursively_parse_json(item) for item in data]
+    else:
+        # Return the data as is if it's neither a string, dict, nor list
+        return data
+
+def collect_leaf_nodes(data, parent_key=''):
+    # Helper function to collect leaf nodes, concatenating key-value pairs
+    if isinstance(data, dict):
+        return '|'.join(f"{k} : {collect_leaf_nodes(v, k)}" for k, v in sorted(data.items()))
+    elif isinstance(data, list):
+        # Use parent key for elements of a list to keep the context
+        return '|'.join(f"{parent_key} : {collect_leaf_nodes(item, parent_key)}" for item in data)
+    elif isinstance(data, str) or not isinstance(data, Iterable):
+        return str(data)
+    return ''
+
+def compute_fully_parsed_json_sha3_256_hash(input_json):
+    # Parse the input JSON string
+    parsed_data = json.loads(input_json)
+    # Recursively parse nested JSON and other data structures
+    fully_parsed_data = recursively_parse_json(parsed_data)
+    # Collect all leaf nodes and concatenate them with key names
+    concatenated_data = collect_leaf_nodes(fully_parsed_data)
+    # Compute SHA3-256 hash
+    sha3_hash = hashlib.sha3_256(concatenated_data.encode('utf-8')).hexdigest()
+    return sha3_hash, concatenated_data
+
+async def store_generic_ticket_data_in_blockchain(ticket_input_data_json: str, ticket_type_identifier: str):
     global rpc_connection
     try:    
-        if not isinstance(ticket_input_data) == str:
+        if not isinstance(ticket_input_data_json, str):
             error_message = "Ticket data must be a valid string!"
             logger.error(error_message)
             raise ValueError(error_message)
-        if not isinstance(ticket_type_identifier) == str:
+        if not isinstance(ticket_type_identifier, str):
             error_message = "Ticket type identifier data must be a valid string!"
             logger.error(error_message)
             raise ValueError(error_message)
-        if not check_if_transparent_address_is_valid_func(credit_usage_tracking_psl_address):
-            error_message = f"Supplied PSL tracking address is not valid: {credit_usage_tracking_psl_address}"
-            logger.error(error_message)
-            raise ValueError(error_message)
         ticket_type_identifier = ticket_type_identifier.upper()
-        ticket_input_data_sha3_256_hash = compute_sha3_256_hexdigest(ticket_input_data)
-        ticket_uncompressed_size_in_bytes = len(ticket_input_data.encode('utf-8'))
+        ticket_input_data_fully_parsed_sha3_256_hash, concatenated_data = compute_fully_parsed_json_sha3_256_hash(ticket_input_data_json)
+        ticket_input_data_dict = recursively_parse_json(ticket_input_data_json)
+        ticket_uncompressed_size_in_bytes = len(ticket_input_data_json.encode('utf-8'))
         ticket_dict = {"ticket_identifier_string": ticket_type_identifier,
-                        "ticket_input_data_sha3_256_hash": ticket_input_data_sha3_256_hash,
+                        "ticket_input_data_fully_parsed_sha3_256_hash": ticket_input_data_fully_parsed_sha3_256_hash,
                         "ticket_uncompressed_size_in_bytes": ticket_uncompressed_size_in_bytes,
-                        "ticket_data": ticket_input_data}
-        ticket_json = json.dumps(ticket_dict, ensure_ascii=False, indent=4)
+                        "ticket_input_data_dict": ticket_input_data_dict}
+        ticket_json = json.dumps(ticket_dict, ensure_ascii=False)
         ticket_json_b64 = base64.b64encode(ticket_json.encode('utf-8')).decode('utf-8')
-        ticket_register_command_response = await rpc_connection.tickets('register', 'contract', ticket_json_b64, ticket_type_identifier, ticket_input_data_sha3_256_hash, credit_usage_tracking_psl_address)
-        return ticket_register_command_response, ticket_dict, ticket_json_b64
+        ticket_txid = ""
+        ticket_register_command_response = await rpc_connection.tickets('register', 'contract', ticket_json_b64, ticket_type_identifier, ticket_input_data_fully_parsed_sha3_256_hash)
+        if len(ticket_register_command_response) > 0:
+            if 'txid' in ticket_register_command_response.keys():
+                ticket_txid = ticket_register_command_response['txid']
+                ticket_get_command_response = await rpc_connection.tickets('get', ticket_txid , 1)
+                retrieved_ticket_data = ticket_get_command_response['ticket']['contract_ticket']
+                ticket_tx_info = ticket_get_command_response['tx_info']
+                uncompressed_ticket_size_in_bytes = ticket_tx_info['size']
+                compressed_ticket_size_in_bytes = ticket_tx_info['compressed_size']
+                retrieved_ticket_input_data_fully_parsed_sha3_256_hash = retrieved_ticket_data['ticket_input_data_fully_parsed_sha3_256_hash']
+                retrieved_ticket_input_data_dict = retrieved_ticket_data['ticket_input_data_dict']
+                retrieved_ticket_input_data_dict_json = json.dumps(retrieved_ticket_input_data_dict)
+                computed_fully_parsed_json_sha3_256_hash, concatenated_data = compute_fully_parsed_json_sha3_256_hash(retrieved_ticket_input_data_dict_json)
+                assert(computed_fully_parsed_json_sha3_256_hash==retrieved_ticket_input_data_fully_parsed_sha3_256_hash)
+                assert(computed_fully_parsed_json_sha3_256_hash==ticket_input_data_fully_parsed_sha3_256_hash)
+                logger.info(f"Generic blockchain ticket of sub-type {ticket_type_identifier} was successfully stored in the blockchain with TXID {ticket_txid}")
+                logger.info(f"Original Data length: {uncompressed_ticket_size_in_bytes:,} bytes; Compressed data length: {compressed_ticket_size_in_bytes:,} bytes;") #Number of multisig outputs: {len(txouts):,}; Total size of multisig outputs in bytes: {sum(len(txout[1]) for txout in txouts):,}") 
+        else:
+            logger.error("Error storing ticket data in the blockchain! Could not retrieve and perfectly reconstruct original ticket data.")
+        return ticket_txid, ticket_dict, ticket_json_b64
     except Exception as e:
         logger.error(f"Error occurred while storing ticket data in the blockchain: {e}")
         traceback.print_exc()
@@ -1583,14 +1643,15 @@ async def store_generic_ticket_data_in_blockchain(ticket_input_data: str, ticket
 async def retrieve_generic_ticket_data_from_blockchain(ticket_txid: str):
     global rpc_connection
     try:    
-        # ticket_dict = {"ticket_identifier_string": ticket_type_identifier,
-        #                 "ticket_input_data_sha3_256_hash": ticket_input_data_hash,
-        #                 "ticket_uncompressed_size_in_bytes": ticket_uncompressed_size_in_bytes,
-        #                 "ticket_data": ticket_input_data}
-        # ticket_json = json.dumps(ticket_dict, ensure_ascii=False, indent=4)
-        # ticket_json_b64 = base64.b64encode(ticket_json.encode('utf-8')).decode('utf-8')
-        ticket_get_command_response = await rpc_connection.tickets('get', 'contract', ticket_txid)
-        credit_pack_combined_blockchain_ticket_data_json = ""
+        ticket_get_command_response = await rpc_connection.tickets('get', ticket_txid , 1)
+        retrieved_ticket_data = ticket_get_command_response['ticket']['contract_ticket']
+        retrieved_ticket_input_data_fully_parsed_sha3_256_hash = retrieved_ticket_data['ticket_input_data_fully_parsed_sha3_256_hash']
+        retrieved_ticket_input_data_dict = retrieved_ticket_data['ticket_input_data_dict']
+        retrieved_ticket_input_data_dict_json = json.dumps(retrieved_ticket_input_data_dict)
+        computed_fully_parsed_json_sha3_256_hash, concatenated_data = compute_fully_parsed_json_sha3_256_hash(retrieved_ticket_input_data_dict_json)
+        assert(computed_fully_parsed_json_sha3_256_hash==retrieved_ticket_input_data_fully_parsed_sha3_256_hash)
+        credit_pack_combined_blockchain_ticket_data = retrieved_ticket_input_data_dict['ticket_input_data_dict']
+        credit_pack_combined_blockchain_ticket_data_json = json.dumps(credit_pack_combined_blockchain_ticket_data)
         return credit_pack_combined_blockchain_ticket_data_json
     except Exception as e:
         logger.error(f"Error occurred while storing ticket data in the blockchain: {e}")
@@ -1600,8 +1661,9 @@ async def retrieve_generic_ticket_data_from_blockchain(ticket_txid: str):
 async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str, credit_usage_tracking_psl_address: str) -> str:
     try:
         logger.info("Now attempting to write the ticket data to the blockchain...")
-        ticket_type_identifier = "API_CREDIT_PACK_TICKET"
-        credit_pack_ticket_txid, total_bytes_used = await store_generic_ticket_data_in_blockchain(credit_pack_combined_blockchain_ticket_data_json, ticket_type_identifier, credit_usage_tracking_psl_address)
+        ticket_type_identifier = "INFERENCE_API_CREDIT_PACK_TICKET"
+        credit_pack_ticket_txid, ticket_dict, ticket_json_b64 = await store_generic_ticket_data_in_blockchain(credit_pack_combined_blockchain_ticket_data_json, ticket_type_identifier, credit_usage_tracking_psl_address)
+        total_bytes_used = 0
         logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data; total bytes used to store the data was {total_bytes_used:,}; now waiting for the transaction to be confirmed...")
         max_retries = 20
         retry_delay = 20
@@ -1632,18 +1694,19 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain
         if (num_confirmations > 0) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK:
             logger.info("Now verifying that we can reconstruct the original file written exactly...")
             reconstructed_file_data = await retrieve_generic_ticket_data_from_blockchain(credit_pack_ticket_txid)
-            decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
-            if decoded_reconstructed_file_data == credit_pack_combined_blockchain_ticket_data_json:
+            retrieved_data_fully_parsed_sha3_256_hash = compute_fully_parsed_json_sha3_256_hash(reconstructed_file_data)
+            original_data_fully_parsed_sha3_256_hash = compute_fully_parsed_json_sha3_256_hash(credit_pack_combined_blockchain_ticket_data_json)
+            if retrieved_data_fully_parsed_sha3_256_hash == original_data_fully_parsed_sha3_256_hash:
                 logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
-                use_test_reconstruction_of_object_from_json = 0
+                use_test_reconstruction_of_object_from_json = 1
                 if use_test_reconstruction_of_object_from_json:
-                    credit_pack_combined_blockchain_ticket_data_dict = json.loads(credit_pack_combined_blockchain_ticket_data_json)
+                    credit_pack_combined_blockchain_ticket_data_dict = json.loads(reconstructed_file_data)
                     credit_pack_purchase_request_response_dict = credit_pack_combined_blockchain_ticket_data_dict['credit_pack_purchase_request_response_dict']
                     credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_dict)
                     logger.info(f"Reconstructed credit pack ticket data: {credit_pack_purchase_request_response}")
             else:
                 logger.error("Failed to verify that the stored blockchain ticket data can be reconstructed exactly!")
-                storage_validation_error_string = "Failed to verify that the stored blockchain ticket data can be reconstructed exactly! Difference: " + str(set(decoded_reconstructed_file_data).symmetric_difference(set(credit_pack_combined_blockchain_ticket_data_json)))
+                storage_validation_error_string = "Failed to verify that the stored blockchain ticket data can be reconstructed exactly! Difference: " + str(set(reconstructed_file_data).symmetric_difference(set(credit_pack_combined_blockchain_ticket_data_json)))
                 logger.error(storage_validation_error_string)
                 return credit_pack_ticket_txid, storage_validation_error_string
         else:
