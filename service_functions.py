@@ -1504,6 +1504,25 @@ def turn_lists_and_dicts_into_strings_func(data: bytes) -> str:
     processed_data = replace_lists_and_dicts_with_strings(data_dict)
     # Return the processed data
     return processed_data
+
+def transform_sqlmodel_list_and_dict_fields_into_strings_func(model_instance: SQLModel):
+    for field_name, value in model_instance.__dict__.items():
+        if isinstance(value, (list, dict)):
+            # Convert the list or dictionary to a JSON string
+            setattr(model_instance, field_name, json.dumps(value))
+    return model_instance    
+        
+def parse_sqlmodel_strings_into_lists_and_dicts_func(model_instance: SQLModel) -> SQLModel:
+    for field_name, value in model_instance.__dict__.items():
+        if isinstance(value, str):  # Check if the field value is a string
+            try:
+                parsed_value = json.loads(value)  # Try to parse the string as JSON
+                # Check if the parsed value is indeed a list or dictionary
+                if isinstance(parsed_value, (list, dict)):
+                    setattr(model_instance, field_name, parsed_value)  # Set the parsed list or dictionary
+            except json.JSONDecodeError:
+                continue  # If it's not a valid JSON, do nothing and continue
+    return model_instance
         
 async def retrieve_credit_pack_ticket_from_blockchain_using_txid(txid: str) -> db_code.CreditPackPurchaseRequestResponse:
     try:
@@ -1650,21 +1669,20 @@ async def retrieve_generic_ticket_data_from_blockchain(ticket_txid: str):
         retrieved_ticket_input_data_dict_json = json.dumps(retrieved_ticket_input_data_dict)
         computed_fully_parsed_json_sha3_256_hash, concatenated_data = compute_fully_parsed_json_sha3_256_hash(retrieved_ticket_input_data_dict_json)
         assert(computed_fully_parsed_json_sha3_256_hash==retrieved_ticket_input_data_fully_parsed_sha3_256_hash)
-        credit_pack_combined_blockchain_ticket_data = retrieved_ticket_input_data_dict['ticket_input_data_dict']
-        credit_pack_combined_blockchain_ticket_data_json = json.dumps(credit_pack_combined_blockchain_ticket_data)
+        credit_pack_combined_blockchain_ticket_data_json = json.dumps(retrieved_ticket_input_data_dict)
         return credit_pack_combined_blockchain_ticket_data_json
     except Exception as e:
         logger.error(f"Error occurred while storing ticket data in the blockchain: {e}")
         traceback.print_exc()
         return None
     
-async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str, credit_usage_tracking_psl_address: str) -> str:
+async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str) -> str:
     try:
         logger.info("Now attempting to write the ticket data to the blockchain...")
         ticket_type_identifier = "INFERENCE_API_CREDIT_PACK_TICKET"
-        credit_pack_ticket_txid, ticket_dict, ticket_json_b64 = await store_generic_ticket_data_in_blockchain(credit_pack_combined_blockchain_ticket_data_json, ticket_type_identifier, credit_usage_tracking_psl_address)
+        credit_pack_ticket_txid, ticket_dict, ticket_json_b64 = await store_generic_ticket_data_in_blockchain(credit_pack_combined_blockchain_ticket_data_json, ticket_type_identifier)
         total_bytes_used = 0
-        logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data; total bytes used to store the data was {total_bytes_used:,}; now waiting for the transaction to be confirmed...")
+        logger.info(f"Received back pastel txid of {credit_pack_ticket_txid} for the stored blockchain ticket data; total bytes used to store the data in the blockchain was {total_bytes_used:,}; now waiting for the transaction to be confirmed...")
         max_retries = 20
         retry_delay = 20
         try_count = 0
@@ -1694,8 +1712,8 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain
         if (num_confirmations > 0) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK:
             logger.info("Now verifying that we can reconstruct the original file written exactly...")
             reconstructed_file_data = await retrieve_generic_ticket_data_from_blockchain(credit_pack_ticket_txid)
-            retrieved_data_fully_parsed_sha3_256_hash = compute_fully_parsed_json_sha3_256_hash(reconstructed_file_data)
-            original_data_fully_parsed_sha3_256_hash = compute_fully_parsed_json_sha3_256_hash(credit_pack_combined_blockchain_ticket_data_json)
+            retrieved_data_fully_parsed_sha3_256_hash, _ = compute_fully_parsed_json_sha3_256_hash(reconstructed_file_data)
+            original_data_fully_parsed_sha3_256_hash, _ = compute_fully_parsed_json_sha3_256_hash(credit_pack_combined_blockchain_ticket_data_json)
             if retrieved_data_fully_parsed_sha3_256_hash == original_data_fully_parsed_sha3_256_hash:
                 logger.info("Successfully verified that the stored blockchain ticket data can be reconstructed exactly!")
                 use_test_reconstruction_of_object_from_json = 1
@@ -2370,7 +2388,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
             logger.info(f"Achieved a compression ratio of {compression_ratio:.2f} on credit pack ticket data!")
             logger.info(f"Required burn transaction confirmed with {num_confirmations} confirmations; now attempting to write the credit pack ticket to the blockchain (a total of {credit_pack_ticket_bytes_before_compression:,} bytes before compression and {credit_pack_ticket_bytes_after_compression:,} bytes after compression)...")
             log_action_with_payload("Writing", "the credit pack ticket to the blockchain", credit_pack_combined_blockchain_ticket_data_json)
-            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json, credit_pack_purchase_request_response.credit_usage_tracking_psl_address)
+            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json)
             if storage_validation_error_string=="":
                 credit_pack_confirmation_outcome_string = "success"
                 await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, pastel_api_credit_pack_ticket_registration_txid)
@@ -2506,7 +2524,7 @@ async def process_credit_pack_storage_retry_request(storage_retry_request: db_co
             credit_pack_purchase_request_confirmation_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in credit_pack_purchase_request_confirmation_dict.items()}
             credit_pack_combined_blockchain_ticket_data = {"credit_pack_purchase_request_dict": credit_pack_purchase_request_dict, "credit_pack_purchase_request_response_dict": credit_pack_purchase_request_response_dict, "credit_pack_purchase_request_confirmation_dict": credit_pack_purchase_request_confirmation_dict}
             credit_pack_combined_blockchain_ticket_data_json = json.dumps(credit_pack_combined_blockchain_ticket_data)
-            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json, credit_pack_purchase_request_dict['credit_usage_tracking_psl_address'])
+            pastel_api_credit_pack_ticket_registration_txid, storage_validation_error_string = await store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json)
             if storage_validation_error_string=="":
                 credit_pack_confirmation_outcome_string = "success"
             else:
@@ -2587,9 +2605,8 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         use_verbose_validation = 0
         logger.info(f"Validating credit pack ticket with TXID: {credit_pack_ticket_txid}")
         # Retrieve the credit pack ticket data from the blockchain
-        reconstructed_file_data = await retrieve_data_from_blockchain(credit_pack_ticket_txid)
-        decoded_reconstructed_file_data = reconstructed_file_data.decode('utf-8')
-        decoded_reconstructed_file_data_dict = json.loads(decoded_reconstructed_file_data)
+        reconstructed_file_data = await retrieve_generic_ticket_data_from_blockchain(credit_pack_ticket_txid)
+        decoded_reconstructed_file_data_dict = json.loads(reconstructed_file_data)
         credit_pack_purchase_request_dict = decoded_reconstructed_file_data_dict["credit_pack_purchase_request_dict"]
         credit_pack_purchase_request_response_dict = decoded_reconstructed_file_data_dict["credit_pack_purchase_request_response_dict"]
         credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_dict)
@@ -2640,7 +2657,8 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
                 validation_results["credit_pack_ticket_is_valid"] = False
                 validation_results["validation_failure_reasons_list"].append(f"Agreeing supernode with pastelid {agreeing_supernode_pastelid} was NOT in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}")            
         #Validate the ticket response hashes:
-        validation_errors_in_credit_pack_purchase_request_response = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_response)
+        credit_pack_purchase_request_response_transformed = parse_sqlmodel_strings_into_lists_and_dicts_func(credit_pack_purchase_request_response)
+        validation_errors_in_credit_pack_purchase_request_response = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_response_transformed)
         validation_errors_in_credit_pack_purchase_request_confirmation = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_confirmation) 
         if len(validation_errors_in_credit_pack_purchase_request_response) > 0:
             logger.warning(f"Warning! Computed hash does not match for ticket request response object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_response}")
