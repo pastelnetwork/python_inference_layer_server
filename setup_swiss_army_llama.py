@@ -198,7 +198,7 @@ def kill_running_instances_of_swiss_army_llama():
             
 def check_and_setup_swiss_army_llama(security_token):
     swiss_army_llama_port = 8089
-    use_force_update_swiss_army_llama = 0
+    use_force_update_swiss_army_llama = 1
     external_ip = get_external_ip_func()
     if external_ip == "Unknown":
         logger.error("Unable to reach external network providers. Network may be unreachable.")
