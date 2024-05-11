@@ -3583,7 +3583,7 @@ async def create_and_save_inference_api_usage_response(saved_request: db_code.In
         inference_response_id=inference_response_id,
         inference_request_id=saved_request.inference_request_id,
         proposed_cost_of_request_in_inference_credits=proposed_cost_in_credits,
-        remaining_credits_in_pack_after_request_processed=remaining_credits_after_request,
+        remaining_credits_in_pack_after_request_processed=round(remaining_credits_after_request,1),
         credit_usage_tracking_psl_address=credit_usage_tracking_psl_address,
         request_confirmation_message_amount_in_patoshis=int(proposed_cost_in_credits * CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER),
         max_block_height_to_include_confirmation_transaction=await get_current_pastel_block_height_func() + 10,  # Adjust as needed
