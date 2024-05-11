@@ -1555,10 +1555,17 @@ def parse_sqlmodel_strings_into_lists_and_dicts_func(model_instance: SQLModel) -
         
 async def retrieve_credit_pack_ticket_from_blockchain_using_txid(txid: str) -> db_code.CreditPackPurchaseRequestResponse:
     try:
-        retrieved_data = await retrieve_generic_ticket_data_from_blockchain(txid)
-        transformed_retrieved_data = turn_lists_and_dicts_into_strings_func(retrieved_data)        
-        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(transformed_retrieved_data)
-        return credit_pack_purchase_request_response
+        credit_pack_combined_blockchain_ticket_data_json = await retrieve_generic_ticket_data_from_blockchain(txid)
+        credit_pack_combined_blockchain_ticket_data_dict = json.loads(credit_pack_combined_blockchain_ticket_data_json)
+        credit_pack_purchase_request_dict = credit_pack_combined_blockchain_ticket_data_dict['credit_pack_purchase_request_dict']
+        credit_pack_purchase_request_response_dict = credit_pack_combined_blockchain_ticket_data_dict['credit_pack_purchase_request_response_dict']
+        credit_pack_purchase_request_confirmation_dict = credit_pack_combined_blockchain_ticket_data_dict['credit_pack_purchase_request_confirmation_dict']
+        credit_pack_purchase_request = db_code.CreditPackPurchaseRequest(**credit_pack_purchase_request_dict)
+        credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_dict)
+        credit_pack_purchase_request_confirmation = db_code.CreditPackPurchaseRequestConfirmation(**credit_pack_purchase_request_confirmation_dict)
+        # transformed_retrieved_data = turn_lists_and_dicts_into_strings_func(retrieved_data)        
+        # credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse.parse_raw(transformed_retrieved_data)
+        return credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation
     except Exception as e:
         logger.error(f"Error retrieving credit pack ticket from blockchain: {str(e)}")
         raise
@@ -1572,17 +1579,26 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
             )
             mapping_result = mapping.one_or_none()
             if mapping_result is not None:
+                logger.info(f"Found credit pack data for TXID {txid} in the local database, so returning it immediately!")
+                credit_pack_purchase_request = await get_credit_pack_purchase_request(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
                 credit_pack_purchase_request_response = await get_credit_pack_purchase_request_response_from_request_hash(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
-                return credit_pack_purchase_request_response
+                credit_pack_purchase_request_confirmation = await get_credit_pack_purchase_request_confirmation(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
+                return credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation
         # If the ticket is not found in the local database, retrieve it from the blockchain
-        credit_pack_purchase_request_response = await retrieve_credit_pack_ticket_from_blockchain_using_txid(txid)
-        if credit_pack_purchase_request_response is not None:
-            # Save the retrieved ticket to the local database for future reference
+        logger.info(f"Requested credit pack ticket with TXID {txid} not found in local database, attempting to get it from blockchain now...")
+        credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(txid)
+        if all((credit_pack_purchase_request_response, credit_pack_purchase_request, credit_pack_purchase_request_confirmation)):
+            # Save the retrieved data to the local database for future reference
+            logger.info(f"Now saving credit pack ticket data for TXID {txid} to database for future reference...")
             try:
                 async with db_code.Session() as db_session:
+                    db_session.add(credit_pack_purchase_request)
                     db_session.add(credit_pack_purchase_request_response)
+                    db_session.add(credit_pack_purchase_request_confirmation)
                     await db_session.commit()
+                    await db_session.refresh(credit_pack_purchase_request)
                     await db_session.refresh(credit_pack_purchase_request_response)
+                    await db_session.refresh(credit_pack_purchase_request_confirmation)
             except Exception as e:
                 logger.error(f"Error saving retrieved credit pack ticket to the local database: {str(e)}")
             # Save the txid mapping for the retrieved ticket
@@ -1592,7 +1608,7 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
                 logger.error(f"Error saving txid mapping for retrieved credit pack ticket: {str(e)}")
         else:
             raise ValueError(f"Credit pack ticket not found for txid: {txid}")
-        return credit_pack_purchase_request_response
+        return credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation
     except Exception as e:
         logger.error(f"Error retrieving credit pack ticket using txid: {txid}. Error: {str(e)}")
         traceback.print_exc()        
@@ -1706,6 +1722,61 @@ async def retrieve_generic_ticket_data_from_blockchain(ticket_txid: str):
         traceback.print_exc()
         return None
     
+async def get_list_of_credit_pack_ticket_txids_already_in_db():
+    async with db_code.Session() as db_session:
+        mappings = await db_session.exec(select(db_code.CreditPackPurchaseRequestResponseTxidMapping))
+        mapping_results = mappings.all()
+        if mapping_results is not None:
+            logger.info(f"Found {len(mapping_results):,} credit pack TXIDs already stored in database...")
+            list_of_already_stored_credit_pack_txids = list(set([x.pastel_api_credit_pack_ticket_registration_txid for x in mapping_results]))          
+            return list_of_already_stored_credit_pack_txids
+        else:
+            return []
+
+async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them(ticket_type_identifier: str = "INFERENCE_API_CREDIT_PACK_TICKET",  starting_block_height: int = 0, force_revalidate_all_tickets: int = 0):
+    global rpc_connection
+    try:
+        if not isinstance(ticket_type_identifier, str):
+            error_message = "Ticket type identifier data must be a valid string!"
+            logger.error(error_message)
+            raise ValueError(error_message)
+        ticket_type_identifier = ticket_type_identifier.upper()    
+        logger.info(f"Getting all blockchain tickets of type {ticket_type_identifier} starting from block height {starting_block_height:,}...")
+        list_of_ticket_data_dicts = await rpc_connection.tickets('list', 'contract', ticket_type_identifier, starting_block_height)
+        list_of_ticket_internal_data_dicts = [x['ticket']['contract_ticket'] for x in list_of_ticket_data_dicts]
+        logger.info(f"Found {len(list_of_ticket_internal_data_dicts):,} total tickets in the blockchain since block height {starting_block_height:,} of type {ticket_type_identifier}; Now checking if they are internally consistent...")
+        list_of_retrieved_ticket_input_data_fully_parsed_sha3_256_hashes = [x['ticket_input_data_fully_parsed_sha3_256_hash'] for x in list_of_ticket_internal_data_dicts]
+        list_of_retrieved_ticket_input_data_dicts = [x['ticket_input_data_dict'] for x in list_of_ticket_internal_data_dicts]
+        list_of_retrieved_ticket_input_data_dicts_json = [json.dumps(x) for x in list_of_retrieved_ticket_input_data_dicts]
+        list_of_computed_fully_parsed_json_sha3_256_hashes, _ = [compute_fully_parsed_json_sha3_256_hash(x) for x in list_of_retrieved_ticket_input_data_dicts_json]
+        assert(all(list_of_computed_fully_parsed_json_sha3_256_hashes == x for x in list_of_retrieved_ticket_input_data_fully_parsed_sha3_256_hashes))
+        logger.info("All retrieved tickets were internally consistent and match the computed SHA3-256 hash of all fields!")
+        list_of_already_stored_credit_pack_txids = await get_list_of_credit_pack_ticket_txids_already_in_db()
+        list_of_ticket_txids = [x['txid'] for x in list_of_ticket_data_dicts]
+        if force_revalidate_all_tickets:
+            list_of_ticket_txids_not_already_stored = list_of_ticket_txids
+            logger.info(f"Now attempting to perform in-depth validation of all aspects of the {len(list_of_ticket_txids):,} retrieved {ticket_type_identifier} tickets (Forcing full revalidation of ALL tickets, even those already stored in the local datbase!)...")
+        else:
+            list_of_ticket_txids_not_already_stored = [x for x in list_of_ticket_txids if x not in list_of_already_stored_credit_pack_txids]
+            logger.info(f"Now attempting to perform in-depth validation of all aspects of the {len(list_of_ticket_txids_not_already_stored):,} retrieved {ticket_type_identifier} tickets that are not already in the database...")
+        list_of_fully_validated_ticket_txids = []
+        for idx, current_txid in enumerate(list_of_ticket_txids_not_already_stored):
+            validation_results = await validate_existing_credit_pack_ticket(current_txid)
+            if not validation_results["credit_pack_ticket_is_valid"]:
+                logger.warning(f"[Ticket {idx+1}/{len(list_of_ticket_txids_not_already_stored)}] Blockchain ticket of type {ticket_type_identifier} and TXID {current_txid} was unable to be fully validated, so skipping it! Reasons for validation failure:\n{validation_results['validation_failure_reasons_list']}")
+            else:
+                logger.info(f"[Ticket {idx+1}/{len(list_of_ticket_txids_not_already_stored)}] Blockchain ticket of type {ticket_type_identifier} and TXID {current_txid} was fully validated! Now saving to database if not already there...")
+                list_of_fully_validated_ticket_txids.append(current_txid)
+                _ = await retrieve_credit_pack_ticket_using_txid(current_txid) # This will save the valid tickets to the database automatically for future reference
+        logger.info(f"We were able to fully validate {len(list_of_fully_validated_ticket_txids):,} of the {len(list_of_ticket_txids_not_already_stored):,} retrieved {ticket_type_identifier} tickets!")
+        return list_of_retrieved_ticket_input_data_dicts_json, list_of_fully_validated_ticket_txids
+        
+    except Exception as e:
+        logger.error(f"Error occurred while listing generic blockchain tickets of type {str(ticket_type_identifier)}: {e}")
+        traceback.print_exc()
+        return None    
+    
+    
 async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str) -> str:
     try:
         logger.info("Now attempting to write the ticket data to the blockchain...")
@@ -1749,9 +1820,13 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain
                 use_test_reconstruction_of_object_from_json = 1
                 if use_test_reconstruction_of_object_from_json:
                     credit_pack_combined_blockchain_ticket_data_dict = json.loads(reconstructed_file_data)
+                    credit_pack_purchase_request_dict = credit_pack_combined_blockchain_ticket_data_dict['credit_pack_purchase_request_dict']
                     credit_pack_purchase_request_response_dict = credit_pack_combined_blockchain_ticket_data_dict['credit_pack_purchase_request_response_dict']
-                    credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_dict)
-                    logger.info(f"Reconstructed credit pack ticket data: {credit_pack_purchase_request_response}")
+                    credit_pack_purchase_request_confirmation_dict = credit_pack_combined_blockchain_ticket_data_dict['credit_pack_purchase_request_confirmation_dict']
+                    credit_pack_purchase_request = db_code.CreditPackPurchaseRequest(**credit_pack_purchase_request_dict)  # noqa: F841
+                    credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_dict)  # noqa: F841
+                    credit_pack_purchase_request_confirmation = db_code.CreditPackPurchaseRequestConfirmation(**credit_pack_purchase_request_confirmation_dict)  # noqa: F841
+                    logger.info(f"Reconstructed credit pack ticket data:\n Purchase Request: {pretty_json_func(credit_pack_purchase_request_dict)}\nPurchase Request Response: {pretty_json_func(credit_pack_purchase_request_response_dict)}\nPurchase Request Confirmation: {pretty_json_func(credit_pack_purchase_request_confirmation_dict)}")
             else:
                 logger.error("Failed to verify that the stored blockchain ticket data can be reconstructed exactly!")
                 storage_validation_error_string = "Failed to verify that the stored blockchain ticket data can be reconstructed exactly! Difference: " + str(set(reconstructed_file_data).symmetric_difference(set(credit_pack_combined_blockchain_ticket_data_json)))
@@ -2636,7 +2711,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         use_verbose_validation = 0
         logger.info(f"Validating credit pack ticket with TXID: {credit_pack_ticket_txid}")
         # Retrieve the credit pack ticket data from the blockchain
-        reconstructed_file_data = await retrieve_generic_ticket_data_from_blockchain(credit_pack_ticket_txid)
+        reconstructed_file_data = await retrieve_credit_pack_ticket_from_blockchain_using_txid(credit_pack_ticket_txid)
         decoded_reconstructed_file_data_dict = json.loads(reconstructed_file_data)
         credit_pack_purchase_request_dict = decoded_reconstructed_file_data_dict["credit_pack_purchase_request_dict"]
         credit_pack_purchase_request_response_dict = decoded_reconstructed_file_data_dict["credit_pack_purchase_request_response_dict"]
