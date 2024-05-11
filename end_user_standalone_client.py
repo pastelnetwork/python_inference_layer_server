@@ -526,9 +526,24 @@ def parse_and_format(value):
     except (json.JSONDecodeError, TypeError):
         return value
 
+def format_list(input_list):
+    def json_serialize(item):
+        if isinstance(item, uuid.UUID):
+            return json.dumps(str(item), indent=4)
+        if isinstance(item, SQLModel):
+            item = item.dict()  # Convert SQLModel instance to dictionary
+        elif isinstance(item, dict):
+            return json.dumps(pretty_json_func(item), indent=4)
+        elif isinstance(item, list):
+            return format_list(item)
+        else:
+            return json.dumps(item, indent=4)
+    formatted_list = "[\n" + ",\n".join("    " + json_serialize(item).replace("\n", "\n    ") for item in input_list) + "\n]"
+    return formatted_list
+
 def pretty_json_func(data):
     if isinstance(data, SQLModel):
-        data = data.dict()  # Assuming 'dict()' method provides serialization of SQLModel to dictionary
+        data = data.dict()  # Convert SQLModel instance to dictionary
     if isinstance(data, dict):
         formatted_data = {}
         for key, value in data.items():
@@ -536,15 +551,34 @@ def pretty_json_func(data):
                 formatted_data[key] = str(value)
             elif isinstance(value, dict):  # Recursively handle dictionary values
                 formatted_data[key] = pretty_json_func(value)
+            elif isinstance(value, list):  # Special handling for lists
+                formatted_data[key] = format_list(value)
             elif key.endswith("_json"):  # Handle keys that end with '_json'
                 formatted_data[key] = parse_and_format(value)
             else:  # Handle other types of values
                 formatted_data[key] = value
         return json.dumps(formatted_data, indent=4)
+    elif isinstance(data, list):  # Top-level list handling
+        formatted_list = []
+        for item in data:
+            if isinstance(item, str):
+                try:
+                    parsed_item = json.loads(item)
+                    formatted_item = json.dumps(parsed_item, indent=4)
+                    formatted_list.append(formatted_item)
+                except json.JSONDecodeError:
+                    formatted_list.append(json.dumps(item))  # Wrap the string in quotes
+            elif isinstance(item, dict):
+                formatted_list.append(json.dumps(pretty_json_func(item), indent=4))
+            elif isinstance(item, uuid.UUID):
+                formatted_list.append(json.dumps(str(item)))  # Convert UUID to string and wrap in quotes
+            else:
+                formatted_list.append(json.dumps(item))
+        return "[\n" + ",\n".join("    " + item for item in formatted_list) + "\n]"
     elif isinstance(data, str):  # Handle string type data separately
         return parse_and_format(data)
     else:
-        return data  # Return data as is if not a dictionary or string
+        return json.dumps(data)  # Convert other types to JSON string
     
 def log_action_with_payload(action_string, payload_name, json_payload):
     logger.info(f"Now {action_string} {payload_name} with payload:\n{pretty_json_func(json_payload)}")
@@ -1453,10 +1487,11 @@ class PastelInferenceClient:
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.get(f"{supernode_url}/get_credit_pack_ticket_from_txid", params=params)
             response.raise_for_status()
-            result = response.json()
-            result_transformed = transform_credit_pack_purchase_request_response(result)
-            log_action_with_payload("receiving", "credit pack ticket from Supernode", result_transformed)
-            return CreditPackPurchaseRequestResponse.model_validate(result_transformed)
+            credit_pack_ticket = response.json()
+            credit_pack_purchase_request_response = CreditPackPurchaseRequestResponse.model_validate(transform_credit_pack_purchase_request_response(credit_pack_ticket['credit_pack_purchase_request_response']))
+            credit_pack_purchase_request_confirmation = CreditPackPurchaseRequestConfirmation.model_validate(credit_pack_ticket['credit_pack_purchase_request_confirmation'])
+            log_action_with_payload("receiving", "credit pack ticket from Supernode", [credit_pack_purchase_request_response.model_dump(), credit_pack_purchase_request_confirmation.model_dump()])
+            return credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation
 
     async def credit_pack_ticket_initial_purchase_request(self, supernode_url: str, credit_pack_request: CreditPackPurchaseRequest) -> Union[CreditPackPurchaseRequestPreliminaryPriceQuote, CreditPackPurchaseRequestRejection]:
         challenge_result = await self.request_and_sign_challenge(supernode_url)
@@ -2196,8 +2231,8 @@ async def get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid:
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
     supernode_url, _ = await get_closest_supernode_to_pastelid_url(MY_LOCAL_PASTELID, supernode_list_df)
     logger.info(f"Getting credit pack ticket data from Supernode URL: {supernode_url}...")
-    credit_pack_data_object = await inference_client.get_credit_pack_ticket_from_txid(supernode_url, credit_pack_ticket_pastel_txid)
-    return credit_pack_data_object
+    credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await inference_client.get_credit_pack_ticket_from_txid(supernode_url, credit_pack_ticket_pastel_txid)
+    return credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation
 
 async def handle_inference_request_end_to_end(
     credit_pack_ticket_pastel_txid: str,
@@ -2380,15 +2415,16 @@ async def main():
     if 'credit_pack_purchase_request_confirmation_response' in locals():
         credit_pack_ticket_pastel_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
     else:
-        credit_pack_ticket_pastel_txid = "f0cc8eb36ebcea911eac58cee5fbd24e643e7bef6f526b22b7a4172adf37bb84"
+        credit_pack_ticket_pastel_txid = "94b8c97e87079c2b6e34c1924dd3411809d848a9cf22d8d1e4f0493f61e7d6ae"
     logger.info(f"Selected credit pack ticket transaction ID: {credit_pack_ticket_pastel_txid}") # Each credit pack ticket has a corresponding UNIQUE tracking PSL address that must be accessible within the wallet of the client machine.
-    
     # TODO: Add all credit pack tickets we create to local client database and make function that can automatically select the credit pack ticket with the largest remaining balance of credits and its corresponding psl tracking address.
     
     if use_test_credit_pack_ticket_usage:
+        logger.info("\n_____________________________________________________________________________________________________________________________________\n")
+        logger.info("Testing credit pack ticket usage...")
         start_time = time.time()
-        credit_ticket_object = await get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid)
-        credit_pack_purchase_request_fields_json = base64.b64decode(credit_ticket_object.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
+        credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid)
+        credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
         credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_fields_json)
         credit_usage_tracking_psl_address = credit_pack_purchase_request_dict['credit_usage_tracking_psl_address']
         credit_usage_tracking_psl_address_current_balance = await check_psl_address_balance_alternative_func(credit_usage_tracking_psl_address)
@@ -2403,8 +2439,9 @@ async def main():
         duration_in_seconds = (end_time - start_time)
         logger.info(f"Total time taken for credit pack ticket lookup: {round(duration_in_seconds, 2)} seconds")
                 
-                
     if use_test_inference_request_functionality:
+        logger.info("\n_____________________________________________________________________________________________________________________________________\n")
+        logger.info("Testing inference request functionality...")        
         if use_test_llm_text_completion:
             start_time = time.time()
             # input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "

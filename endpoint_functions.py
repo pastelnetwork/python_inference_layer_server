@@ -10,7 +10,7 @@ import uuid
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Union
-from pydantic import SecretStr
+from pydantic import SecretStr, BaseModel
 from decouple import Config as DecoupleConfig, RepositoryEnv
 
 config = DecoupleConfig(RepositoryEnv('.env'))
@@ -429,7 +429,12 @@ async def get_user_messages(
 #__________________________________________________________________________________________________________
 # Endpoints related to Credit pack purchasing and provisioning:
 
-@router.get("/get_credit_pack_ticket_from_txid", response_model=db.CreditPackPurchaseRequestResponse)
+class CreditPackTicketResponse(BaseModel):
+    credit_pack_purchase_request_response: db.CreditPackPurchaseRequestResponse
+    credit_pack_purchase_request_confirmation: db.CreditPackPurchaseRequestConfirmation
+    
+    
+@router.get("/get_credit_pack_ticket_from_txid", response_model=CreditPackTicketResponse)
 async def get_credit_pack_ticket_from_txid_endpoint(
     txid: str = Query(..., description="The transaction ID of the credit pack ticket"),
     pastelid: str = Query(..., description="The PastelID of the requesting party"),
@@ -444,10 +449,13 @@ async def get_credit_pack_ticket_from_txid_endpoint(
         )
         if not is_valid_signature:
             raise HTTPException(status_code=401, detail="Invalid PastelID signature")
-        
-        credit_pack_ticket = await service_functions.retrieve_credit_pack_ticket_using_txid(txid)
-        if credit_pack_ticket is None:
-            raise HTTPException(status_code=404, detail="Credit pack ticket not found")
+        _, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await service_functions.retrieve_credit_pack_ticket_using_txid(txid)
+        if not all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
+            raise HTTPException(status_code=404, detail=f"Credit pack ticket with TXID {txid} not found or was invalid!")
+        credit_pack_ticket = CreditPackTicketResponse(
+            credit_pack_purchase_request_response=credit_pack_purchase_request_response,
+            credit_pack_purchase_request_confirmation=credit_pack_purchase_request_confirmation
+        )        
         return credit_pack_ticket
     except HTTPException as e:
         raise e

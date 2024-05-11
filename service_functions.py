@@ -196,7 +196,16 @@ def parse_and_format(value):
         return value
 
 def format_list(input_list):
-    formatted_list = "[\n" + ",\n".join("    " + json.dumps(item, indent=4).replace("\n", "\n    ") for item in input_list) + "\n]"
+    def json_serialize(item):
+        if isinstance(item, uuid.UUID):
+            return json.dumps(str(item), indent=4)
+        elif isinstance(item, dict):
+            return json.dumps(pretty_json_func(item), indent=4)
+        elif isinstance(item, list):
+            return format_list(item)
+        else:
+            return json.dumps(item, indent=4)
+    formatted_list = "[\n" + ",\n".join("    " + json_serialize(item).replace("\n", "\n    ") for item in input_list) + "\n]"
     return formatted_list
 
 def pretty_json_func(data):
@@ -1580,7 +1589,7 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
                 logger.info(f"Found credit pack data for TXID {txid} in the local database, so returning it immediately!")
                 credit_pack_purchase_request = await get_credit_pack_purchase_request(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
                 credit_pack_purchase_request_response = await get_credit_pack_purchase_request_response_from_request_hash(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
-                credit_pack_purchase_request_confirmation = await get_credit_pack_purchase_request_confirmation(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
+                credit_pack_purchase_request_confirmation = await get_credit_pack_purchase_request_confirmation_from_request_hash(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
                 return credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation
         # If the ticket is not found in the local database, retrieve it from the blockchain
         logger.info(f"Requested credit pack ticket with TXID {txid} not found in local database, attempting to get it from blockchain now...")
@@ -1755,13 +1764,16 @@ async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_th
         else:
             logger.info("All retrieved tickets were internally consistent and match the computed SHA3-256 hash of all fields!")
         list_of_already_stored_credit_pack_txids = await get_list_of_credit_pack_ticket_txids_already_in_db()
+        list_of_known_bad_credit_pack_txids = await get_list_of_all_known_bad_credit_pack_ticket_txids_from_db()
         list_of_ticket_txids = [x['txid'] for x in list_of_ticket_data_dicts]
         if force_revalidate_all_tickets:
             list_of_ticket_txids_not_already_stored = list_of_ticket_txids
-            logger.info(f"Now attempting to perform in-depth validation of all aspects of the {len(list_of_ticket_txids):,} retrieved {ticket_type_identifier} tickets (Forcing full revalidation of ALL tickets, even those already stored in the local datbase!)...")
+            if len(list_of_ticket_txids) > 0:
+                logger.info(f"Now attempting to perform in-depth validation of all aspects of the {len(list_of_ticket_txids):,} retrieved {ticket_type_identifier} tickets (Forcing full revalidation of ALL tickets, even those already stored in the local database or which are in the known bad list of TXIDs!)...")
         else:
-            list_of_ticket_txids_not_already_stored = [x for x in list_of_ticket_txids if x not in list_of_already_stored_credit_pack_txids]
-            logger.info(f"Now attempting to perform in-depth validation of all aspects of the {len(list_of_ticket_txids_not_already_stored):,} retrieved {ticket_type_identifier} tickets that are not already in the database...")
+            list_of_ticket_txids_not_already_stored = [x for x in list_of_ticket_txids if x not in list_of_already_stored_credit_pack_txids and x not in list_of_known_bad_credit_pack_txids]
+            if len(list_of_ticket_txids_not_already_stored) > 0:
+                logger.info(f"Now attempting to perform in-depth validation of all aspects of the {len(list_of_ticket_txids_not_already_stored):,} retrieved {ticket_type_identifier} tickets that are not already in the database or in already in the known bad list of TXIDs...")
         list_of_fully_validated_ticket_txids = []
         for idx, current_txid in enumerate(list_of_ticket_txids_not_already_stored):
             validation_results = await validate_existing_credit_pack_ticket(current_txid)
@@ -1772,7 +1784,8 @@ async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_th
                 logger.info(f"[Ticket {idx+1}/{len(list_of_ticket_txids_not_already_stored)}] Blockchain ticket of type {ticket_type_identifier} and TXID {current_txid} was fully validated! Now saving to database if not already there...")
                 list_of_fully_validated_ticket_txids.append(current_txid)
                 _ = await retrieve_credit_pack_ticket_using_txid(current_txid) # This will save the valid tickets to the database automatically for future reference
-        logger.info(f"We were able to fully validate {len(list_of_fully_validated_ticket_txids):,} of the {len(list_of_ticket_txids_not_already_stored):,} retrieved {ticket_type_identifier} tickets!")
+        if len(list_of_ticket_txids_not_already_stored) > 0:
+            logger.info(f"We were able to fully validate {len(list_of_fully_validated_ticket_txids):,} of the {len(list_of_ticket_txids_not_already_stored):,} retrieved {ticket_type_identifier} tickets!")
         return list_of_retrieved_ticket_input_data_dicts_json, list_of_fully_validated_ticket_txids
     except Exception as e:
         logger.error(f"Error occurred while listing generic blockchain tickets of type {str(ticket_type_identifier)}: {e}")
@@ -2708,6 +2721,35 @@ async def process_credit_pack_storage_retry_completion_announcement(retry_comple
         traceback.print_exc()
         raise
     
+async def insert_credit_pack_ticket_txid_into_known_bad_table_in_db(credit_pack_ticket_txid: str, list_of_reasons_it_is_known_bad: str):
+    known_bad_txid_object = db_code.CreditPackKnownBadTXID(credit_pack_ticket_txid=credit_pack_ticket_txid, list_of_reasons_it_is_known_bad=list_of_reasons_it_is_known_bad)
+    async with db_code.Session() as db_session:
+        db_session.add(known_bad_txid_object)
+        await db_session.commit()
+        await db_session.refresh(known_bad_txid_object)
+    return known_bad_txid_object
+
+async def get_list_of_all_known_bad_credit_pack_ticket_txids_from_db():
+    async with db_code.Session() as db_session:
+        known_bad_txids = await db_session.exec(select(db_code.CreditPackKnownBadTXID))
+        known_bad_txid_results = known_bad_txids.all()
+        if known_bad_txid_results is not None:
+            list_of_all_known_bad_credit_pack_txids = list(set([x.credit_pack_ticket_txid for x in known_bad_txid_results]))          
+            return list_of_all_known_bad_credit_pack_txids
+        else:
+            return []        
+
+async def check_if_credit_pack_ticket_txid_in_list_of_known_bad_txids_in_db(credit_pack_ticket_txid: str):
+    async with db_code.Session() as db_session:
+        # Query to check if the TXID exists in the known bad TXIDs table
+        result = await db_session.execute(
+            select(db_code.CreditPackKnownBadTXID)
+            .where(db_code.CreditPackKnownBadTXID.credit_pack_ticket_txid == credit_pack_ticket_txid)
+        )
+        known_bad_txid = result.scalar_one_or_none()
+        # Return True if the TXID is found in the known bad list, False otherwise
+        return known_bad_txid is not None
+        
 async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> dict:
     try:
         use_verbose_validation = 0
@@ -2818,6 +2860,10 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             validation_results["validation_failure_reasons_list"].append(f"Agreeing supernodes percentage validation failed for credit pack with txid {credit_pack_ticket_txid}")
         if len(validation_results["validation_failure_reasons_list"]) > 0:
             logger.info(f"Validation failures for credit pack ticket with TXID {credit_pack_ticket_txid}: {validation_results['validation_failure_reasons_list']}")
+            list_of_reasons_it_is_known_bad = json.dumps(validation_results['validation_failure_reasons_list'])
+            known_bad_txid_object = await insert_credit_pack_ticket_txid_into_known_bad_table_in_db(credit_pack_ticket_txid, list_of_reasons_it_is_known_bad)
+            if known_bad_txid_object:
+                logger.info(f"Added invalid credit pack ticket TXID {credit_pack_ticket_txid} to known bad list in database!")
         else:
             logger.info(f"All validation checks passed for credit pack ticket with TXID {credit_pack_ticket_txid}")
         return validation_results

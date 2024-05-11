@@ -709,6 +709,21 @@ class CreditPackStorageRetryRequestResponse(SQLModel, table=True):
                 "closest_agreeing_supernode_to_retry_storage_pastelid_signature_on_credit_pack_storage_retry_confirmation_response_hash": "0x1234..."
             }
         }
+        
+class CreditPackKnownBadTXID(SQLModel, table=True):
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    credit_pack_ticket_txid: str = Field(index=True)
+    list_of_reasons_it_is_known_bad: str = Field(sa_column=Column(JSON))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
+                "credit_pack_ticket_txid": "0x1234...",
+                "list_of_reasons_it_is_known_bad": '["Hash of credit pack request response object stored in blockchain does not match the hash included in the object.", "Hash of credit pack request confirmation object stored in blockchain does not match the hash included in the object."]',
+                "timestamp": "2023-06-01T12:00:00Z"
+            }
+        }
 
 ##______________________________________________________________________________________________________________________
 # Inference request related models (i.e., using the credit packs to do inferences):
