@@ -707,6 +707,24 @@ async def credit_pack_storage_retry_completion_announcement_endpoint(
         logger.error(f"Error processing credit pack storage retry completion announcement: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing credit pack storage retry completion announcement: {str(e)}")
 
+
+@router.post("/get_valid_credit_pack_tickets_for_pastelid", response_model=List[dict])
+async def get_valid_credit_pack_tickets_for_pastelid_endpoint(
+    pastelid: str = Body(..., description="The PastelID to retrieve credit pack tickets for"),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(pastelid, challenge_signature, challenge_id)
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        valid_tickets = await service_functions.get_valid_credit_pack_tickets_for_pastelid(pastelid)
+        return valid_tickets
+    except Exception as e:
+        logger.error(f"Error retrieving valid credit pack tickets for PastelID {pastelid}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving valid credit pack tickets: {str(e)}")
     
 #__________________________________________________________________________________________________________
 
