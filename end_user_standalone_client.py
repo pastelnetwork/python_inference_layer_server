@@ -181,7 +181,6 @@ class AsyncAuthServiceProxy:
                     if i > 0:
                         logger.warning(f"Reconnect try #{i+1}")
                         sleep_time = self.reconnect_timeout * (2 ** i)
-                        logger.info(f"Waiting for {sleep_time} seconds before retrying.")
                         await asyncio.sleep(sleep_time)
                     response = await self.client.post(
                         self.service_url, headers=headers, data=postdata)
@@ -493,7 +492,6 @@ async def fetch_current_psl_market_price():
     # Validate the price
     if not 0.0000001 < average_price < 0.02:
         raise ValueError(f"Invalid PSL price: {average_price}")
-    logger.info(f"The current Average PSL price is: ${average_price:.8f} based on {len(prices)} sources")
     return average_price
 
 async def estimated_market_price_of_inference_credits_in_psl_terms() -> float:
@@ -505,7 +503,6 @@ async def estimated_market_price_of_inference_credits_in_psl_terms() -> float:
         cost_per_credit_usd = target_value_per_credit_usd / (1 - target_profit_margin)
         # Convert the cost per credit from USD to PSL
         cost_per_credit_psl = cost_per_credit_usd / psl_price_usd
-        logger.info(f"Estimated market price of 1.0 inference credit: {cost_per_credit_psl:.4f} PSL")
         return cost_per_credit_psl
     except (ValueError, ZeroDivisionError) as e:
         logger.error(f"Error calculating estimated market price of inference credits: {str(e)}")
@@ -582,7 +579,7 @@ def pretty_json_func(data):
     
 def log_action_with_payload(action_string, payload_name, json_payload):
     logger.info(f"Now {action_string} {payload_name} with payload:\n{pretty_json_func(json_payload)}")
-
+    
 def transform_credit_pack_purchase_request_response(result: dict) -> dict:
     transformed_result = result.copy()
     fields_to_convert = [
@@ -732,7 +729,6 @@ async def create_and_fund_new_psl_credit_tracking_address(amount_of_psl_to_fund_
     global rpc_connection
     new_credit_tracking_address = await rpc_connection.getnewaddress()
     txid = await send_to_address_func(new_credit_tracking_address, amount_of_psl_to_fund_address_with, comment="Funding new credit tracking address ", comment_to="", subtract_fee_from_amount=False)
-    logger.info(f"Funded new credit tracking address {new_credit_tracking_address} with {amount_of_psl_to_fund_address_with: ,} PSL. TXID: {txid}")
     return new_credit_tracking_address, txid
 
 async def check_psl_address_balance_func(address_to_check):
@@ -780,7 +776,6 @@ async def get_and_decode_raw_transaction(txid: str, blockhash: str = None) -> di
             return {}
 
         # Log the decoded transaction details
-        logger.info(f"Decoded transaction details for {txid}: {decoded_tx_data}")
 
         return decoded_tx_data
     except Exception as e:
@@ -804,7 +799,6 @@ async def get_transaction_details(txid: str, include_watchonly: bool = False) ->
         transaction_details = await rpc_connection.gettransaction(txid, include_watchonly)
         
         # Log the retrieved transaction details
-        logger.info(f"Retrieved transaction details for {txid}: {transaction_details}")
 
         return transaction_details
     except Exception as e:
@@ -848,7 +842,6 @@ async def send_tracking_amount_from_control_address_to_burn_address_to_confirm_i
             change_address=credit_usage_tracking_psl_address
         )
         if txid is not None:
-            logger.info(f"Sent {credit_usage_tracking_amount_in_psl} PSL from {credit_usage_tracking_psl_address} to {burn_address} to confirm inference request {inference_request_id}. TXID: {txid}")
             transaction_info = await rpc_connection.gettransaction(txid)
             if transaction_info:
                 return txid
@@ -883,7 +876,6 @@ async def import_address_func(address: str, label: str = "", rescan: bool = Fals
     global rpc_connection
     try:
         await rpc_connection.importaddress(address, label, rescan)
-        logger.info(f"Imported address: {address}")
     except Exception as e:
         logger.error(f"Error importing address: {address}. Error: {e}")
     
@@ -1556,7 +1548,6 @@ class PastelInferenceClient:
             quoted_total_price <= maximum_total_credit_pack_price_in_psl and
             price_difference_percentage <= MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING
         ):
-            logger.info(f"Preliminary price quote is within the acceptable range: {quoted_price_per_credit} PSL per credit, {quoted_total_price:,} PSL total, which is within the maximum of {maximum_per_credit_price_in_psl} PSL per credit and {maximum_total_credit_pack_price_in_psl:,} PSL total. The price difference from the estimated fair market price is {100*price_difference_percentage:.2f}%, which is within the allowed maximum of {100*MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING:.2f}%.")
             return True
         else:
             logger.warning(f"Preliminary price quote exceeds the maximum acceptable price or the price difference from the estimated fair price is too high! Quoted price: {quoted_price_per_credit} PSL per credit, {quoted_total_price:,.1f} PSL total, maximum price: {maximum_per_credit_price_in_psl:,.1f} PSL per credit, {maximum_total_credit_pack_price_in_psl:,.1f} PSL total. The price difference from the estimated fair market price is {100*price_difference_percentage:.2f}%, which exceeds the allowed maximum of {100*MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING:.2f}%.")
@@ -1581,7 +1572,6 @@ class PastelInferenceClient:
         # Check if the end user agrees with the preliminary price quote
         agree_with_price_quote = await self.confirm_preliminary_price_quote(preliminary_price_quote, maximum_total_credit_pack_price_in_psl, maximum_per_credit_price_in_psl)
         if not agree_with_price_quote:
-            logger.info("End user does not agree with the preliminary price quote!")
             agree_with_preliminary_price_quote = False
         else:
             agree_with_preliminary_price_quote = True        
@@ -1800,7 +1790,6 @@ class PastelInferenceClient:
     async def check_status_of_inference_request_results(self, supernode_url: str, inference_response_id: str) -> bool:
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             try:
-                logger.info(f"Checking status of inference request results for ID {inference_response_id}")
                 response = await client.get(f"{supernode_url}/check_status_of_inference_request_results/{inference_response_id}")
                 response.raise_for_status()
                 result = response.json()
@@ -1879,21 +1868,39 @@ class PastelInferenceClient:
         list_of_supernode_pastelids = [x[1] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
         list_of_supernode_urls = [x[0] for x in supernode_urls_and_pastelids if x[1] != pastelid_of_supernode_to_audit]
         list_of_supernode_ips = [x.split('//')[1].split(':')[0] for x in list_of_supernode_urls]
-        logger.info(f"Now attempting to audit inference request response with ID {inference_response_id} with {len(list_of_supernode_pastelids)} closest supernodes (with Supernode IPs of {list_of_supernode_ips})...")
         # Audit the inference request response
-        logger.info(f"Now attempting to audit inference request response with ID {inference_response_id} by comparing information from other Supernodes to the information reported by the Responding Supernode...")
         response_audit_tasks = [self.call_audit_inference_request_response(url, inference_response_id) for url in list_of_supernode_urls]
         response_audit_results = await asyncio.gather(*response_audit_tasks)
         # Wait for 20 seconds before auditing the inference request result
         await asyncio.sleep(20)
         # Audit the inference request result
-        logger.info(f"Now attempting to audit inference request result for response ID {inference_response_id} by comparing information from other Supernodes to the information reported by the Responding Supernode...")
         result_audit_tasks = [self.call_audit_inference_request_result(url, inference_response_id) for url in list_of_supernode_urls]
         result_audit_results = await asyncio.gather(*result_audit_tasks)
         # Combine the audit results
         audit_results = response_audit_results + result_audit_results
-        logger.info(f"Audit results retrieved for inference response ID {inference_response_id}")
         return audit_results
+    
+    async def get_valid_credit_pack_tickets_for_pastelid(self, supernode_url: str, pastelid: str) -> List[Dict[str, Any]]:
+        challenge_result = await self.request_and_sign_challenge(supernode_url)
+        challenge = challenge_result["challenge"]
+        challenge_id = challenge_result["challenge_id"]
+        challenge_signature = challenge_result["signature"]
+        payload = {
+            "pastelid": pastelid,
+            "challenge": challenge,
+            "challenge_id": challenge_id,
+            "challenge_signature": challenge_signature
+        }
+        log_action_with_payload("requesting", "valid credit pack tickets for PastelID", payload)
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+            response = await client.post(
+                f"{supernode_url}/get_valid_credit_pack_tickets_for_pastelid",
+                json=payload
+            )
+            response.raise_for_status()
+            result = response.json()
+            log_action_with_payload("receiving", "valid credit pack tickets for PastelID", result)
+            return result
     
     async def check_if_supernode_supports_desired_model(self, supernode_url: str, model_canonical_string: str, model_inference_type_string: str, model_parameters_json: str) -> bool:
         try:
@@ -1946,15 +1953,12 @@ class PastelInferenceClient:
         list_of_supernode_pastelids = [x[1] for x in supernode_urls_and_pastelids]
         list_of_supernode_urls = [x[0] for x in supernode_urls_and_pastelids]
         list_of_supernode_ips = [x.split('//')[1].split(':')[0] for x in list_of_supernode_urls]
-        logger.info(f"Now attempting to check which supernodes support the desired model ({desired_model_canonical_string}) with {len(list_of_supernode_pastelids)} closest supernodes (with Supernode IPs of {list_of_supernode_ips})...")
         # Check which supernodes support the desired model
         model_support_tasks = [self.check_if_supernode_supports_desired_model(url, desired_model_canonical_string, desired_model_inference_type_string, desired_model_parameters_json) for url in list_of_supernode_urls]
         model_support_results = await asyncio.gather(*model_support_tasks)
         supernode_support_dict = {pastelid: supports for pastelid, supports in zip(list_of_supernode_pastelids, model_support_results)}
-        logger.info(f"Found {sum(model_support_results)} supernodes that support the desired model ({desired_model_canonical_string}) out of {len(model_support_results)} checked.")
         closest_supporting_supernode_pastelid = list_of_supernode_pastelids[model_support_results.index(True)] if True in model_support_results else None
         closest_supporting_supernode_url = list_of_supernode_urls[model_support_results.index(True)] if True in model_support_results else None
-        logger.info(f"Closest supporting supernode PastelID: {closest_supporting_supernode_pastelid} | URL: {closest_supporting_supernode_url}")
         return supernode_support_dict, closest_supporting_supernode_pastelid, closest_supporting_supernode_url
 
 
@@ -2067,11 +2071,8 @@ async def send_message_and_check_for_new_incoming_messages(
     # Get the list of Supernodes
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
     # Send a user message
-    logger.info("Sending user message...")
-    logger.info(f"Recipient pastelid: {to_pastelid}")
     # Lookup the 3 closest supernodes to the recipient pastelid
     closest_supernodes_to_recipient = await get_n_closest_supernodes_to_pastelid_urls(3, to_pastelid, supernode_list_df)
-    logger.info(f"Closest Supernodes to recipient pastelid: {[sn[1] for sn in closest_supernodes_to_recipient]}")
     # Create a UserMessage object
     user_message = UserMessage(
         from_pastelid=MY_LOCAL_PASTELID,
@@ -2085,13 +2086,9 @@ async def send_message_and_check_for_new_incoming_messages(
         send_task = asyncio.create_task(inference_client.send_user_message(supernode_url, user_message))
         send_tasks.append(send_task)
     send_results = await asyncio.gather(*send_tasks)
-    logger.info(f"Sent user messages: {send_results}")
     # Get user messages from the 3 closest Supernodes
-    logger.info("Retrieving incoming user messages...")
-    logger.info(f"My local pastelid: {inference_client.pastelid}")
     # Lookup the 3 closest supernodes to the local pastelid
     closest_supernodes_to_local = await get_n_closest_supernodes_to_pastelid_urls(3, inference_client.pastelid, supernode_list_df)
-    logger.info(f"Closest Supernodes to local pastelid: {[sn[1] for sn in closest_supernodes_to_local]}")
     # Retrieve messages from the 3 closest Supernodes concurrently
     message_retrieval_tasks = []
     for supernode_url, _ in closest_supernodes_to_local:
@@ -2106,7 +2103,6 @@ async def send_message_and_check_for_new_incoming_messages(
             if message.id not in message_ids:
                 unique_messages.append(message)
                 message_ids.add(message.id)
-    logger.info(f"Retrieved unique user messages: {unique_messages}")
     message_dict = {
         "sent_messages": send_results,
         "received_messages": unique_messages
@@ -2142,7 +2138,6 @@ async def handle_credit_pack_ticket_end_to_end(
     # Send the credit pack request to the highest-ranked supernode
     closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(1, MY_LOCAL_PASTELID, supernode_list_df)
     highest_ranked_supernode_url = closest_supernodes[0][0]
-    logger.info(f"Sending credit pack request to responding_supernode with URL {highest_ranked_supernode_url}") 
     preliminary_price_quote = await inference_client.credit_pack_ticket_initial_purchase_request(highest_ranked_supernode_url, credit_pack_request)
     # Check if the end user agrees with the preliminary price quote
     signed_credit_pack_ticket_or_rejection = await inference_client.credit_pack_ticket_preliminary_price_quote_response(highest_ranked_supernode_url, credit_pack_request, preliminary_price_quote, maximum_total_credit_pack_price_in_psl, maximum_per_credit_price_in_psl)
@@ -2185,7 +2180,6 @@ async def handle_credit_pack_ticket_end_to_end(
     for i, (supernode_url, _) in enumerate(closest_supernodes):
         try:
             credit_pack_purchase_request_status = await inference_client.check_status_of_credit_purchase_request(supernode_url, credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
-            logger.info(f"Credit pack purchase request status: {credit_pack_purchase_request_status}")
             break
         except Exception as e:
             logger.error(f"Error checking status of credit purchase request with Supernode {i+1}: {e}")
@@ -2230,9 +2224,17 @@ async def get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid:
     # Get the closest Supernode URL
     supernode_list_df, supernode_list_json = await check_supernode_list_func()
     supernode_url, _ = await get_closest_supernode_to_pastelid_url(MY_LOCAL_PASTELID, supernode_list_df)
-    logger.info(f"Getting credit pack ticket data from Supernode URL: {supernode_url}...")
     credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await inference_client.get_credit_pack_ticket_from_txid(supernode_url, credit_pack_ticket_pastel_txid)
     return credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation
+
+async def get_valid_credit_pack_tickets_for_pastelid_end_to_end(pastelid: str) -> List[Dict[str, Any]]:
+    # Create messaging client to use:
+    inference_client = PastelInferenceClient(MY_LOCAL_PASTELID, MY_PASTELID_PASSPHRASE)
+    # Get the closest Supernode URL
+    supernode_list_df, supernode_list_json = await check_supernode_list_func()
+    supernode_url, _ = await get_closest_supernode_to_pastelid_url(MY_LOCAL_PASTELID, supernode_list_df)
+    valid_tickets = await inference_client.get_valid_credit_pack_tickets_for_pastelid(supernode_url, pastelid)
+    return valid_tickets
 
 async def handle_inference_request_end_to_end(
     credit_pack_ticket_pastel_txid: str,
@@ -2375,7 +2377,7 @@ async def main():
     use_test_messaging_functionality = 0
     use_test_credit_pack_ticket_functionality = 0
     use_test_credit_pack_ticket_usage = 1
-    use_test_inference_request_functionality = 1
+    use_test_inference_request_functionality = 0
     use_test_llm_text_completion = 1
     use_test_image_generation = 0
 
@@ -2384,7 +2386,6 @@ async def main():
         message_body = "Hello, this is a brand 🍉 NEW test message from a regular user!"
         to_pastelid = "jXXiVgtFzLto4eYziePHjjb1hj3c6eXdABej5ndnQ62B8ouv1GYveJaD5QUMfainQM3b4MTieQuzFEmJexw8Cr"        
         message_dict = await send_message_and_check_for_new_incoming_messages(to_pastelid, message_body)
-        logger.info(f"Message data: {message_dict}")
 
     #________________________________________________________
 
@@ -2416,12 +2417,9 @@ async def main():
         credit_pack_ticket_pastel_txid = credit_pack_purchase_request_confirmation_response.pastel_api_credit_pack_ticket_registration_txid
     else:
         credit_pack_ticket_pastel_txid = "94b8c97e87079c2b6e34c1924dd3411809d848a9cf22d8d1e4f0493f61e7d6ae"
-    logger.info(f"Selected credit pack ticket transaction ID: {credit_pack_ticket_pastel_txid}") # Each credit pack ticket has a corresponding UNIQUE tracking PSL address that must be accessible within the wallet of the client machine.
     # TODO: Add all credit pack tickets we create to local client database and make function that can automatically select the credit pack ticket with the largest remaining balance of credits and its corresponding psl tracking address.
     
     if use_test_credit_pack_ticket_usage:
-        logger.info("\n_____________________________________________________________________________________________________________________________________\n")
-        logger.info("Testing credit pack ticket usage...")
         start_time = time.time()
         credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await get_credit_pack_ticket_info_end_to_end(credit_pack_ticket_pastel_txid)
         credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
@@ -2430,18 +2428,14 @@ async def main():
         credit_usage_tracking_psl_address_current_balance = await check_psl_address_balance_alternative_func(credit_usage_tracking_psl_address)
         min_psl_balance_in_tracking_address = 10.0 
         if credit_usage_tracking_psl_address_current_balance < min_psl_balance_in_tracking_address:
-            logger.info(f"Not enough balance in tracking address: {credit_usage_tracking_psl_address}; current balance: {credit_usage_tracking_psl_address_current_balance}; Now sending more coin to the tracking address...")
             await send_to_address_func(credit_usage_tracking_psl_address, 10.0, "Sending more coin to the tracking address")
         initial_credit_pack_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
-        logger.info(f"Credit pack ticket data retrieved with initial balance {initial_credit_pack_balance:,.1f} and credit tracking PSL address of {credit_usage_tracking_psl_address}")
-        logger.info(f"Corresponding credit pack request dict: {credit_pack_purchase_request_dict}")
+        valid_tickets = await get_valid_credit_pack_tickets_for_pastelid_end_to_end(MY_LOCAL_PASTELID)
+        logger.info(f"Valid credit pack tickets for {MY_LOCAL_PASTELID}: {valid_tickets}")
         end_time = time.time()
         duration_in_seconds = (end_time - start_time)
-        logger.info(f"Total time taken for credit pack ticket lookup: {round(duration_in_seconds, 2)} seconds")
                 
     if use_test_inference_request_functionality:
-        logger.info("\n_____________________________________________________________________________________________________________________________________\n")
-        logger.info("Testing inference request functionality...")        
         if use_test_llm_text_completion:
             start_time = time.time()
             # input_prompt_text_to_llm = "Explain to me with detailed examples what a Galois group is and how it helps understand the roots of a polynomial equation: "
@@ -2453,7 +2447,6 @@ async def main():
             # model_parameters = {"number_of_tokens_to_generate": 200, "temperature": 0.7, "grammar_file_string": "", "number_of_completions_to_generate": 1}
             model_parameters = {"number_of_tokens_to_generate": 2000, "number_of_completions_to_generate": 1}
             max_credit_cost_to_approve_inference_request = 200.0
-            
             inference_dict, audit_results, validation_results = await handle_inference_request_end_to_end(
                 credit_pack_ticket_pastel_txid,
                 input_prompt_text_to_llm,
@@ -2463,12 +2456,8 @@ async def main():
                 max_credit_cost_to_approve_inference_request,
                 burn_address
             )
-            logger.info(f"Inference result data:\n\n {inference_dict}")
-            logger.info("\n_____________________________________________________________________\n") 
-            logger.info(f"\n\nFinal Decoded Inference Result:\n\n {inference_dict['inference_result_decoded']}")
             end_time = time.time()
             duration_in_minutes = (end_time - start_time)/60
-            logger.info(f"Total time taken for inference request: {round(duration_in_minutes, 2)} minutes")
 
         if use_test_image_generation:
             # Test image generation
@@ -2512,8 +2501,6 @@ async def main():
                 max_credit_cost_to_approve_inference_request,
                 burn_address
             )
-            logger.info(f"Inference result data received at {datetime.now()}; decoded image size in megabytes: {round(len(inference_dict['generated_image_decoded'])/(1024*1024), 2)} MB")
-            logger.info("\n_____________________________________________________________________\n")
             
             # Save the generated image to a file
             current_datetime_string = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
@@ -2526,10 +2513,8 @@ async def main():
             image_data = inference_dict['generated_image_decoded']
             with open(generated_image_file_path, "wb") as f:
                 f.write(image_data)
-            logger.info(f"Generated image saved as '{generated_image_file_path}'")
             end_time = time.time()
             duration_in_minutes = (end_time - start_time)/60
-            logger.info(f"Total time taken for inference request: {round(duration_in_minutes, 2)} minutes")
             
 if __name__ == "__main__":
     asyncio.run(main())

@@ -1603,7 +1603,7 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
                     db_session.add(credit_pack_purchase_request_confirmation)
                     await db_session.commit()
                     await db_session.refresh(credit_pack_purchase_request_response)
-                    await db_session.refresh(credit_pack_purchase_request_confirmation)
+                    await db_session.refresh(credit_pack_purchase_request_confirmation)                    
             except Exception as e:
                 logger.error(f"Error saving retrieved credit pack ticket to the local database: {str(e)}")
             # Save the txid mapping for the retrieved ticket
@@ -1611,6 +1611,7 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
                 await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, txid)
             except Exception as e:
                 logger.error(f"Error saving txid mapping for retrieved credit pack ticket: {str(e)}")
+            await db_code.consolidate_wal_data() # Consolidate WAL
         else:
             raise ValueError(f"Credit pack ticket not found for txid: {txid}")
         return credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation
@@ -2874,17 +2875,17 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
     
 async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
     try:
-        # Retrieve credit pack request responses associated with the requesting user's PastelID from the database
+        # Retrieve credit pack request confirmations associated with the requesting user's PastelID from the database
         async with db_code.Session() as db_session:
-            credit_pack_request_responses = await db_session.exec(
-                select(db_code.CreditPackPurchaseRequestResponse)
-                .where(db_code.CreditPackPurchaseRequestResponse.requesting_end_user_pastelid == pastelid)
+            credit_pack_request_confirmations_results = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestConfirmation)
+                .where(db_code.CreditPackPurchaseRequestConfirmation.requesting_end_user_pastelid == pastelid)
             )
-            credit_pack_request_responses = credit_pack_request_responses.all()
-        # Retrieve the complete credit pack ticket data for each request response
+            credit_pack_request_confirmations = credit_pack_request_confirmations_results.all()
+        # Retrieve the complete credit pack ticket data for each request confirmation
         complete_tickets = []
-        for request_response in credit_pack_request_responses:
-            hash_of_request_fields = request_response.sha3_256_hash_of_credit_pack_purchase_request_fields
+        for request_confirmation in credit_pack_request_confirmations:
+            hash_of_request_fields = request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
             # Retrieve the corresponding txid using the CreditPackPurchaseRequestResponseTxidMapping table
             async with db_code.Session() as db_session:
                 txid_mapping = await db_session.exec(
@@ -2895,10 +2896,12 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
             if txid_mapping:
                 txid = txid_mapping.pastel_api_credit_pack_ticket_registration_txid
                 # Retrieve the complete credit pack ticket data using the txid
-                credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
-                if all((credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
+                _, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
+                if all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
+                    credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
+                    credit_pack_purchase_request = json.loads(credit_pack_purchase_request_fields_json)
                     complete_ticket = {
-                        "credit_pack_purchase_request": credit_pack_purchase_request.model_dump(),
+                        "credit_pack_purchase_request": credit_pack_purchase_request,
                         "credit_pack_purchase_request_response": credit_pack_purchase_request_response.model_dump(),
                         "credit_pack_purchase_request_confirmation": credit_pack_purchase_request_confirmation.model_dump()
                     }
@@ -4513,7 +4516,7 @@ async def full_rescan_burn_transactions():
         logger.info("No burn transaction records found in database, proceeding with full rescan...")
         logger.info("Please wait, retrieving ALL burn transactions from ANY address starting with the genesis block (may take a while and cause high CPU usage...)")
         burn_transactions = await rpc_connection.scanburntransactions("*")
-        chunk_size = 1000  # Adjust the chunk size as needed
+        chunk_size = 500  # Adjust the chunk size as needed
         ignore_unconfirmed_transactions = 1
         decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, ignore_unconfirmed_transactions)
         logger.info(f"Decoded {len(decoded_tx_data_list):,} new burn transactions in total!")
