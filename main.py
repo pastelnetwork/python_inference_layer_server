@@ -12,8 +12,10 @@ import uvloop
 from uvicorn import Config, Server
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from database_code import initialize_db
-from service_functions import monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value, detect_chain_reorg_and_rescan, full_rescan_burn_transactions, fetch_all_mnid_tickets_details, update_pending_transactions, list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them
 from setup_swiss_army_llama import check_and_setup_swiss_army_llama
+from service_functions import (monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value, detect_chain_reorg_and_rescan, 
+                                full_rescan_burn_transactions, fetch_all_mnid_tickets_details, update_pending_transactions,
+                                list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them, periodic_ticket_listing_and_validation)
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 UVICORN_PORT = config.get("UVICORN_PORT", cast=int)
@@ -79,6 +81,7 @@ async def startup():
         asyncio.create_task(fetch_all_mnid_tickets_details())
         asyncio.create_task(update_pending_transactions())
         asyncio.create_task(list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them())
+        asyncio.create_task(periodic_ticket_listing_and_validation())
         asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
     except Exception as e:
         logger.error(f"Error during startup: {e}")

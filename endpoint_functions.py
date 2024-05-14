@@ -9,7 +9,7 @@ import json
 import uuid
 import pandas as pd
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Union
+from typing import Optional, List, Union, Dict, Any
 from pydantic import SecretStr, BaseModel
 from decouple import Config as DecoupleConfig, RepositoryEnv
 
@@ -725,6 +725,80 @@ async def get_valid_credit_pack_tickets_for_pastelid_endpoint(
     except Exception as e:
         logger.error(f"Error retrieving valid credit pack tickets for PastelID {pastelid}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error retrieving valid credit pack tickets: {str(e)}")
+    
+    
+@router.post("/check_credit_pack_balance", response_model=Dict[str, Any])
+async def check_credit_pack_balance_endpoint(
+    credit_pack_ticket_txid: str = Body(..., description="The transaction ID of the credit pack ticket"),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(credit_pack_ticket_txid, challenge_signature, challenge_id)
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        current_credit_balance, number_of_transactions = await service_functions.determine_current_credit_pack_balance_based_on_tracking_transactions_new(credit_pack_ticket_txid)
+        balance_info = {
+            "current_credit_balance": current_credit_balance,
+            "number_of_confirmation_transactions": number_of_transactions
+        }
+        logger.info(f"Checked credit pack balance for txid {credit_pack_ticket_txid}: {balance_info}")
+        return balance_info
+    except Exception as e:
+        logger.error(f"Error checking credit pack balance for txid {credit_pack_ticket_txid}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error checking credit pack balance: {str(e)}")
+    
+    
+@router.post("/retrieve_credit_pack_ticket_from_purchase_burn_txid", response_model=Dict[str, Any])
+async def retrieve_credit_pack_ticket_endpoint(
+    purchase_burn_txid: str = Body(..., description="The transaction ID of the credit pack purchase burn"),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(purchase_burn_txid, challenge_signature, challenge_id)
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await service_functions.retrieve_credit_pack_ticket_from_purchase_burn_txid(purchase_burn_txid)
+        if credit_pack_purchase_request is None or credit_pack_purchase_request_response is None or credit_pack_purchase_request_confirmation is None:
+            raise HTTPException(status_code=404, detail="Credit pack ticket not found")
+        ticket_info = {
+            "credit_pack_purchase_request": credit_pack_purchase_request.model_dump(),
+            "credit_pack_purchase_request_response": credit_pack_purchase_request_response.model_dump(),
+            "credit_pack_purchase_request_confirmation": credit_pack_purchase_request_confirmation.model_dump()
+        }
+        logger.info(f"Retrieved credit pack ticket for purchase burn txid {purchase_burn_txid}: {ticket_info}")
+        return ticket_info
+    except Exception as e:
+        logger.error(f"Error retrieving credit pack ticket for purchase burn txid {purchase_burn_txid}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving credit pack ticket: {str(e)}")
+    
+    
+@router.post("/get_final_credit_pack_registration_txid_from_credit_purchase_burn_txid", response_model=Dict[str, Any])
+async def get_final_credit_pack_registration_txid_endpoint(
+    purchase_burn_txid: str = Body(..., description="The transaction ID of the credit pack purchase burn"),
+    challenge: str = Body(..., description="The challenge string"),
+    challenge_id: str = Body(..., description="The ID of the challenge string"),
+    challenge_signature: str = Body(..., description="The signature of the PastelID on the challenge string"),
+    rpc_connection=Depends(get_rpc_connection),
+):
+    try:
+        is_valid_signature = await service_functions.verify_challenge_signature(purchase_burn_txid, challenge_signature, challenge_id)
+        if not is_valid_signature:
+            raise HTTPException(status_code=401, detail="Invalid PastelID signature")
+        sha3_256_hash_of_credit_pack_purchase_request_fields = await service_functions.get_final_credit_pack_registration_txid_from_credit_purchase_burn_txid(purchase_burn_txid)
+        if sha3_256_hash_of_credit_pack_purchase_request_fields is None:
+            raise HTTPException(status_code=404, detail="Credit pack ticket not found")
+        logger.info(f"Retrieved final credit pack registration txid for purchase burn txid {purchase_burn_txid}: {sha3_256_hash_of_credit_pack_purchase_request_fields}")
+        return {"final_credit_pack_registration_txid": sha3_256_hash_of_credit_pack_purchase_request_fields}
+    except Exception as e:
+        logger.error(f"Error retrieving final credit pack registration txid for purchase burn txid {purchase_burn_txid}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving final credit pack registration txid: {str(e)}")
+
     
 #__________________________________________________________________________________________________________
 

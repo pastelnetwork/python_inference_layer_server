@@ -19,7 +19,7 @@ import warnings
 import pytz
 from collections.abc import Iterable
 from urllib.parse import quote_plus, unquote_plus
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, timezone, date
 import datetime as dt
 import pandas as pd
 import httpx
@@ -195,6 +195,23 @@ def parse_and_format(value):
     except (json.JSONDecodeError, TypeError):
         return value
 
+def normalize_data(data):
+    if isinstance(data, dict):
+        return {key: normalize_data(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [normalize_data(item) for item in data]
+    elif isinstance(data, uuid.UUID):
+        return str(data)
+    elif isinstance(data, datetime.datetime):
+        if data.tzinfo is None:
+            # Make the datetime offset-aware with UTC timezone
+            return data.replace(tzinfo=pytz.UTC)
+        else:
+            # Convert to UTC timezone
+            return data.astimezone(pytz.UTC)
+    else:
+        return data
+    
 def format_list(input_list):
     def json_serialize(item):
         if isinstance(item, uuid.UUID):
@@ -295,6 +312,16 @@ def write_rpc_settings_to_env_file_func(rpc_host, rpc_port, rpc_user, rpc_passwo
                 logger.error(f"Error writing to .env file: {e}")
                 pass
     return
+
+def convert_uuids_to_strings(data):
+    if isinstance(data, dict):
+        return {key: convert_uuids_to_strings(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [convert_uuids_to_strings(item) for item in data]
+    elif isinstance(data, uuid.UUID):
+        return str(data)
+    else:
+        return data
 
 def compute_sha3_256_hexdigest(input_str):
     """Compute the SHA3-256 hash of the input string and return the hexadecimal digest."""
@@ -1326,7 +1353,7 @@ async def get_credit_pack_purchase_request_confirmation_response(sha3_256_hash_o
     except Exception as e:
         logger.error(f"Error getting credit pack purchase request confirmation response: {str(e)}")
         raise
-
+            
 async def save_credit_pack_purchase_request_confirmation_response(credit_pack_purchase_request_confirmation_response: db_code.CreditPackPurchaseRequestConfirmationResponse) -> None:
     try:
         async with db_code.Session() as db_session:
@@ -1566,6 +1593,8 @@ async def retrieve_credit_pack_ticket_from_blockchain_using_txid(txid: str) -> d
     try:
         credit_pack_combined_blockchain_ticket_data_json = await retrieve_generic_ticket_data_from_blockchain(txid)
         credit_pack_combined_blockchain_ticket_data_dict = json.loads(credit_pack_combined_blockchain_ticket_data_json)
+        if credit_pack_combined_blockchain_ticket_data_dict is None:
+            return None, None, None
         credit_pack_purchase_request_dict = credit_pack_combined_blockchain_ticket_data_dict['credit_pack_purchase_request_dict']
         credit_pack_purchase_request_response_dict = credit_pack_combined_blockchain_ticket_data_dict['credit_pack_purchase_request_response_dict']
         credit_pack_purchase_request_confirmation_dict = credit_pack_combined_blockchain_ticket_data_dict['credit_pack_purchase_request_confirmation_dict']
@@ -1586,7 +1615,6 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
             )
             mapping_result = mapping.one_or_none()
             if mapping_result is not None:
-                logger.info(f"Found credit pack data for TXID {txid} in the local database, so returning it immediately!")
                 credit_pack_purchase_request = await get_credit_pack_purchase_request(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
                 credit_pack_purchase_request_response = await get_credit_pack_purchase_request_response_from_request_hash(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
                 credit_pack_purchase_request_confirmation = await get_credit_pack_purchase_request_confirmation_from_request_hash(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
@@ -1620,6 +1648,45 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> db_code.CreditPac
         traceback.print_exc()        
         raise
 
+async def retrieve_credit_pack_ticket_from_purchase_burn_txid(purchase_burn_txid: str):
+    try:
+        async with db_code.Session() as db_session:
+            result = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestConfirmation).where(db_code.CreditPackPurchaseRequestConfirmation.txid_of_credit_purchase_burn_transaction == purchase_burn_txid)
+            )
+            credit_pack_request_confirmation = result.one_or_none()
+            sha3_256_hash_of_credit_pack_purchase_request_fields = credit_pack_request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
+        # Try to retrieve the credit pack ticket from the local database using the txid mapping
+        async with db_code.Session() as db_session:
+            mapping = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestResponseTxidMapping).where(db_code.CreditPackPurchaseRequestResponseTxidMapping.sha3_256_hash_of_credit_pack_purchase_request_fields == sha3_256_hash_of_credit_pack_purchase_request_fields)
+            )
+            mapping_result = mapping.one_or_none()
+            if mapping_result is not None:
+                logger.info(f"Found credit pack data for purchase burn TXID {purchase_burn_txid} in the local database, so returning it immediately!")
+                credit_pack_purchase_request = await get_credit_pack_purchase_request(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
+                credit_pack_purchase_request_response = await get_credit_pack_purchase_request_response_from_request_hash(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
+                credit_pack_purchase_request_confirmation = await get_credit_pack_purchase_request_confirmation_from_request_hash(mapping_result.sha3_256_hash_of_credit_pack_purchase_request_fields)
+                return credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation            
+    except Exception as e:
+        logger.error(f"Error occurred while retrieving credit pack ticket data: {e}")
+        traceback.print_exc()
+        return None, None, None        
+
+async def get_final_credit_pack_registration_txid_from_credit_purchase_burn_txid(purchase_burn_txid: str):
+    try:
+        async with db_code.Session() as db_session:
+            result = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestConfirmation).where(db_code.CreditPackPurchaseRequestConfirmation.txid_of_credit_purchase_burn_transaction == purchase_burn_txid)
+            )
+            credit_pack_request_confirmation = result.one_or_none()
+            sha3_256_hash_of_credit_pack_purchase_request_fields = credit_pack_request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields    
+            return sha3_256_hash_of_credit_pack_purchase_request_fields
+    except Exception as e:
+        logger.error(f"Error occurred while retrieving credit pack ticket data: {e}")
+        traceback.print_exc()
+        return None      
+    
 def recursively_parse_json(data):
     # Helper function to handle recursive parsing
     if isinstance(data, str):
@@ -1716,6 +1783,9 @@ async def retrieve_generic_ticket_data_from_blockchain(ticket_txid: str):
     try:    
         ticket_get_command_response = await rpc_connection.tickets('get', ticket_txid , 1)
         retrieved_ticket_data = ticket_get_command_response['ticket']['contract_ticket']
+        if retrieved_ticket_data is None:
+            logger.error(f"Error: no ticket data returned for TXID {ticket_txid}")
+            return None
         retrieved_ticket_input_data_fully_parsed_sha3_256_hash = retrieved_ticket_data['ticket_input_data_fully_parsed_sha3_256_hash']
         retrieved_ticket_input_data_dict = retrieved_ticket_data['ticket_input_data_dict']
         retrieved_ticket_input_data_dict_json = json.dumps(retrieved_ticket_input_data_dict)
@@ -1724,7 +1794,7 @@ async def retrieve_generic_ticket_data_from_blockchain(ticket_txid: str):
         credit_pack_combined_blockchain_ticket_data_json = json.dumps(retrieved_ticket_input_data_dict)
         return credit_pack_combined_blockchain_ticket_data_json
     except Exception as e:
-        logger.error(f"Error occurred while storing ticket data in the blockchain: {e}")
+        logger.error(f"Error occurred while retrieving ticket data in the blockchain: {e}")
         traceback.print_exc()
         return None
     
@@ -1793,6 +1863,15 @@ async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_th
         traceback.print_exc()
         return None    
     
+async def periodic_ticket_listing_and_validation():
+    while True:
+        try:
+            await list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them()
+            await asyncio.sleep(30*60)  # Sleep for 30 minutes
+        except Exception as e:
+            logger.error(f"Error in periodic ticket listing and validation: {str(e)}")
+            traceback.print_exc()
+                
 async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str) -> str:
     try:
         logger.info("Now attempting to write the ticket data to the blockchain...")
@@ -2882,7 +2961,6 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                 .where(db_code.CreditPackPurchaseRequestConfirmation.requesting_end_user_pastelid == pastelid)
             )
             credit_pack_request_confirmations = credit_pack_request_confirmations_results.all()
-        # Retrieve the complete credit pack ticket data for each request confirmation
         complete_tickets = []
         for request_confirmation in credit_pack_request_confirmations:
             hash_of_request_fields = request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
@@ -2895,17 +2973,49 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                 txid_mapping = txid_mapping.one_or_none()
             if txid_mapping:
                 txid = txid_mapping.pastel_api_credit_pack_ticket_registration_txid
-                # Retrieve the complete credit pack ticket data using the txid
-                _, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
-                if all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
-                    credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
-                    credit_pack_purchase_request = json.loads(credit_pack_purchase_request_fields_json)
-                    complete_ticket = {
-                        "credit_pack_purchase_request": credit_pack_purchase_request,
-                        "credit_pack_purchase_request_response": credit_pack_purchase_request_response.model_dump(),
-                        "credit_pack_purchase_request_confirmation": credit_pack_purchase_request_confirmation.model_dump()
-                    }
-                    complete_tickets.append(complete_ticket)
+                # Check if the complete credit pack ticket data exists in the database and is up-to-date
+                async with db_code.Session() as db_session:
+                    existing_data_result = await db_session.exec(
+                        select(db_code.CreditPackCompleteTicketWithBalance)
+                        .where(db_code.CreditPackCompleteTicketWithBalance.credit_pack_ticket_registration_txid == txid)
+                    )
+                    existing_data = existing_data_result.one_or_none()
+                # Ensure existing_data.datetime_last_updated is timezone-aware
+                if existing_data and existing_data.datetime_last_updated.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc) - timedelta(hours=24):
+                    complete_ticket = json.loads(existing_data.complete_credit_pack_data_json)
+                else:
+                    current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
+                    _, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
+                    if all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
+                        credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
+                        credit_pack_purchase_request = json.loads(credit_pack_purchase_request_fields_json)
+                        complete_ticket = {
+                            "credit_pack_purchase_request": credit_pack_purchase_request,
+                            "credit_pack_purchase_request_response": credit_pack_purchase_request_response.model_dump(),
+                            "credit_pack_purchase_request_confirmation": credit_pack_purchase_request_confirmation.model_dump(),
+                            "credit_pack_registration_txid": txid,
+                            "credit_pack_current_credit_balance": current_credit_balance,
+                            "balance_as_of_datetime": datetime.now(dt.UTC).isoformat()
+                        }
+                        # Convert the complete ticket data to JSON
+                        complete_ticket = convert_uuids_to_strings(complete_ticket)
+                        complete_ticket = normalize_data(complete_ticket)
+                        complete_ticket_json = json.dumps(complete_ticket)
+                        # Insert or update the complete ticket data in the database
+                        async with db_code.Session() as db_session:
+                            if existing_data:
+                                existing_data.complete_credit_pack_data_json = complete_ticket_json
+                                existing_data.datetime_last_updated = datetime.now(dt.UTC)
+                                db_session.add(existing_data)
+                            else:
+                                new_complete_ticket = db_code.CreditPackCompleteTicketWithBalance(
+                                    credit_pack_ticket_registration_txid=txid,
+                                    complete_credit_pack_data_json=complete_ticket_json,
+                                    datetime_last_updated=datetime.now(dt.UTC)
+                                )
+                                db_session.add(new_complete_ticket)
+                            await db_session.commit()
+                complete_tickets.append(complete_ticket)
         return complete_tickets
     except Exception as e:
         logger.error(f"Error retrieving credit pack tickets for PastelID {pastelid}: {str(e)}")

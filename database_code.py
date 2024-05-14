@@ -724,7 +724,23 @@ class CreditPackKnownBadTXID(SQLModel, table=True):
                 "timestamp": "2023-06-01T12:00:00Z"
             }
         }
-
+        
+class CreditPackCompleteTicketWithBalance(SQLModel, table=True):
+    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    credit_pack_ticket_registration_txid: str = Field(index=True)
+    complete_credit_pack_data_json: str = Field(sa_column=Column(JSON))
+    datetime_last_updated: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
+                "credit_pack_ticket_registration_txid": "0x1234...",    
+                "complete_credit_pack_data_json": "",
+                "datetime_last_updated": "2023-06-01T12:00:00Z"
+            }
+        }
+                
+                
 ##______________________________________________________________________________________________________________________
 # Inference request related models (i.e., using the credit packs to do inferences):
     
