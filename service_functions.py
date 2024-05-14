@@ -1756,10 +1756,14 @@ async def store_generic_ticket_data_in_blockchain(ticket_input_data_json: str, t
         ticket_register_command_response = await rpc_connection.tickets('register', 'contract', ticket_json_b64, ticket_type_identifier, ticket_input_data_fully_parsed_sha3_256_hash)
         if len(ticket_register_command_response) > 0:
             if 'txid' in ticket_register_command_response.keys():
+                asyncio.sleep(2) # Sleep for a bit to give time for ticket processing
                 ticket_txid = ticket_register_command_response['txid']
                 ticket_get_command_response = await rpc_connection.tickets('get', ticket_txid , 1)
                 retrieved_ticket_data = ticket_get_command_response['ticket']['contract_ticket']
                 ticket_tx_info = ticket_get_command_response['tx_info']
+                if ticket_tx_info is None:
+                    logger.error(f"Ticket was not processed correctly for registration txid {ticket_txid}")
+                    return None
                 uncompressed_ticket_size_in_bytes = ticket_tx_info['size']
                 compressed_ticket_size_in_bytes = ticket_tx_info['compressed_size']
                 retrieved_ticket_input_data_fully_parsed_sha3_256_hash = retrieved_ticket_data['ticket_input_data_fully_parsed_sha3_256_hash']
@@ -3278,7 +3282,7 @@ def get_tokenizer(model_name: str):
         "mistral-7b-instruct": "mistralai/Mistral-7B-Instruct-v0.2",
         "phi": "TheBloke/phi-2-GGUF",
         "openai": "cl100k_base",
-        "groq-llama3": "meta-llama/Meta-Llama-3-70B",
+        "groq-llama3": "gradientai/Llama-3-70B-Instruct-Gradient-1048k",
         "groq-mixtral": "EleutherAI/gpt-neox-20b",
         "groq-gemma": "google/flan-ul2",
         "mistralapi": "mistralai/Mistral-7B-Instruct-v0.2",
