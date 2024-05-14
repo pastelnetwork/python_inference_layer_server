@@ -1756,7 +1756,6 @@ async def store_generic_ticket_data_in_blockchain(ticket_input_data_json: str, t
         ticket_register_command_response = await rpc_connection.tickets('register', 'contract', ticket_json_b64, ticket_type_identifier, ticket_input_data_fully_parsed_sha3_256_hash)
         if len(ticket_register_command_response) > 0:
             if 'txid' in ticket_register_command_response.keys():
-                asyncio.sleep(2) # Sleep for a bit to give time for ticket processing
                 ticket_txid = ticket_register_command_response['txid']
                 ticket_get_command_response = await rpc_connection.tickets('get', ticket_txid , 1)
                 retrieved_ticket_data = ticket_get_command_response['ticket']['contract_ticket']
@@ -1764,7 +1763,7 @@ async def store_generic_ticket_data_in_blockchain(ticket_input_data_json: str, t
                 if ticket_tx_info is None:
                     logger.error(f"Ticket was not processed correctly for registration txid {ticket_txid}")
                     return None
-                uncompressed_ticket_size_in_bytes = ticket_tx_info['size']
+                uncompressed_ticket_size_in_bytes = ticket_tx_info['uncompressed_size']
                 compressed_ticket_size_in_bytes = ticket_tx_info['compressed_size']
                 retrieved_ticket_input_data_fully_parsed_sha3_256_hash = retrieved_ticket_data['ticket_input_data_fully_parsed_sha3_256_hash']
                 retrieved_ticket_input_data_dict = retrieved_ticket_data['ticket_input_data_dict']
