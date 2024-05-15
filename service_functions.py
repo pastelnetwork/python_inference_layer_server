@@ -202,7 +202,7 @@ def normalize_data(data):
         return [normalize_data(item) for item in data]
     elif isinstance(data, uuid.UUID):
         return str(data)
-    elif isinstance(data, datetime.datetime):
+    elif isinstance(data, datetime):
         if data.tzinfo is None:
             # Make the datetime offset-aware with UTC timezone
             return data.replace(tzinfo=pytz.UTC)
