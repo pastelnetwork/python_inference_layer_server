@@ -1,9 +1,158 @@
 {
   "models": [
     {
-      "model_name": "mistral-7b-instruct-v0.2",
-      "model_url": "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q5_K_M.gguf",
-      "description": "The Mistral-7B-Instruct-v0.2 Large Language Model (LLM) is an instruct fine-tuned version of the Mistral-7B-v0.2. Mistral-7B-v0.2 has the following changes compared to Mistral-7B-v0.1: * 32k context window (vs 8k context in v0.1); *  Rope-theta = 1e6; *No Sliding-Window Attention",
+      "model_name": "swiss_army_llama-Llama-3-8B-Instruct-64k.Q5_K_M",
+      "model_url": "https://huggingface.co/MaziyarPanahi/Llama-3-8B-Instruct-64k-GGUF/resolve/main/Llama-3-8B-Instruct-64k.Q5_K_M.gguf",
+      "description": "The Llama-3-8B-Instruct-64k model is designed for instruction following with a large 64k context window. It is optimized for various text generation tasks.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding",
+        "token_level_embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        },
+        {
+          "name": "grammar_file_string",
+          "type": "string",
+          "default": "",
+          "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 1.5,
+        "output_tokens": 1.2,
+        "compute_cost": 0.9,
+        "memory_cost": 0.8
+      }
+    },
+    {
+      "model_name": "swiss_army_llama-Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M",
+      "model_url": "https://huggingface.co/NousResearch/Hermes-2-Theta-Llama-3-8B-GGUF/resolve/main/Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M.gguf",
+      "description": "Hermes 2 Pro is an upgraded, retrained version of Nous Hermes 2, consisting of an updated and cleaned version of the OpenHermes 2.5 Dataset, as well as a newly introduced Function Calling and JSON Mode dataset developed in-house. This version excels at Function Calling, JSON Structured Outputs, and has improved on several other metrics, scoring 90% on function calling evaluation and 84% on structured JSON Output evaluation.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding",
+        "token_level_embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        },
+        {
+          "name": "grammar_file_string",
+          "type": "string",
+          "default": "",
+          "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 1.5,
+        "output_tokens": 1.1,
+        "compute_cost": 0.8,
+        "memory_cost": 0.7
+      }
+    },
+    {
+      "model_name": "swiss_army_llama-bge-m3-q8_0",
+      "model_url": "https://huggingface.co/vonjack/bge-m3-gguf/resolve/main/bge-m3-q8_0.gguf",
+      "description": "BGE M3-Embedding: Multi-Lingual, Multi-Functionality, Multi-Granularity Text Embeddings Through Self-Knowledge Distillation. It can support more than 100 working languages, leading to new state-of-the-art performances on multi-lingual and cross-lingual retrieval tasks. It performs dense retrieval, multi-vector retrieval, and sparse retrieval, providing a unified model foundation for real-world IR applications.",
+      "supported_inference_type_strings": [
+        "embedding",
+        "token_level_embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "embeddings",
+          "file_type": "json",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "embedding_size",
+          "type": "int",
+          "default": 512,
+          "description": "The size of the generated embeddings"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 0.8,
+        "output_tokens": 0.0,
+        "compute_cost": 0.1,
+        "memory_cost": 0.1
+      }
+    },
+    {
+      "model_name": "swiss_army_llama-Meta-Llama-3-8B-Instruct.Q3_K_S",
+      "model_url": "https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct.Q3_K_S.gguf",
+      "description": "The Meta-Llama-3-8B-Instruct model is designed for instruction-following tasks with optimized quantization for efficient computation.",
       "supported_inference_type_strings": [
         "text_completion",
         "embedding",
@@ -54,62 +203,6 @@
         "output_tokens": 1.1,
         "compute_cost": 0.5,
         "memory_cost": 0.5
-      }
-    },
-    {
-      "model_name": "phi-2",
-      "model_url": "https://huggingface.co/TheBloke/phi-2-GGUF/resolve/main/phi-2.Q5_K_M.gguf",
-      "description": "Phi-2 is a Transformer with 2.7 billion parameters. It was trained using the same data sources as Phi-1.5, augmented with a new data source that consists of various NLP synthetic texts and filtered websites (for safety and educational value). When assessed against benchmarks testing common sense, language understanding, and logical reasoning, Phi-2 showcased a nearly state-of-the-art performance among models with less than 13 billion parameters.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding",
-        "token_level_embedding"
-      ],
-      "input_fields": [
-        {
-          "name": "text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        },
-        {
-          "name": "grammar_file_string",
-          "type": "string",
-          "default": "",
-          "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
-        }
-      ],
-      "credit_costs": {
-        "input_tokens": 0.5,
-        "output_tokens": 0.75,
-        "compute_cost": 0.25,
-        "memory_cost": 0.1
       }
     },
     {

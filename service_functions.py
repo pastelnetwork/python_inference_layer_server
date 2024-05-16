@@ -3343,13 +3343,22 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         "mistralapi-open-mistral-7b": {"input_cost": 0.00025, "output_cost": 0.00025, "per_call_cost": 0},
         "mistralapi-open-mixtral-8x7b": {"input_cost": 0.0007, "output_cost": 0.0007, "per_call_cost": 0},
         "mistralapi-mistral-embed": {"input_cost": 0.0001, "output_cost": 0, "per_call_cost": 0},
-        "openai-gpt-4-0125-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
-        "openai-gpt-4-1106-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
-        "openai-gpt-4-1106-vision-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
+        "openai-gpt-4o": {"input_cost": 0.005, "output_cost": 0.015, "per_call_cost": 0},
+        "openai-gpt-4o-2024-05-13": {"input_cost": 0.005, "output_cost": 0.015, "per_call_cost": 0},
+        "openai-gpt-4-turbo": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
+        "openai-gpt-4-turbo-2024-04-09": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
         "openai-gpt-4": {"input_cost": 0.03, "output_cost": 0.06, "per_call_cost": 0},
         "openai-gpt-4-32k": {"input_cost": 0.06, "output_cost": 0.12, "per_call_cost": 0},
         "openai-gpt-3.5-turbo-0125": {"input_cost": 0.0005, "output_cost": 0.0015, "per_call_cost": 0},
         "openai-gpt-3.5-turbo-instruct": {"input_cost": 0.0015, "output_cost": 0.002, "per_call_cost": 0},
+        "openai-gpt-3.5-turbo-16k": {"input_cost": 0.003, "output_cost": 0.004, "per_call_cost": 0},
+        "openai-gpt-4-0125-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
+        "openai-gpt-4-1106-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
+        "openai-gpt-4-vision-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
+        "openai-gpt-3.5-turbo-1106": {"input_cost": 0.001, "output_cost": 0.002, "per_call_cost": 0},
+        "openai-gpt-3.5-turbo-0613": {"input_cost": 0.0015, "output_cost": 0.002, "per_call_cost": 0},
+        "openai-gpt-3.5-turbo-16k-0613": {"input_cost": 0.003, "output_cost": 0.004, "per_call_cost": 0},
+        "openai-gpt-3.5-turbo-0301": {"input_cost": 0.0015, "output_cost": 0.002, "per_call_cost": 0},
         "openai-text-embedding-ada-002": {"input_cost": 0.0004, "output_cost": 0, "per_call_cost": 0},
         "groq-llama3-70b-8192": {"input_cost": 0.0007, "output_cost": 0.0008, "per_call_cost": 0},
         "groq-llama3-8b-8192": {"input_cost": 0.0001, "output_cost": 0.0001, "per_call_cost": 0},
@@ -4338,7 +4347,7 @@ async def submit_inference_request_to_swiss_army_llama(inference_request):
         if inference_request.model_inference_type_string == "text_completion":
             payload = {
                 "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                "llm_model_name": inference_request.requested_model_canonical_string,
+                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
                 "temperature": model_parameters.get("temperature", 0.7),
                 "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 1000),
                 "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1),
@@ -4365,7 +4374,7 @@ async def submit_inference_request_to_swiss_army_llama(inference_request):
         elif inference_request.model_inference_type_string == "embedding":
             payload = {
                 "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                "llm_model_name": inference_request.requested_model_canonical_string
+                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", "")
             }
             response = await client.post(
                 f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_embedding_vector_for_string/",
@@ -4385,7 +4394,7 @@ async def submit_inference_request_to_swiss_army_llama(inference_request):
         elif inference_request.model_inference_type_string == "token_level_embedding":
             payload = {
                 "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                "llm_model_name": inference_request.requested_model_canonical_string
+                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", "")
             }
             response = await client.post(
                 f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/",
@@ -4435,9 +4444,12 @@ async def execute_inference_request(inference_request_id: str) -> None:
             output_results, output_results_file_type_strings = await submit_inference_request_to_claude_api(inference_request)
         elif inference_request.requested_model_canonical_string.startswith("openrouter/"):
             output_results, output_results_file_type_strings = await submit_inference_request_to_openrouter(inference_request)
-        else:
+        elif inference_request.requested_model_canonical_string.startswith("swiss_army_llama-"):
             output_results, output_results_file_type_strings = await submit_inference_request_to_swiss_army_llama(inference_request)
-
+        else:
+            error_message = f"Unsupported provider or model selected for {inference_request.requested_model_canonical_string}: {inference_request.model_inference_type_string}"
+            logger.error(error_message)
+            raise ValueError(error_message)
         if output_results is not None and output_results_file_type_strings is not None:
             # Save the inference output results to the database
             await save_inference_output_results(inference_request_id, inference_response.inference_response_id, output_results, output_results_file_type_strings)
