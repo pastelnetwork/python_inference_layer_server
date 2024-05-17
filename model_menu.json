@@ -113,43 +113,6 @@
       }
     },
     {
-      "model_name": "swiss_army_llama-bge-m3-q8_0",
-      "model_url": "https://huggingface.co/vonjack/bge-m3-gguf/resolve/main/bge-m3-q8_0.gguf",
-      "description": "BGE M3-Embedding: Multi-Lingual, Multi-Functionality, Multi-Granularity Text Embeddings Through Self-Knowledge Distillation. It can support more than 100 working languages, leading to new state-of-the-art performances on multi-lingual and cross-lingual retrieval tasks. It performs dense retrieval, multi-vector retrieval, and sparse retrieval, providing a unified model foundation for real-world IR applications.",
-      "supported_inference_type_strings": [
-        "embedding",
-        "token_level_embedding"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "embeddings",
-          "file_type": "json",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "embedding_size",
-          "type": "int",
-          "default": 512,
-          "description": "The size of the generated embeddings"
-        }
-      ],
-      "credit_costs": {
-        "input_tokens": 0.8,
-        "output_tokens": 0.0,
-        "compute_cost": 0.1,
-        "memory_cost": 0.1
-      }
-    },
-    {
       "model_name": "swiss_army_llama-Meta-Llama-3-8B-Instruct.Q3_K_S",
       "model_url": "https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct.Q3_K_S.gguf",
       "description": "The Meta-Llama-3-8B-Instruct model is designed for instruction-following tasks with optimized quantization for efficient computation.",
@@ -203,6 +166,99 @@
         "output_tokens": 1.1,
         "compute_cost": 0.5,
         "memory_cost": 0.5
+      }
+    },
+    {
+      "model_name": "swiss_army_llama-Lexi-Llama-3-8B-Uncensored_Q5_K_M",
+      "model_url": "https://huggingface.co/Orenguteng/Llama-3-8B-Lexi-Uncensored-GGUF/resolve/main/Lexi-Llama-3-8B-Uncensored_Q5_K_M.gguf",
+      "description": "The Lexi-Llama-3-8B-Uncensored, based on the powerful Meta Llama-3-8B model, is designed for uncensored text generation with a focus on creative and innovative content.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding",
+        "token_level_embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        },
+        {
+          "name": "grammar_file_string",
+          "type": "string",
+          "default": "",
+          "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 1.5,
+        "output_tokens": 1.1,
+        "compute_cost": 0.8,
+        "memory_cost": 0.8
+      }
+    },    
+    {
+      "model_name": "swiss_army_llama-bge-m3-q8_0",
+      "model_url": "https://huggingface.co/vonjack/bge-m3-gguf/resolve/main/bge-m3-q8_0.gguf",
+      "description": "BGE M3-Embedding: Multi-Lingual, Multi-Functionality, Multi-Granularity Text Embeddings Through Self-Knowledge Distillation. It can support more than 100 working languages, leading to new state-of-the-art performances on multi-lingual and cross-lingual retrieval tasks. It performs dense retrieval, multi-vector retrieval, and sparse retrieval, providing a unified model foundation for real-world IR applications.",
+      "supported_inference_type_strings": [
+        "embedding",
+        "token_level_embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "embeddings",
+          "file_type": "json",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "embedding_size",
+          "type": "int",
+          "default": 512,
+          "description": "The size of the generated embeddings"
+        }
+      ],
+      "credit_costs": {
+        "input_tokens": 0.8,
+        "output_tokens": 0.0,
+        "compute_cost": 0.1,
+        "memory_cost": 0.1
       }
     },
     {
