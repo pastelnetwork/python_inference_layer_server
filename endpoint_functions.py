@@ -7,6 +7,7 @@ from fastapi.exceptions import HTTPException
 from json import JSONEncoder
 import json
 import uuid
+import traceback
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Union, Dict, Any
@@ -705,6 +706,7 @@ async def credit_pack_storage_retry_completion_announcement_endpoint(
         return {"message": "Announcement processed successfully"}
     except Exception as e:
         logger.error(f"Error processing credit pack storage retry completion announcement: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error processing credit pack storage retry completion announcement: {str(e)}")
 
 
@@ -724,6 +726,7 @@ async def get_valid_credit_pack_tickets_for_pastelid_endpoint(
         return valid_tickets
     except Exception as e:
         logger.error(f"Error retrieving valid credit pack tickets for PastelID {pastelid}: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error retrieving valid credit pack tickets: {str(e)}")
     
     
@@ -748,6 +751,7 @@ async def check_credit_pack_balance_endpoint(
         return balance_info
     except Exception as e:
         logger.error(f"Error checking credit pack balance for txid {credit_pack_ticket_txid}: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error checking credit pack balance: {str(e)}")
     
     
@@ -775,6 +779,7 @@ async def retrieve_credit_pack_ticket_endpoint(
         return ticket_info
     except Exception as e:
         logger.error(f"Error retrieving credit pack ticket for purchase burn txid {purchase_burn_txid}: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error retrieving credit pack ticket: {str(e)}")
     
     
@@ -797,6 +802,7 @@ async def get_final_credit_pack_registration_txid_endpoint(
         return {"final_credit_pack_registration_txid": sha3_256_hash_of_credit_pack_purchase_request_fields}
     except Exception as e:
         logger.error(f"Error retrieving final credit pack registration txid for purchase burn txid {purchase_burn_txid}: {str(e)}")
+        traceback.print_exc()        
         raise HTTPException(status_code=500, detail=f"Error retrieving final credit pack registration txid: {str(e)}")
 
     
@@ -834,6 +840,7 @@ async def make_inference_api_usage_request_endpoint(
         return inference_response
     except Exception as e:
         logger.error(f"Error encountered with inference API usage request: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error encountered with inference API usage request: {str(e)}")
     
 
@@ -862,6 +869,7 @@ async def confirm_inference_request_endpoint(
         return inference_confirmation
     except Exception as e:
         logger.error(f"Error sending inference confirmation: {str(e)}")
+        traceback.print_exc()       
         raise HTTPException(status_code=500, detail=f"Error sending inference confirmation: {str(e)}")
 
 
@@ -877,6 +885,7 @@ async def check_status_of_inference_request_results_endpoint(inference_response_
         raise HTTPException(status_code=400, detail=f"Invalid request: {str(ve)}")
     except Exception as e:
         logger.error(f"Error checking status of inference request results: {str(e)}")
+        traceback.print_exc()        
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -913,6 +922,7 @@ async def retrieve_inference_output_results_endpoint(
         return inference_output_results
     except Exception as e:
         logger.error(f"Error retrieving inference output results: {str(e)}")
+        traceback.print_exc()        
         raise HTTPException(status_code=500, detail=f"Error retrieving inference output results: {str(e)}")
 
 
@@ -940,6 +950,7 @@ async def audit_inference_request_response_endpoint(
         return api_usage_response
     except Exception as e:
         logger.error(f"Error auditing inference request result: {str(e)}")
+        traceback.print_exc()        
         raise HTTPException(status_code=500, detail=f"Error auditing inference request result: {str(e)}")
     
     
@@ -967,6 +978,7 @@ async def audit_inference_request_result_endpoint(
         return api_usage_result
     except Exception as e:
         logger.error(f"Error auditing inference request result: {str(e)}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error auditing inference request result: {str(e)}")
     
     

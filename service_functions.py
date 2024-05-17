@@ -10,6 +10,7 @@ import math
 import statistics
 import time
 import uuid
+import subprocess
 import random
 import re
 import sys
@@ -42,6 +43,7 @@ from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
 import database_code as db_code
 from sqlmodel import select, delete, update, func, or_, SQLModel
 from sqlalchemy.exc import IntegrityError
+from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 
 encryption_key = None
 magika = Magika()
@@ -148,6 +150,12 @@ NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = config.get("NUMBER_OF_D
 GITHUB_MODEL_MENU_URL = config.get("GITHUB_MODEL_MENU_URL")
 CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_SECONDS", default=300, cast=int)
 SWISS_ARMY_LLAMA_PORT = config.get("SWISS_ARMY_LLAMA_PORT", default=8089, cast=int)
+USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE = config.get("USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE", default=0, cast=int)
+REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH", default="/home/ubuntu/vastai_privkey")
+REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESS = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESS", default="50.20.127.188")
+REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORT", default=40396, cast=int)
+REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT", default=8087, cast=int)
+REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT", default=8089, cast=int)
 CREDIT_COST_MULTIPLIER_FACTOR = config.get("CREDIT_COST_MULTIPLIER_FACTOR", default=0.1, cast=float)
 BASE_TRANSACTION_AMOUNT = decimal.Decimal(config.get("BASE_TRANSACTION_AMOUNT", default=0.000001, cast=float))
 FEE_PER_KB = decimal.Decimal(config.get("FEE_PER_KB", default=0.0001, cast=float))
@@ -313,6 +321,59 @@ def write_rpc_settings_to_env_file_func(rpc_host, rpc_port, rpc_user, rpc_passwo
                 pass
     return
 
+def kill_open_ssh_tunnels(local_port):
+    try:
+        lsof_command = [
+            "lsof", "-i", f"TCP:{local_port}", "-sTCP:LISTEN"
+        ]
+        result = subprocess.run(lsof_command, capture_output=True, text=True)
+        if result.stdout:
+            lines = result.stdout.strip().split('\n')
+            pids = []
+            for line in lines[1:]:
+                columns = line.split()
+                if len(columns) > 1:
+                    pids.append(columns[1])
+            if pids:
+                for pid in pids:
+                    kill_command = ["kill", "-9", pid]
+                    subprocess.run(kill_command)
+                logger.info("Killed SSH tunnels with PIDs: {}".format(', '.join(pids)))
+            else:
+                logger.info("No SSH tunnels found to kill.")
+        else:
+            logger.info("No SSH tunnels found.")
+    except Exception as e:
+        logger.error("Error while killing SSH tunnels: {}".format(e))
+        
+def establish_ssh_tunnel():
+    if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
+        kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
+        key_path = REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH
+        if not os.access(key_path, os.R_OK):
+            raise PermissionError("SSH key file at {} is not readable.".format(key_path))
+        current_permissions = os.stat(key_path).st_mode & 0o777
+        if current_permissions != 0o600:
+            os.chmod(key_path, 0o600)
+            logger.info("Permissions for SSH key file set to 600.")
+        try:
+            tunnel = SSHTunnelForwarder(
+                (REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESS, REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORT),
+                ssh_username="root",
+                ssh_pkey=key_path,
+                remote_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT),
+                local_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT),
+                host_pkey_directories=[]  # Disable host key checking
+            )
+            tunnel.start()
+            logger.info("SSH tunnel established: {}".format(tunnel.local_bind_address))
+            while True:
+                time.sleep(10)
+        except BaseSSHTunnelForwarderError as e:
+            logger.error("SSH tunnel error: {}".format(e))
+        except Exception as e:
+            logger.error("Error establishing SSH tunnel: {}".format(e))
+        
 def convert_uuids_to_strings(data):
     if isinstance(data, dict):
         return {key: convert_uuids_to_strings(value) for key, value in data.items()}
@@ -2935,8 +2996,8 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         validation_results["validation_checks"].append({
             "check_name": "Agreeing supernodes percentage validation",
             "is_valid": is_agreeing_percentage_valid and is_quorum_valid,
-            "quorum_percentage": quorum_percentage,
-            "agreeing_percentage": agreeing_percentage
+            "quorum_percentage": round(quorum_percentage,5),
+            "agreeing_percentage": round(agreeing_percentage,5)
         })
         if not is_agreeing_percentage_valid or not is_quorum_valid:
             validation_results["credit_pack_ticket_is_valid"] = False
@@ -3275,10 +3336,9 @@ async def save_inference_api_usage_request(inference_request_model: db_code.Infe
     return inference_request_model
 
 def get_tokenizer(model_name: str):
+    model_name = model_name.replace('swiss_army_llama-', '')
     model_to_tokenizer_mapping = {
         "claude3": "Xenova/claude-tokenizer",
-        "mistral": "mistralai/Mistral-7B-Instruct-v0.2",
-        "mistral-7b-instruct": "mistralai/Mistral-7B-Instruct-v0.2",
         "phi": "TheBloke/phi-2-GGUF",
         "openai": "cl100k_base",
         "groq-llama3": "gradientai/Llama-3-70B-Instruct-Gradient-1048k",
@@ -3296,7 +3356,6 @@ def get_tokenizer(model_name: str):
         "openrouter/bigscience/bloom": "bigscience/bloom-1b7",
         "openrouter/databricks/dolly-v2-12b": "databricks/dolly-v2-12b",
         "openrouter/EleutherAI/gpt-j-6b": "EleutherAI/gpt-j-6B",
-        "openrouter/OpenAssistant/oasst-sft-6-llama-30b-xor": "OpenAssistant/oasst-sft-6-llama-30b-xor",
         "openrouter/stabilityai/stablelm-tuned-alpha-7b": "stabilityai/stablelm-base-alpha-7b",
         "openrouter/togethercomputer/GPT-JT-6B-v1": "togethercomputer/GPT-JT-6B-v1",
         "openrouter/tiiuae/falcon-7b-instruct": "tiiuae/falcon-7b-instruct"
@@ -3305,6 +3364,7 @@ def get_tokenizer(model_name: str):
     return model_to_tokenizer_mapping.get(best_match[0], "gpt2")  # Default to "gpt2" if no match found
 
 def count_tokens(model_name: str, input_data: str) -> int:
+    model_name = model_name.replace('swiss_army_llama-', '')
     tokenizer_name = get_tokenizer(model_name)
     logger.info(f"Selected tokenizer {tokenizer_name} for model {model_name}")
     if 'claude' in model_name.lower():
@@ -3329,6 +3389,7 @@ def count_tokens(model_name: str, input_data: str) -> int:
     return len(input_tokens)
 
 def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict) -> float:
+    model_name = model_name.replace('swiss_army_llama-', '')
     # Define the pricing data for each API service and model
     logger.info(f"Evaluating API cost for model: {model_name}")
     pricing_data = {
@@ -3479,6 +3540,7 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
 
 async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dict, model_parameters: Dict, input_data: str) -> float:
     model_name = requested_model_data["model_name"]
+    model_name = model_name.replace('swiss_army_llama-', '')
     # Calculate the API cost if applicable
     api_cost = calculate_api_cost(model_name, input_data, model_parameters)
     if api_cost > 0.0:
@@ -3565,16 +3627,6 @@ async def estimated_market_price_of_inference_credits_in_psl_terms() -> float:
         logger.error(f"Error calculating estimated market price of inference credits: {str(e)}")
         raise
 
-def is_swiss_army_llama_responding():
-    try:
-        url = f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_list_of_available_model_names/"
-        params = {'token': SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-        response = httpx.get(url, params=params)
-        return response.status_code == 200
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        return False
-
 def normalize_string(s):
     """Remove non-alphanumeric characters and convert to lowercase."""
     return re.sub(r'\W+', '', s).lower()
@@ -3583,58 +3635,79 @@ def validate_pastel_txid_string(input_string: str):
     # Sample txid: 625694b632a05f5df8d70904b9b3ff03d144aec0352b2290a275379586daf8db
     return re.match(r'^[0-9a-fA-F]{64}$', input_string) is not None
 
+def is_swiss_army_llama_responding(local=True):
+    port = SWISS_ARMY_LLAMA_PORT if local else REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
+    try:
+        url = f"http://localhost:{port}/get_list_of_available_model_names/"
+        params = {'token': SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+        response = httpx.get(url, params=params)
+        return response.status_code == 200
+    except Exception as e:
+        logger.error("Error: {}".format(e))
+        return False
+
 async def check_if_input_text_would_get_rejected_from_api_services(input_text: str) -> bool:
     inference_request_allowed = True
-    if is_swiss_army_llama_responding():
-        start_time = time.time()
-        logger.info("Now checking suitability of requested inference for API services to avoid banning (using Swiss Army Llama with model TinyLlama-1.1B-Chat)...")
-        input_prompt = f"A user wants to do inference using the following prompt text using the OpenAI API; is the content or nature of the request problematic or offensive in any way that makes it likely that OpenAI will reject the request for safety reasons and potentially ban the API key for submitting it? Respond ONLY with a one word answer-- `REJECT` if the request will cause problems with OpenAI, or `ACCEPT` if it's unlikely to pose a problem. Here is the inference request submitted by the user:\n\n{input_text}"
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
+    local_swiss_army_llama_responding = is_swiss_army_llama_responding(local=True)
+    if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
+        remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
+    else:
+        remote_swiss_army_llama_responding = 0
+    if not local_swiss_army_llama_responding and not remote_swiss_army_llama_responding:
+        logger.error("Error! Neither local nor remote Swiss Army Llama is responding.")
+        return inference_request_allowed
+    use_remote = remote_swiss_army_llama_responding and USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE
+    start_time = time.time()
+    logger.info("Now checking suitability of requested inference for API services to avoid banning (using Swiss Army Llama with model TinyLlama-1.1B-Chat)...")
+    input_prompt = "A user wants to do inference using the following prompt text using the OpenAI API; is the content or nature of the request problematic or offensive in any way that makes it likely that OpenAI will reject the request for safety reasons and potentially ban the API key for submitting it? Respond ONLY with a one word answer-- `REJECT` if the request will cause problems with OpenAI, or `ACCEPT` if it's unlikely to pose a problem. Here is the inference request submitted by the user:\n\n{}".format(input_text)
+    url = "http://localhost:{}/get_text_completions_from_input_prompt/".format(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT if use_remote else SWISS_ARMY_LLAMA_PORT)
+    try:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 3)) as client:
             payload = {
                 "input_prompt": input_prompt,
-                "llm_model_name": "tinyllama-1.1b-chat-v1.0",
+                "llm_model_name": "Meta-Llama-3-8B-Instruct.Q3_K_S",
                 "temperature": 0.7,
                 "number_of_tokens_to_generate": 3,
                 "number_of_completions_to_generate": 1,
                 "grammar_file_string": "accept_or_reject",
             }
             response = await client.post(
-                f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_text_completions_from_input_prompt/",
+                url,
                 json=payload,
                 params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
             )
-            if response.status_code == 200:
-                output_results = response.json()
-                output_text = output_results[0]["generated_text"]
-                end_time = time.time()
-                duration_in_seconds = (end_time - start_time)
-                logger.info(f"Total time taken for inference request content check: {round(duration_in_seconds, 2)} seconds")                
-                if output_text == "ACCEPT":
-                    logger.info("Inference request is not problematic, passing on to API service now...")
-                    return inference_request_allowed
-                if output_text == "REJECT":
-                    logger.error("Error! Inference request was determined to be problematic and likely to result in a rejection or ban from the API service!")
-                    inference_request_allowed = False
-                    return inference_request_allowed                
-                logger.warning(f"Warning! Inference check was supposed to result in either 'ACCEPT' or 'REJECT', but it instead returned: '{output_text}'")
+            response.raise_for_status()
+            output_results = response.json()
+            output_text = output_results[0]["generated_text"]
+            end_time = time.time()
+            duration_in_seconds = (end_time - start_time)
+            logger.info("Total time taken for inference request content check: {} seconds".format(round(duration_in_seconds, 2)))
+            if output_text == "ACCEPT":
+                logger.info("Inference request is not problematic, passing on to API service now...")
                 return inference_request_allowed
-            else:
-                logger.error(f"Failed to execute inference check request with Swiss Army Llama: {response.text}")
+            if output_text == "REJECT":
+                logger.error("Error! Inference request was determined to be problematic and likely to result in a rejection or ban from the API service!")
+                inference_request_allowed = False
                 return inference_request_allowed
-    else:
-        logger.error("Error! Swiss Army Llama is not responding, so we can't check if the inference request is problematic before sending to an API service!")
-        return inference_request_allowed
+            logger.warning("Warning! Inference check was supposed to result in either 'ACCEPT' or 'REJECT', but it instead returned: '{}'".format(output_text))
+            return inference_request_allowed
+    except Exception as e:
+        logger.error("Failed to execute inference check request with Swiss Army Llama: {}".format(e))
+        if use_remote:
+            logger.info("Falling back to local Swiss Army Llama.")
+            return await check_if_input_text_would_get_rejected_from_api_services(input_text)
+    return inference_request_allowed
 
 async def validate_inference_api_usage_request(inference_api_usage_request: db_code.InferenceAPIUsageRequest) -> Tuple[bool, float, float]:
     try:
         validation_errors = await validate_inference_request_message_data_func(inference_api_usage_request)
         if validation_errors:
-            raise ValueError(f"Invalid inference request message: {', '.join(validation_errors)}")        
+            raise ValueError(f"Invalid inference request message: {', '.join(validation_errors)}")
         requesting_pastelid = inference_api_usage_request.requesting_pastelid
         credit_pack_ticket_pastel_txid = inference_api_usage_request.credit_pack_ticket_pastel_txid
         requested_model = inference_api_usage_request.requested_model_canonical_string
         model_inference_type_string = inference_api_usage_request.model_inference_type_string
-        model_parameters = base64.b64decode(inference_api_usage_request.model_parameters_json_b64).decode('utf-8')  
+        model_parameters = base64.b64decode(inference_api_usage_request.model_parameters_json_b64).decode('utf-8')
         input_data = inference_api_usage_request.model_input_data_json_b64
         if not validate_pastel_txid_string(credit_pack_ticket_pastel_txid):
             logger.error(f"Invalid Pastel TXID: {credit_pack_ticket_pastel_txid}")
@@ -3643,13 +3716,10 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         credit_pack_purchase_request_object = await get_credit_pack_purchase_request_from_response(credit_pack_purchase_request_response)
         if credit_pack_purchase_request_object:
             list_of_authorized_pastelids_allowed_to_use_credit_pack = json.dumps(credit_pack_purchase_request_object.list_of_authorized_pastelids_allowed_to_use_credit_pack)
-            # Check if the requesting PastelID is authorized to use the credit pack
             if requesting_pastelid not in list_of_authorized_pastelids_allowed_to_use_credit_pack:
                 logger.warning(f"Unauthorized PastelID: {requesting_pastelid}")
                 return False, 0, 0
-        # # Retrieve the model menu
         model_menu = await get_inference_model_menu()
-        # Check if the requested model exists in the model menu
         requested_model_data = next((model for model in model_menu["models"] if normalize_string(model["model_name"]) == normalize_string(requested_model)), None)
         if requested_model_data is None:
             logger.warning(f"Invalid model requested: {requested_model}")
@@ -3658,21 +3728,25 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
             is_api_based_model = 1
         else:
             is_api_based_model = 0
-        # Check if the requested inference type is supported by the model
         if model_inference_type_string not in requested_model_data["supported_inference_type_strings"]:
             logger.warning(f"Unsupported inference type '{model_inference_type_string}' for model '{requested_model}'")
             return False, 0, 0
         if not is_api_based_model:
-            if is_swiss_army_llama_responding():
-                # Validate the requested model against the Swiss Army Llama API
+            logger.info("Inference request is for Swiss Army Llama model, so checking if the service is available...")
+            local_swiss_army_llama_responding = is_swiss_army_llama_responding(local=True)
+            if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
+                remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
+            else:
+                remote_swiss_army_llama_responding = 0
+            if local_swiss_army_llama_responding or remote_swiss_army_llama_responding:
                 async with httpx.AsyncClient() as client:
+                    port = SWISS_ARMY_LLAMA_PORT if local_swiss_army_llama_responding else REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
                     params = {"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                    response = await client.get(f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_list_of_available_model_names/", params=params)
+                    response = await client.get(f"http://localhost:{port}/get_list_of_available_model_names/", params=params)
                     if response.status_code == 200:
                         available_models = response.json()["model_names"]
                         if requested_model not in available_models:
-                            # Add the new model to Swiss Army Llama
-                            add_model_response = await client.post(f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/add_new_model/", params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "model_url": requested_model_data["model_url"]})
+                            add_model_response = await client.post(f"http://localhost:{port}/add_new_model/", params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "model_url": requested_model_data["model_url"]})
                             if add_model_response.status_code != 200:
                                 logger.warning(f"Failed to add new model to Swiss Army Llama: {requested_model}")
                                 return False, 0, 0
@@ -3680,8 +3754,8 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
                         logger.warning("Failed to retrieve available models from Swiss Army Llama API")
                         return False, 0, 0
             else:
-                logger.error(f"Error! Swiss Army Llama is not running on port {SWISS_ARMY_LLAMA_PORT}")
-        # Calculate the proposed cost in credits based on the requested model and input data
+                logger.error("Error! Neither local nor remote Swiss Army Llama is running.")
+                return False, 0, 0
         model_parameters_dict = json.loads(model_parameters)
         input_data_binary = base64.b64decode(input_data)
         result = magika.identify_bytes(input_data_binary)
@@ -3695,21 +3769,18 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
                     logger.error(f"Cannot proceed with inference request to model {requested_model} because of risk that it will be rejected and lead to banning!")
                     return False, 0, 0
         proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, input_data)
-        # Check if the credit pack is valid:
         validation_results = await validate_existing_credit_pack_ticket(credit_pack_ticket_pastel_txid)
         if not validation_results["credit_pack_ticket_is_valid"]:
             logger.warning(f"Invalid credit pack ticket: {validation_results['validation_failure_reasons_list']}")
             return False, 0, 0
         else:
             logger.info(f"Credit pack ticket with txid {credit_pack_ticket_pastel_txid} passed all validation checks: {pretty_json_func(validation_results['validation_checks'])}")
-        # Check if the credit pack has sufficient credits for the request
         current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_pastel_txid)
         if proposed_cost_in_credits >= current_credit_balance:
             logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits:,}, Available: {current_credit_balance:,}")
             return False, proposed_cost_in_credits, current_credit_balance
         else:
             logger.info(f"Credit pack ticket has sufficient credits for the request. Required: {proposed_cost_in_credits:,}, Available: {current_credit_balance:,}")
-        # Calculate the remaining credits after the request
         remaining_credits_after_request = current_credit_balance - proposed_cost_in_credits
         return True, proposed_cost_in_credits, remaining_credits_after_request
     except Exception as e:
@@ -4341,9 +4412,15 @@ async def submit_inference_request_to_claude_api(inference_request):
         return None, None
 
 async def submit_inference_request_to_swiss_army_llama(inference_request):
-    logger.info(f"Now calling Swiss Army Llama with model {inference_request.requested_model_canonical_string}")
+    logger.info("Now calling Swiss Army Llama with model {}".format(inference_request.requested_model_canonical_string))
     model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
     async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*12)) as client:
+        local_swiss_army_llama_responding = is_swiss_army_llama_responding(local=True)
+        if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
+            remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
+        else:
+            remote_swiss_army_llama_responding = 0
+        port = SWISS_ARMY_LLAMA_PORT if local_swiss_army_llama_responding else REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT if remote_swiss_army_llama_responding else SWISS_ARMY_LLAMA_PORT
         if inference_request.model_inference_type_string == "text_completion":
             payload = {
                 "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
@@ -4353,12 +4430,13 @@ async def submit_inference_request_to_swiss_army_llama(inference_request):
                 "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1),
                 "grammar_file_string": model_parameters.get("grammar_file_string", ""),
             }
-            response = await client.post(
-                f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_text_completions_from_input_prompt/",
-                json=payload,
-                params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-            )
-            if response.status_code == 200:
+            try:
+                response = await client.post(
+                    f"http://localhost:{port}/get_text_completions_from_input_prompt/",
+                    json=payload,
+                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                )
+                response.raise_for_status()
                 output_results = response.json()
                 output_text = output_results[0]["generated_text"]
                 result = magika.identify_bytes(output_text.encode("utf-8"))
@@ -4367,53 +4445,61 @@ async def submit_inference_request_to_swiss_army_llama(inference_request):
                     "output_text": detected_data_type,
                     "output_files": ["NA"]
                 }
-                return output_results, output_results_file_type_strings
-            else:
-                logger.error(f"Failed to execute text completion inference request: {response.text}")
-                return None, None
+                return output_text, output_results_file_type_strings
+            except Exception as e:
+                logger.error("Failed to execute text completion inference request: {}".format(e))
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT:
+                    logger.info("Falling back to local Swiss Army Llama.")
+                    return await submit_inference_request_to_swiss_army_llama(inference_request)
         elif inference_request.model_inference_type_string == "embedding":
             payload = {
                 "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
                 "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", "")
             }
-            response = await client.post(
-                f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_embedding_vector_for_string/",
-                json=payload,
-                params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-            )
-            if response.status_code == 200:
+            try:
+                response = await client.post(
+                    f"http://localhost:{port}/get_embedding_vector_for_string/",
+                    json=payload,
+                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                )
+                response.raise_for_status()
                 output_results = response.json()
                 output_results_file_type_strings = {
                     "output_text": "embedding",
                     "output_files": ["NA"]
                 }
                 return output_results, output_results_file_type_strings
-            else:
-                logger.error(f"Failed to execute embedding inference request: {response.text}")
-                return None, None
+            except Exception as e:
+                logger.error("Failed to execute embedding inference request: {}".format(e))
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT:
+                    logger.info("Falling back to local Swiss Army Llama.")
+                    return await submit_inference_request_to_swiss_army_llama(inference_request)
         elif inference_request.model_inference_type_string == "token_level_embedding":
             payload = {
                 "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
                 "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", "")
             }
-            response = await client.post(
-                f"http://localhost:{SWISS_ARMY_LLAMA_PORT}/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/",
-                json=payload,
-                params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "send_back_json_or_zip_file": "json"}
-            )
-            if response.status_code == 200:
+            try:
+                response = await client.post(
+                    f"http://localhost:{port}/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/",
+                    json=payload,
+                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "send_back_json_or_zip_file": "json"}
+                )
+                response.raise_for_status()
                 output_results = response.json()
                 output_results_file_type_strings = {
                     "output_text": "token_level_embedding",
                     "output_files": ["NA"]
                 }
                 return output_results, output_results_file_type_strings
-            else:
-                logger.error(f"Failed to execute token level embedding inference request: {response.text}")
-                return None, None
+            except Exception as e:
+                logger.error("Failed to execute token level embedding inference request: {}".format(e))
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT:
+                    logger.info("Falling back to local Swiss Army Llama.")
+                    return await submit_inference_request_to_swiss_army_llama(inference_request)
         else:
-            logger.warning(f"Unsupported inference type: {inference_request.model_inference_type_string}")
-            return None, None    
+            logger.warning("Unsupported inference type: {}".format(inference_request.model_inference_type_string))
+            return None, None
 
 async def execute_inference_request(inference_request_id: str) -> None:
     try:

@@ -645,7 +645,7 @@
       "credit_costs": {
         "api_based_pricing": 1
       }
-    },    
+    },
     {
       "model_name": "groq-mixtral-8x7b-32768",
       "model_url": "",
