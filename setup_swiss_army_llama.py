@@ -218,11 +218,16 @@ def check_and_setup_swiss_army_llama(security_token):
     repo_path = os.path.expanduser("~/swiss_army_llama")
     repo_updated = has_repo_been_updated(repo_path)
     service_responding = is_swiss_army_llama_responding("localhost", swiss_army_llama_port, security_token)
-    if not repo_updated and service_responding and not is_port_available(swiss_army_llama_port):
-        logger.info("Swiss Army Llama is already set up and running, and the repository has not been updated.")
-    elif not is_port_available(swiss_army_llama_port):
+    swiss_army_llama_port_available = is_port_available(swiss_army_llama_port)
+    if service_responding:
+        logger.info("Swiss Army Llama service is responding on port {}.".format(swiss_army_llama_port))
+        if not repo_updated:
+            logger.info("Swiss Army Llama is already set up and running, and the repository has not been updated.")
+            return
+    elif not swiss_army_llama_port_available:
+        logger.error("Swiss Army Llama service is NOT responding on port {}.".format(swiss_army_llama_port))
         logger.error("Port {} is not available. It may be in use by another process.".format(swiss_army_llama_port))
-    else:
+    if repo_updated or not service_responding:
         if repo_updated:
             logger.info("Repository has updates. Running setup.")
         else:
