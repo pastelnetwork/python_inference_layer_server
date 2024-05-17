@@ -1,62 +1,6 @@
 {
   "models": [
     {
-      "model_name": "swiss_army_llama-Llama-3-8B-Instruct-64k.Q5_K_M",
-      "model_url": "https://huggingface.co/MaziyarPanahi/Llama-3-8B-Instruct-64k-GGUF/resolve/main/Llama-3-8B-Instruct-64k.Q5_K_M.gguf",
-      "description": "The Llama-3-8B-Instruct-64k model is designed for instruction following with a large 64k context window. It is optimized for various text generation tasks.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding",
-        "token_level_embedding"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        },
-        {
-          "name": "grammar_file_string",
-          "type": "string",
-          "default": "",
-          "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
-        }
-      ],
-      "credit_costs": {
-        "input_tokens": 1.5,
-        "output_tokens": 1.2,
-        "compute_cost": 0.9,
-        "memory_cost": 0.8
-      }
-    },
-    {
       "model_name": "swiss_army_llama-Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M",
       "model_url": "https://huggingface.co/NousResearch/Hermes-2-Theta-Llama-3-8B-GGUF/resolve/main/Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M.gguf",
       "description": "Hermes 2 Pro is an upgraded, retrained version of Nous Hermes 2, consisting of an updated and cleaned version of the OpenHermes 2.5 Dataset, as well as a newly introduced Function Calling and JSON Mode dataset developed in-house. This version excels at Function Calling, JSON Structured Outputs, and has improved on several other metrics, scoring 90% on function calling evaluation and 84% on structured JSON Output evaluation.",
