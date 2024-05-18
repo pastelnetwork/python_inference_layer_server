@@ -67,7 +67,7 @@
           "default": "",
           "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
-        }                
+        }
       ],
       "credit_costs": {
         "text_completion": {
@@ -168,7 +168,7 @@
           "default": "",
           "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
-        }                         
+        }
       ],
       "credit_costs": {
         "text_completion": {
@@ -269,7 +269,7 @@
           "default": "",
           "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
-        }                  
+        }
       ],
       "credit_costs": {
         "text_completion": {
@@ -341,7 +341,7 @@
           "default": "",
           "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
-        }                              
+        }
       ],
       "credit_costs": {
         "embedding": {
@@ -440,18 +440,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -490,18 +493,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -535,18 +541,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -607,18 +616,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -653,18 +665,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",        
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",        
           "description": "The number of completions to generate"
         }
       ],
@@ -699,18 +714,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -745,18 +763,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -791,18 +812,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -837,18 +861,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -883,18 +910,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -929,18 +959,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -975,18 +1008,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -1021,18 +1057,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -1067,30 +1106,35 @@
           "name": "aspect_ratio",
           "type": "string",
           "default": "1:1",
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "The aspect ratio of the generated image"
         },
         {
           "name": "seed",
           "type": "int",
           "default": 0,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Random seed to use for generation"
         },
         {
           "name": "style_preset",
           "type": "string",
           "default": null,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Guides the image model towards a particular style (e.g., 3d-model, analog-film, anime, etc.)"
         },
         {
           "name": "output_format",
           "type": "string",
           "default": "png",
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "The format of the generated image"
         },
         {
           "name": "negative_prompt",
           "type": "string",
           "default": null,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "A blurb of text describing what you do not wish to see in the output image"
         }
       ],
@@ -1124,36 +1168,42 @@
           "name": "height",
           "type": "int",
           "default": 512,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "The height of the generated image"
         },
         {
           "name": "width",
           "type": "int",
           "default": 512,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "The width of the generated image"
         },
         {
           "name": "cfg_scale",
           "type": "float",
           "default": 7,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "CFG scale factor"
         },
         {
           "name": "sampler",
           "type": "string",
           "default": null,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.)"
         },
         {
           "name": "steps",
           "type": "int",
           "default": 50,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Number of steps for generation"
         },
         {
           "name": "seed",
           "type": "int",
           "default": 0,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Random seed to use for generation"
         },
         {
@@ -1166,12 +1216,14 @@
           "name": "negative_prompt",
           "type": "string",
           "default": null,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "A blurb of text describing what you do not wish to see in the output image"
         },
         {
           "name": "style_preset",
           "type": "string",
           "default": null,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Guides the image model towards a particular style (e.g., 3d-model, analog-film, anime, etc.)"
         }
       ],
@@ -1205,54 +1257,63 @@
           "name": "height",
           "type": "int",
           "default": 512,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "The height of the generated image"
         },
         {
           "name": "width",
           "type": "int",
           "default": 512,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "The width of the generated image"
         },
         {
           "name": "cfg_scale",
           "type": "float",
           "default": 7,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "CFG scale factor"
         },
         {
           "name": "sampler",
           "type": "string",
           "default": null,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.)"
         },
         {
           "name": "steps",
           "type": "int",
           "default": 50,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Number of steps for generation"
         },
         {
           "name": "seed",
           "type": "int",
           "default": 0,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Random seed to use for generation"
         },
         {
           "name": "num_samples",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Number of samples to generate"
         },
         {
           "name": "negative_prompt",
           "type": "string",
           "default": null,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "A blurb of text describing what you do not wish to see in the output image"
         },
         {
           "name": "style_preset",
           "type": "string",
           "default": null,
+          "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Guides the image model towards a particular style (e.g., 3d-model, analog-film, anime, etc.)"
         }
       ],
@@ -1286,63 +1347,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/openai/gpt-4-turbo",
-      "model_url": "",
-      "description": "OpenAI's GPT-4 Turbo model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -1376,108 +1395,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/anthropic/claude-3-haiku",
-      "model_url": "",
-      "description": "Anthropic's Claude 3 Haiku model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/meta-llama/llama-2-70b-chat",
-      "model_url": "",
-      "description": "Meta's LLaMA v2 70B Chat model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -1511,648 +1443,21 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/gryphe/mythomax-l2-13b",
-      "model_url": "",
-      "description": "Gryphe's MythoMax 13B model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/openchat/openchat-7b",
-      "model_url": "",
-      "description": "OpenChat 3.5 model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/google/palm-2-codechat-bison",
-      "model_url": "",
-      "description": "Google's PaLM 2 Code Chat Bison model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/anthropic/claude-3-sonnet",
-      "model_url": "",
-      "description": "Anthropic's Claude 3 Sonnet model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/anthropic/claude-3-opus",
-      "model_url": "",
-      "description": "Anthropic's Claude 3 Opus model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/nousresearch/nous-hermes-llama2-13b",
-      "model_url": "",
-      "description": "Nous Research's Hermes 13B model based on LLaMA 2 accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/nousresearch/nous-capybara-7b",
-      "model_url": "",
-      "description": "Nous Research's Capybara 7B model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/meta-llama/codellama-34b-instruct",
-      "model_url": "",
-      "description": "Meta's CodeLLaMA 34B Instruct model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/codellama/codellama-70b-instruct",
-      "model_url": "",
-      "description": "CodeLLaMA 70B Instruct model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/phind/phind-codellama-34b",
-      "model_url": "",
-      "description": "Phind's CodeLLaMA 34B v2 model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/teknium/openhermes-2-mistral-7b",
-      "model_url": "",
-      "description": "OpenHermes 2 Mistral 7B model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/teknium/openhermes-2.5-mistral-7b",
-      "model_url": "",
-      "description": "OpenHermes 2.5 Mistral 7B model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/undi95/remm-slerp-l2-13b",
-      "model_url": "",
-      "description": "ReMM SLERP 13B model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/undi95/toppy-m-7b",
-      "model_url": "",
-      "description": "Toppy M 7B model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
