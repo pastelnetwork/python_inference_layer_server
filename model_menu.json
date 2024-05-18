@@ -58,14 +58,14 @@
           "name": "query_string",
           "type": "string",
           "default": "",
-          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
         },
         {
           "name": "corpus_identifier_string",
           "type": "string",
           "default": "",
-          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
         }                
       ],
@@ -159,16 +159,16 @@
           "name": "query_string",
           "type": "string",
           "default": "",
-          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
         },
         {
           "name": "corpus_identifier_string",
           "type": "string",
           "default": "",
-          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
-        }                
+        }                         
       ],
       "credit_costs": {
         "text_completion": {
@@ -260,16 +260,16 @@
           "name": "query_string",
           "type": "string",
           "default": "",
-          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
         },
         {
           "name": "corpus_identifier_string",
           "type": "string",
           "default": "",
-          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
-        }                
+        }                  
       ],
       "credit_costs": {
         "text_completion": {
@@ -332,16 +332,16 @@
           "name": "query_string",
           "type": "string",
           "default": "",
-          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
         },
         {
           "name": "corpus_identifier_string",
           "type": "string",
           "default": "",
-          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
           "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
-        }                
+        }                              
       ],
       "credit_costs": {
         "embedding": {
