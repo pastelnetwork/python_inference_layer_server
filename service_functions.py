@@ -894,10 +894,6 @@ async def get_supernode_model_menu(supernode_url):
         return None
 
 def is_model_supported(model_menu, desired_model_canonical_string, desired_model_inference_type_string, desired_model_parameters_json):
-    parameter_name_equivalence_mapping = {
-        "max_tokens": "number_of_tokens_to_generate",
-        "num_completions": "number_of_completions_to_generate"
-    }    
     if model_menu:
         desired_parameters = json.loads(desired_model_parameters_json)
         model_names = [model["model_name"] for model in model_menu["models"]]
@@ -908,14 +904,8 @@ def is_model_supported(model_menu, desired_model_canonical_string, desired_model
                 if desired_model_inference_type_string in matched_model["supported_inference_type_strings"]:
                     for desired_param, desired_value in desired_parameters.items():
                         param_found = False
-                        # Check for parameter or its equivalent in the model's parameters
-                        equivalent_params = [desired_param]
-                        if desired_param in parameter_name_equivalence_mapping:
-                            equivalent_params.append(parameter_name_equivalence_mapping[desired_param])
-                        elif desired_param in parameter_name_equivalence_mapping.values():
-                            equivalent_params.extend([k for k, v in parameter_name_equivalence_mapping.items() if v == desired_param])
                         for param in matched_model["model_parameters"]:
-                            if param["name"] in equivalent_params:
+                            if param["name"] == desired_param:
                                 if "type" in param:
                                     if param["type"] == "int" and isinstance(desired_value, int):
                                         param_found = True
