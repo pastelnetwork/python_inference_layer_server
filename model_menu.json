@@ -7,6 +7,8 @@
       "supported_inference_type_strings": [
         "text_completion",
         "embedding",
+        "embedding_document",
+        "embedding_audio",
         "token_level_embedding"
       ],
       "input_fields": [
@@ -28,32 +30,75 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         },
         {
           "name": "grammar_file_string",
           "type": "string",
           "default": "",
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
-        }
+        },
+        {
+          "name": "query_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
+        },
+        {
+          "name": "corpus_identifier_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
+        }                
       ],
       "credit_costs": {
-        "input_tokens": 1.5,
-        "output_tokens": 1.1,
-        "compute_cost": 0.8,
-        "memory_cost": 0.7
+        "text_completion": {
+          "input_tokens": 1.8,
+          "output_tokens": 1.4,
+          "compute_cost": 1.0,
+          "memory_cost": 0.9
+        },
+        "embedding": {
+          "input_tokens": 0.7,
+          "compute_cost": 0.8,
+          "memory_cost": 0.5
+        },
+        "token_level_embedding": {
+          "input_tokens": 0.8,
+          "compute_cost": 0.9,
+          "memory_cost": 0.6
+        },
+        "embedding_document": {
+          "average_tokens_per_sentence": 0.2,
+          "total_sentences": 0.1,
+          "query_string_included": 0.4,
+          "compute_cost": 1.2,
+          "memory_cost": 0.8
+        },
+        "embedding_audio": {
+          "audio_file_length_in_seconds": 0.04,
+          "query_string_included": 0.4,
+          "compute_cost": 1.2,
+          "memory_cost": 1.0
+        }
       }
     },
     {
@@ -63,6 +108,8 @@
       "supported_inference_type_strings": [
         "text_completion",
         "embedding",
+        "embedding_document",
+        "embedding_audio",
         "token_level_embedding"
       ],
       "input_fields": [
@@ -84,32 +131,75 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         },
         {
           "name": "grammar_file_string",
           "type": "string",
           "default": "",
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
-        }
+        },
+        {
+          "name": "query_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
+        },
+        {
+          "name": "corpus_identifier_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
+        }                
       ],
       "credit_costs": {
-        "input_tokens": 1.5,
-        "output_tokens": 1.1,
-        "compute_cost": 0.5,
-        "memory_cost": 0.5
+        "text_completion": {
+          "input_tokens": 1.5,
+          "output_tokens": 1.1,
+          "compute_cost": 0.8,
+          "memory_cost": 0.7
+        },
+        "embedding": {
+          "input_tokens": 0.5,
+          "compute_cost": 0.6,
+          "memory_cost": 0.4
+        },
+        "token_level_embedding": {
+          "input_tokens": 0.6,
+          "compute_cost": 0.7,
+          "memory_cost": 0.5
+        },
+        "embedding_document": {
+          "average_tokens_per_sentence": 0.1,
+          "total_sentences": 0.05,
+          "query_string_included": 0.3,
+          "compute_cost": 0.9,
+          "memory_cost": 0.6
+        },
+        "embedding_audio": {
+          "audio_file_length_in_seconds": 0.02,
+          "query_string_included": 0.3,
+          "compute_cost": 1.0,
+          "memory_cost": 0.8
+        }
       }
     },
     {
@@ -119,6 +209,8 @@
       "supported_inference_type_strings": [
         "text_completion",
         "embedding",
+        "embedding_document",
+        "embedding_audio",
         "token_level_embedding"
       ],
       "input_fields": [
@@ -140,40 +232,85 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         },
         {
           "name": "grammar_file_string",
           "type": "string",
           "default": "",
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
-        }
+        },
+        {
+          "name": "query_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
+        },
+        {
+          "name": "corpus_identifier_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
+        }                
       ],
       "credit_costs": {
-        "input_tokens": 1.5,
-        "output_tokens": 1.1,
-        "compute_cost": 0.8,
-        "memory_cost": 0.8
+        "text_completion": {
+          "input_tokens": 1.6,
+          "output_tokens": 1.2,
+          "compute_cost": 0.9,
+          "memory_cost": 0.8
+        },
+        "embedding": {
+          "input_tokens": 0.6,
+          "compute_cost": 0.7,
+          "memory_cost": 0.5
+        },
+        "token_level_embedding": {
+          "input_tokens": 0.7,
+          "compute_cost": 0.8,
+          "memory_cost": 0.6
+        },
+        "embedding_document": {
+          "average_tokens_per_sentence": 0.15,
+          "total_sentences": 0.08,
+          "query_string_included": 0.35,
+          "compute_cost": 1.0,
+          "memory_cost": 0.7
+        },
+        "embedding_audio": {
+          "audio_file_length_in_seconds": 0.03,
+          "query_string_included": 0.35,
+          "compute_cost": 1.1,
+          "memory_cost": 0.9
+        }
       }
-    },    
+    },
     {
       "model_name": "swiss_army_llama-bge-m3-q8_0",
       "model_url": "https://huggingface.co/vonjack/bge-m3-gguf/resolve/main/bge-m3-q8_0.gguf",
       "description": "BGE M3-Embedding: Multi-Lingual, Multi-Functionality, Multi-Granularity Text Embeddings Through Self-Knowledge Distillation. It can support more than 100 working languages, leading to new state-of-the-art performances on multi-lingual and cross-lingual retrieval tasks. It performs dense retrieval, multi-vector retrieval, and sparse retrieval, providing a unified model foundation for real-world IR applications.",
       "supported_inference_type_strings": [
         "embedding",
+        "embedding_document",
+        "embedding_audio",
         "token_level_embedding"
       ],
       "input_fields": [
@@ -192,17 +329,44 @@
       ],
       "model_parameters": [
         {
-          "name": "embedding_size",
-          "type": "int",
-          "default": 512,
-          "description": "The size of the generated embeddings"
-        }
+          "name": "query_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
+        },
+        {
+          "name": "corpus_identifier_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['embedding', 'embedding_document', 'embedding_audio', 'token_level_embedding']",
+          "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
+        }                
       ],
       "credit_costs": {
-        "input_tokens": 0.8,
-        "output_tokens": 0.0,
-        "compute_cost": 0.1,
-        "memory_cost": 0.1
+        "embedding": {
+          "input_tokens": 0.4,
+          "compute_cost": 0.5,
+          "memory_cost": 0.3
+        },
+        "token_level_embedding": {
+          "input_tokens": 0.5,
+          "compute_cost": 0.6,
+          "memory_cost": 0.4
+        },
+        "embedding_document": {
+          "average_tokens_per_sentence": 0.05,
+          "total_sentences": 0.03,
+          "query_string_included": 0.2,
+          "compute_cost": 0.6,
+          "memory_cost": 0.4
+        },
+        "embedding_audio": {
+          "audio_file_length_in_seconds": 0.01,
+          "query_string_included": 0.2,
+          "compute_cost": 0.6,
+          "memory_cost": 0.5
+        }
       }
     },
     {
