@@ -44,6 +44,7 @@ import database_code as db_code
 from sqlmodel import select, delete, update, func, or_, SQLModel
 from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
+from mutagen import File
 
 encryption_key = None
 magika = Magika()
@@ -373,6 +374,12 @@ def establish_ssh_tunnel():
             logger.error("SSH tunnel error: {}".format(e))
         except Exception as e:
             logger.error("Error establishing SSH tunnel: {}".format(e))
+        
+def get_audio_length(file_path: str) -> float:
+    audio = File(file_path)
+    if audio is None or not hasattr(audio.info, 'length'):
+        raise ValueError("Could not determine the length of the audio file.")
+    return audio.info.length
         
 def convert_uuids_to_strings(data):
     if isinstance(data, dict):
@@ -887,21 +894,28 @@ async def get_supernode_model_menu(supernode_url):
         return None
 
 def is_model_supported(model_menu, desired_model_canonical_string, desired_model_inference_type_string, desired_model_parameters_json):
+    parameter_name_equivalence_mapping = {
+        "max_tokens": "number_of_tokens_to_generate",
+        "num_completions": "number_of_completions_to_generate"
+    }    
     if model_menu:
         desired_parameters = json.loads(desired_model_parameters_json)
-        # Use fuzzy string matching to find the closest matching model name
         model_names = [model["model_name"] for model in model_menu["models"]]
         best_match = process.extractOne(desired_model_canonical_string, model_names)
-        if best_match is not None and best_match[1] >= 95:  # Adjust the threshold as needed
+        if best_match is not None and best_match[1] >= 95:
             matched_model = next(model for model in model_menu["models"] if model["model_name"] == best_match[0])
-            if "supported_inference_type_strings" in matched_model.keys() and "model_parameters" in matched_model.keys():
+            if "supported_inference_type_strings" in matched_model and "model_parameters" in matched_model:
                 if desired_model_inference_type_string in matched_model["supported_inference_type_strings"]:
-                    # Check if all desired parameters are supported
                     for desired_param, desired_value in desired_parameters.items():
                         param_found = False
+                        # Check for parameter or its equivalent in the model's parameters
+                        equivalent_params = [desired_param]
+                        if desired_param in parameter_name_equivalence_mapping:
+                            equivalent_params.append(parameter_name_equivalence_mapping[desired_param])
+                        elif desired_param in parameter_name_equivalence_mapping.values():
+                            equivalent_params.extend([k for k, v in parameter_name_equivalence_mapping.items() if v == desired_param])
                         for param in matched_model["model_parameters"]:
-                            if param["name"] == desired_param:
-                                # Check if the desired parameter value is within the valid range or options
+                            if param["name"] in equivalent_params:
                                 if "type" in param:
                                     if param["type"] == "int" and isinstance(desired_value, int):
                                         param_found = True
@@ -3364,7 +3378,6 @@ def get_tokenizer(model_name: str):
     return model_to_tokenizer_mapping.get(best_match[0], "gpt2")  # Default to "gpt2" if no match found
 
 def count_tokens(model_name: str, input_data: str) -> int:
-    model_name = model_name.replace('swiss_army_llama-', '')
     tokenizer_name = get_tokenizer(model_name)
     logger.info(f"Selected tokenizer {tokenizer_name} for model {model_name}")
     if 'claude' in model_name.lower():
@@ -3389,7 +3402,6 @@ def count_tokens(model_name: str, input_data: str) -> int:
     return len(input_tokens)
 
 def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict) -> float:
-    model_name = model_name.replace('swiss_army_llama-', '')
     # Define the pricing data for each API service and model
     logger.info(f"Evaluating API cost for model: {model_name}")
     pricing_data = {
@@ -3538,43 +3550,109 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
     logger.info(f"Estimated cost: ${estimated_cost:.4f}")
     return estimated_cost
 
-async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dict, model_parameters: Dict, input_data: str) -> float:
+async def convert_document_to_sentences(file_path: str) -> Dict:
+    logger.info(f"Now calling Swiss Army Llama to convert document at {file_path} to sentences.")
+    local_swiss_army_llama_responding = is_swiss_army_llama_responding(local=True)
+    if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
+        remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
+    else:
+        remote_swiss_army_llama_responding = 0
+    if remote_swiss_army_llama_responding and USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
+        port = REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
+    elif local_swiss_army_llama_responding:
+        port = SWISS_ARMY_LLAMA_PORT
+    else:
+        logger.error(f"Neither the local Swiss Army Llama (supposed to be running on port {SWISS_ARMY_LLAMA_PORT}) nor the remote Swiss Army Llama (supposed to be running, if enabled, on mapped port {REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}) is responding!")
+        raise ValueError(status_code=500, detail="Swiss Army Llama is not responding.")
+    url = f"http://localhost:{port}/convert_document_to_sentences/"
+    async with httpx.AsyncClient(timeout=60) as client:
+        with open(file_path, 'rb') as file:
+            files = {'file': file}
+            try:
+                response = await client.post(url, files=files, params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN})
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                logger.error(f"Failed to convert document to sentences: {e}")
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT:
+                    logger.info("Falling back to local Swiss Army Llama.")
+                    return await convert_document_to_sentences(file_path)
+                raise ValueError(status_code=response.status_code if response else 500, detail="Error converting document to sentences")
+            
+async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dict, model_parameters: Dict, input_data: str, input_file_path: str = None) -> float:
     model_name = requested_model_data["model_name"]
-    model_name = model_name.replace('swiss_army_llama-', '')
-    # Calculate the API cost if applicable
-    api_cost = calculate_api_cost(model_name, input_data, model_parameters)
-    if api_cost > 0.0:
-        # If it's an API service-based inference request, convert the API cost to inference credits
-        target_value_per_credit = TARGET_VALUE_PER_CREDIT_IN_USD
-        target_profit_margin = TARGET_PROFIT_MARGIN
-        # Calculate the proposed cost in inference credits based on the API cost
-        proposed_cost_in_credits = api_cost / (target_value_per_credit * (1 - target_profit_margin))
-        final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, round(proposed_cost_in_credits, 1)])
-        logger.info(f"Proposed cost in credits (API-based): {final_proposed_cost_in_credits}")
+    if 'swiss_army_llama-' not in model_name:
+        api_cost = calculate_api_cost(model_name, input_data, model_parameters)
+        if api_cost > 0.0:
+            target_value_per_credit = TARGET_VALUE_PER_CREDIT_IN_USD
+            target_profit_margin = TARGET_PROFIT_MARGIN
+            proposed_cost_in_credits = api_cost / (target_value_per_credit * (1 - target_profit_margin))
+            final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, round(proposed_cost_in_credits, 1)])
+            logger.info(f"Proposed cost in credits (API-based): {final_proposed_cost_in_credits}")
+            return final_proposed_cost_in_credits
+    else:
+        inference_type = model_parameters.get("inference_type", "text_completion")
+        credit_costs = requested_model_data["credit_costs"][inference_type]
+        input_tokens = count_tokens(model_name, input_data) if inference_type != "embedding_document" else 0
+        compute_cost = credit_costs["compute_cost"]
+        memory_cost = credit_costs["memory_cost"]
+        if inference_type == "text_completion":
+            output_token_cost = credit_costs["output_tokens"]
+            number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
+            number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+            estimated_output_tokens = number_of_tokens_to_generate
+            proposed_cost_in_credits = number_of_completions_to_generate * (
+                (input_tokens * credit_costs["input_tokens"]) +
+                (estimated_output_tokens * output_token_cost) +
+                compute_cost
+            ) + memory_cost
+        elif inference_type == "embedding":
+            proposed_cost_in_credits = (
+                (input_tokens * credit_costs["input_tokens"]) +
+                compute_cost +
+                memory_cost
+            )
+        elif inference_type == "token_level_embedding":
+            proposed_cost_in_credits = (
+                (input_tokens * credit_costs["input_tokens"]) +
+                compute_cost +
+                memory_cost
+            )
+        elif inference_type == "embedding_document":
+            if input_file_path:
+                document_stats = await convert_document_to_sentences(input_file_path)
+                sentences = document_stats["individual_sentences"]
+                total_sentences = document_stats["total_number_of_sentences"]
+                concatenated_sentences = " ".join(sentences)
+                total_tokens = count_tokens(model_name, concatenated_sentences)
+                proposed_cost_in_credits = (
+                    (total_tokens * credit_costs["average_tokens_per_sentence"]) +
+                    (total_sentences * credit_costs["total_sentences"]) +
+                    (1 if model_parameters.get("query_string") else 0) * credit_costs["query_string_included"] +
+                    compute_cost +
+                    memory_cost
+                )
+            else:
+                raise ValueError("Input file path is required for embedding_document inference type")
+        elif inference_type == "embedding_audio":
+            # Conservative estimates for sentences and tokens per second of audio
+            average_sentences_per_second = 0.2  # Example value
+            average_tokens_per_second = 3  # Example value
+            audio_length_seconds = get_audio_length(input_file_path)
+            estimated_sentences = audio_length_seconds * average_sentences_per_second
+            estimated_tokens = audio_length_seconds * average_tokens_per_second
+            proposed_cost_in_credits = (
+                (estimated_sentences * credit_costs["total_sentences"]) +
+                (estimated_tokens * credit_costs["average_tokens_per_sentence"]) +
+                (1 if model_parameters.get("query_string") else 0) * credit_costs["query_string_included"] +
+                (audio_length_seconds * credit_costs["audio_file_length_in_seconds"]) +
+                compute_cost +
+                memory_cost
+            )
+        final_proposed_cost_in_credits = round(proposed_cost_in_credits * CREDIT_COST_MULTIPLIER_FACTOR, 1)
+        final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, final_proposed_cost_in_credits])
+        logger.info(f"Proposed cost in credits (local LLM): {final_proposed_cost_in_credits}")
         return final_proposed_cost_in_credits
-    # If it's a local LLM inference request, calculate the cost based on the model's credit costs
-    input_token_cost = requested_model_data["credit_costs"]["input_tokens"]
-    output_token_cost = requested_model_data["credit_costs"]["output_tokens"]
-    compute_cost = requested_model_data["credit_costs"]["compute_cost"]
-    memory_cost = requested_model_data["credit_costs"]["memory_cost"]
-    # Extract relevant information from the model_parameters
-    number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
-    number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-    # Calculate the input data size in tokens using the appropriate tokenizer
-    input_data_tokens = count_tokens(model_name, input_data)
-    logger.info(f"Total input data tokens: {input_data_tokens}")
-    # Estimate the output data size in tokens (assuming output tokens <= number_of_tokens_to_generate)
-    estimated_output_tokens = number_of_tokens_to_generate
-    # Calculate the proposed cost based on the extracted information
-    proposed_cost_in_credits = number_of_completions_to_generate * (
-        (input_data_tokens * input_token_cost) +
-        (estimated_output_tokens * output_token_cost) +
-        compute_cost
-    ) + memory_cost
-    final_proposed_cost_in_credits = round(proposed_cost_in_credits*CREDIT_COST_MULTIPLIER_FACTOR, 1)
-    final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, final_proposed_cost_in_credits])
-    logger.info(f"Proposed cost in credits (local LLM): {final_proposed_cost_in_credits}")
-    return final_proposed_cost_in_credits
 
 async def fetch_current_psl_market_price():
     async def check_prices():
@@ -3653,14 +3731,17 @@ async def check_if_input_text_would_get_rejected_from_api_services(input_text: s
         remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
     else:
         remote_swiss_army_llama_responding = 0
-    if not local_swiss_army_llama_responding and not remote_swiss_army_llama_responding:
-        logger.error("Error! Neither local nor remote Swiss Army Llama is responding.")
-        return inference_request_allowed
-    use_remote = remote_swiss_army_llama_responding and USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE
+    if remote_swiss_army_llama_responding and USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
+        port = REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
+    elif local_swiss_army_llama_responding:
+        port = SWISS_ARMY_LLAMA_PORT
+    else:
+        logger.error(f"Neither the local Swiss Army Llama (supposed to be running on port {SWISS_ARMY_LLAMA_PORT}) nor the remote Swiss Army Llama (supposed to be running, if enabled, on mapped port {REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}) is responding! Unable to check if request is allowed, so just saying request status simply marked as 'ACCEPT'!")
+        return None
     start_time = time.time()
     logger.info("Now checking suitability of requested inference for API services to avoid banning (using Swiss Army Llama with model TinyLlama-1.1B-Chat)...")
     input_prompt = "A user wants to do inference using the following prompt text using the OpenAI API; is the content or nature of the request problematic or offensive in any way that makes it likely that OpenAI will reject the request for safety reasons and potentially ban the API key for submitting it? Respond ONLY with a one word answer-- `REJECT` if the request will cause problems with OpenAI, or `ACCEPT` if it's unlikely to pose a problem. Here is the inference request submitted by the user:\n\n{}".format(input_text)
-    url = "http://localhost:{}/get_text_completions_from_input_prompt/".format(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT if use_remote else SWISS_ARMY_LLAMA_PORT)
+    url = f"http://localhost:{port}/get_text_completions_from_input_prompt/"
     try:
         async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 3)) as client:
             payload = {
@@ -3693,7 +3774,7 @@ async def check_if_input_text_would_get_rejected_from_api_services(input_text: s
             return inference_request_allowed
     except Exception as e:
         logger.error("Failed to execute inference check request with Swiss Army Llama: {}".format(e))
-        if use_remote:
+        if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT:
             logger.info("Falling back to local Swiss Army Llama.")
             return await check_if_input_text_would_get_rejected_from_api_services(input_text)
     return inference_request_allowed
@@ -3738,24 +3819,26 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
                 remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
             else:
                 remote_swiss_army_llama_responding = 0
-            if local_swiss_army_llama_responding or remote_swiss_army_llama_responding:
-                async with httpx.AsyncClient() as client:
-                    port = SWISS_ARMY_LLAMA_PORT if local_swiss_army_llama_responding else REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
-                    params = {"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                    response = await client.get(f"http://localhost:{port}/get_list_of_available_model_names/", params=params)
-                    if response.status_code == 200:
-                        available_models = response.json()["model_names"]
-                        if requested_model not in available_models:
-                            add_model_response = await client.post(f"http://localhost:{port}/add_new_model/", params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "model_url": requested_model_data["model_url"]})
-                            if add_model_response.status_code != 200:
-                                logger.warning(f"Failed to add new model to Swiss Army Llama: {requested_model}")
-                                return False, 0, 0
-                    else:
-                        logger.warning("Failed to retrieve available models from Swiss Army Llama API")
-                        return False, 0, 0
+            if remote_swiss_army_llama_responding and USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
+                port = REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
+            elif local_swiss_army_llama_responding:
+                port = SWISS_ARMY_LLAMA_PORT
             else:
-                logger.error("Error! Neither local nor remote Swiss Army Llama is running.")
-                return False, 0, 0
+                logger.error(f"Neither the local Swiss Army Llama (supposed to be running on port {SWISS_ARMY_LLAMA_PORT}) nor the remote Swiss Army Llama (supposed to be running, if enabled, on mapped port {REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}) is responding!")
+                return False, 0, 0                        
+            async with httpx.AsyncClient() as client:
+                params = {"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                response = await client.get(f"http://localhost:{port}/get_list_of_available_model_names/", params=params)
+                if response.status_code == 200:
+                    available_models = response.json()["model_names"]
+                    if requested_model not in available_models:
+                        add_model_response = await client.post(f"http://localhost:{port}/add_new_model/", params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "model_url": requested_model_data["model_url"]})
+                        if add_model_response.status_code != 200:
+                            logger.warning(f"Failed to add new model to Swiss Army Llama: {requested_model}")
+                            return False, 0, 0
+                else:
+                    logger.warning(f"Failed to retrieve available models from Swiss Army Llama API on port {port}")
+                    return False, 0, 0
         model_parameters_dict = json.loads(model_parameters)
         input_data_binary = base64.b64decode(input_data)
         result = magika.identify_bytes(input_data_binary)
@@ -4420,7 +4503,13 @@ async def submit_inference_request_to_swiss_army_llama(inference_request):
             remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
         else:
             remote_swiss_army_llama_responding = 0
-        port = SWISS_ARMY_LLAMA_PORT if local_swiss_army_llama_responding else REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT if remote_swiss_army_llama_responding else SWISS_ARMY_LLAMA_PORT
+        if remote_swiss_army_llama_responding and USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
+            port = REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
+        elif local_swiss_army_llama_responding:
+            port = SWISS_ARMY_LLAMA_PORT
+        else:
+            logger.error(f"Neither the local Swiss Army Llama (supposed to be running on port {SWISS_ARMY_LLAMA_PORT}) nor the remote Swiss Army Llama (supposed to be running, if enabled, on mapped port {REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}) is responding!")
+            return None, None
         if inference_request.model_inference_type_string == "text_completion":
             payload = {
                 "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),

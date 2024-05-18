@@ -8,6 +8,7 @@ groq
 httpx
 magika
 mistralai
+mutagen
 pandas
 plyvel
 psutil
