@@ -3350,6 +3350,9 @@ def get_tokenizer(model_name: str):
         "groq-gemma": "google/flan-ul2",
         "mistralapi": "mistralai/Mistral-7B-Instruct-v0.2",
         "stability": "openai/clip-vit-large-patch14",
+        "Lexi-Llama-3-8B-Uncensored_Q5_K_M": "gradientai/Llama-3-70B-Instruct-Gradient-1048k",
+        "Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M": "gradientai/Llama-3-70B-Instruct-Gradient-1048k",
+        "Meta-Llama-3-8B-Instruct.Q3_K_S": "gradientai/Llama-3-70B-Instruct-Gradient-1048k",
         "whisper": "openai/whisper-large-v2",
         "clip-interrogator": "openai/clip-vit-large-patch14",
         "videocap-transformer": "ArhanK005/videocap-transformer",
@@ -3584,27 +3587,21 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
         inference_type = model_parameters.get("inference_type", "text_completion")
         credit_costs = requested_model_data["credit_costs"][inference_type]
         input_tokens = count_tokens(model_name, input_data) if inference_type != "embedding_document" else 0
-        compute_cost = credit_costs["compute_cost"]
-        memory_cost = credit_costs["memory_cost"]
+        compute_cost = float(credit_costs["compute_cost"])
+        memory_cost = float(credit_costs["memory_cost"])
         if inference_type == "text_completion":
-            output_token_cost = credit_costs["output_tokens"]
-            number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
-            number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+            output_token_cost = float(credit_costs["output_tokens"])
+            number_of_tokens_to_generate = int(model_parameters.get("number_of_tokens_to_generate", 1000))
+            number_of_completions_to_generate = int(model_parameters.get("number_of_completions_to_generate", 1))
             estimated_output_tokens = number_of_tokens_to_generate
             proposed_cost_in_credits = number_of_completions_to_generate * (
-                (input_tokens * credit_costs["input_tokens"]) +
+                (input_tokens * float(credit_costs["input_tokens"])) +
                 (estimated_output_tokens * output_token_cost) +
                 compute_cost
             ) + memory_cost
-        elif inference_type == "embedding":
+        elif inference_type in ["embedding", "token_level_embedding"]:
             proposed_cost_in_credits = (
-                (input_tokens * credit_costs["input_tokens"]) +
-                compute_cost +
-                memory_cost
-            )
-        elif inference_type == "token_level_embedding":
-            proposed_cost_in_credits = (
-                (input_tokens * credit_costs["input_tokens"]) +
+                (input_tokens * float(credit_costs["input_tokens"])) +
                 compute_cost +
                 memory_cost
             )
@@ -3616,26 +3613,25 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
                 concatenated_sentences = " ".join(sentences)
                 total_tokens = count_tokens(model_name, concatenated_sentences)
                 proposed_cost_in_credits = (
-                    (total_tokens * credit_costs["average_tokens_per_sentence"]) +
-                    (total_sentences * credit_costs["total_sentences"]) +
-                    (1 if model_parameters.get("query_string") else 0) * credit_costs["query_string_included"] +
+                    (total_tokens * float(credit_costs["average_tokens_per_sentence"])) +
+                    (total_sentences * float(credit_costs["total_sentences"])) +
+                    (1 if model_parameters.get("query_string") else 0) * float(credit_costs["query_string_included"]) +
                     compute_cost +
                     memory_cost
                 )
             else:
                 raise ValueError("Input file path is required for embedding_document inference type")
         elif inference_type == "embedding_audio":
-            # Conservative estimates for sentences and tokens per second of audio
-            average_sentences_per_second = 0.2  # Example value
-            average_tokens_per_second = 3  # Example value
+            average_sentences_per_second = 0.2
+            average_tokens_per_second = 3
             audio_length_seconds = get_audio_length(input_file_path)
             estimated_sentences = audio_length_seconds * average_sentences_per_second
             estimated_tokens = audio_length_seconds * average_tokens_per_second
             proposed_cost_in_credits = (
-                (estimated_sentences * credit_costs["total_sentences"]) +
-                (estimated_tokens * credit_costs["average_tokens_per_sentence"]) +
-                (1 if model_parameters.get("query_string") else 0) * credit_costs["query_string_included"] +
-                (audio_length_seconds * credit_costs["audio_file_length_in_seconds"]) +
+                (estimated_sentences * float(credit_costs["total_sentences"])) +
+                (estimated_tokens * float(credit_costs["average_tokens_per_sentence"])) +
+                (1 if model_parameters.get("query_string") else 0) * float(credit_costs["query_string_included"]) +
+                (audio_length_seconds * float(credit_costs["audio_file_length_in_seconds"])) +
                 compute_cost +
                 memory_cost
             )

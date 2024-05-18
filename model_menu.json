@@ -672,14 +672,14 @@
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",        
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",        
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
