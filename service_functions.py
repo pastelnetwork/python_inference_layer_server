@@ -4479,7 +4479,7 @@ async def submit_inference_request_to_claude_api(inference_request):
     else:
         logger.warning(f"Unsupported inference type for Claude3 Haiku: {inference_request.model_inference_type_string}")
         return None, None
-    
+
 async def submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=False):
     logger.info("Now calling Swiss Army Llama with model {}".format(inference_request.requested_model_canonical_string))
     model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
@@ -4579,10 +4579,13 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
                 else:
                     return None, None
         elif inference_request.model_inference_type_string == "embedding_document":
-            # Assume the file content is in the model_input_data_json_b64 field
-            file_content = base64.b64decode(inference_request.model_input_data_json_b64)
+            input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
+            hash_obj = hashlib.sha256()
+            hash_obj.update(input_data_binary)
+            file_hash = hash_obj.hexdigest()
+            file_name = f"{file_hash[:25]}.{magika.identify_bytes(input_data_binary).output.ct_label}"
             files = {
-                'file': ('document', file_content, 'application/octet-stream'),
+                'file': (file_name, input_data_binary, 'application/octet-stream'),
             }
             payload = {
                 "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
@@ -4612,10 +4615,13 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
                 else:
                     return None, None
         elif inference_request.model_inference_type_string == "embedding_audio":
-            # Assume the audio content is in the model_input_data_json_b64 field
-            file_content = base64.b64decode(inference_request.model_input_data_json_b64)
+            input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
+            hash_obj = hashlib.sha256()
+            hash_obj.update(input_data_binary)
+            file_hash = hash_obj.hexdigest()
+            file_name = f"{file_hash[:25]}.wav"  # Assuming the audio file is in WAV format
             files = {
-                'file': ('audio', file_content, 'audio/wav'),
+                'file': (file_name, input_data_binary, 'application/octet-stream'),
             }
             payload = {
                 "compute_embeddings_for_resulting_transcript_document": model_parameters.get("compute_embeddings_for_resulting_transcript_document", True),
