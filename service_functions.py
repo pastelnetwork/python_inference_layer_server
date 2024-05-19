@@ -3348,6 +3348,7 @@ def get_tokenizer(model_name: str):
         "groq-llama3": "gradientai/Llama-3-70B-Instruct-Gradient-1048k",
         "groq-mixtral": "EleutherAI/gpt-neox-20b",
         "groq-gemma": "google/flan-ul2",
+        "bge-m3": "Shitao/bge-m3",
         "mistralapi": "mistralai/Mistral-7B-Instruct-v0.2",
         "stability": "openai/clip-vit-large-patch14",
         "Lexi-Llama-3-8B-Uncensored_Q5_K_M": "gradientai/Llama-3-70B-Instruct-Gradient-1048k",
@@ -3572,7 +3573,7 @@ async def convert_document_to_sentences(file_path: str) -> Dict:
                     return await convert_document_to_sentences(file_path)
                 raise ValueError(status_code=response.status_code if response else 500, detail="Error converting document to sentences")
             
-async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dict, model_parameters: Dict, input_data: str, input_file_path: str = None) -> float:
+async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dict, model_parameters: Dict, model_inference_type_string: str, input_data: str, input_file_path: str = None) -> float:
     model_name = requested_model_data["model_name"]
     if 'swiss_army_llama-' not in model_name:
         api_cost = calculate_api_cost(model_name, input_data, model_parameters)
@@ -3584,12 +3585,11 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
             logger.info(f"Proposed cost in credits (API-based): {final_proposed_cost_in_credits}")
             return final_proposed_cost_in_credits
     else:
-        inference_type = model_parameters.get("inference_type", "text_completion")
-        credit_costs = requested_model_data["credit_costs"][inference_type]
-        input_tokens = count_tokens(model_name, input_data) if inference_type != "embedding_document" else 0
+        credit_costs = requested_model_data["credit_costs"][model_inference_type_string]
+        input_tokens = count_tokens(model_name, input_data) if model_inference_type_string != "embedding_document" else 0
         compute_cost = float(credit_costs["compute_cost"])
         memory_cost = float(credit_costs["memory_cost"])
-        if inference_type == "text_completion":
+        if model_inference_type_string == "text_completion":
             output_token_cost = float(credit_costs["output_tokens"])
             number_of_tokens_to_generate = int(model_parameters.get("number_of_tokens_to_generate", 1000))
             number_of_completions_to_generate = int(model_parameters.get("number_of_completions_to_generate", 1))
@@ -3599,13 +3599,13 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
                 (estimated_output_tokens * output_token_cost) +
                 compute_cost
             ) + memory_cost
-        elif inference_type in ["embedding", "token_level_embedding"]:
+        elif model_inference_type_string in ["embedding", "token_level_embedding"]:
             proposed_cost_in_credits = (
                 (input_tokens * float(credit_costs["input_tokens"])) +
                 compute_cost +
                 memory_cost
             )
-        elif inference_type == "embedding_document":
+        elif model_inference_type_string == "embedding_document":
             if input_file_path:
                 document_stats = await convert_document_to_sentences(input_file_path)
                 sentences = document_stats["individual_sentences"]
@@ -3621,7 +3621,7 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
                 )
             else:
                 raise ValueError("Input file path is required for embedding_document inference type")
-        elif inference_type == "embedding_audio":
+        elif model_inference_type_string == "embedding_audio":
             average_sentences_per_second = 0.2
             average_tokens_per_second = 3
             audio_length_seconds = get_audio_length(input_file_path)
@@ -3837,7 +3837,7 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
                 if not inference_request_allowed:
                     logger.error(f"Cannot proceed with inference request to model {requested_model} because of risk that it will be rejected and lead to banning!")
                     return False, 0, 0
-        proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, input_data)
+        proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, model_inference_type_string, input_data)
         validation_results = await validate_existing_credit_pack_ticket(credit_pack_ticket_pastel_txid)
         if not validation_results["credit_pack_ticket_is_valid"]:
             logger.warning(f"Invalid credit pack ticket: {validation_results['validation_failure_reasons_list']}")
@@ -4479,11 +4479,11 @@ async def submit_inference_request_to_claude_api(inference_request):
     else:
         logger.warning(f"Unsupported inference type for Claude3 Haiku: {inference_request.model_inference_type_string}")
         return None, None
-
-async def submit_inference_request_to_swiss_army_llama(inference_request):
+    
+async def submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=False):
     logger.info("Now calling Swiss Army Llama with model {}".format(inference_request.requested_model_canonical_string))
     model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
-    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*12)) as client:
+    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 12)) as client:
         local_swiss_army_llama_responding = is_swiss_army_llama_responding(local=True)
         if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
             remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
@@ -4523,9 +4523,11 @@ async def submit_inference_request_to_swiss_army_llama(inference_request):
                 return output_text, output_results_file_type_strings
             except Exception as e:
                 logger.error("Failed to execute text completion inference request: {}".format(e))
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT:
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
                     logger.info("Falling back to local Swiss Army Llama.")
-                    return await submit_inference_request_to_swiss_army_llama(inference_request)
+                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
+                else:
+                    return None, None
         elif inference_request.model_inference_type_string == "embedding":
             payload = {
                 "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
@@ -4546,9 +4548,11 @@ async def submit_inference_request_to_swiss_army_llama(inference_request):
                 return output_results, output_results_file_type_strings
             except Exception as e:
                 logger.error("Failed to execute embedding inference request: {}".format(e))
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT:
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
                     logger.info("Falling back to local Swiss Army Llama.")
-                    return await submit_inference_request_to_swiss_army_llama(inference_request)
+                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
+                else:
+                    return None, None
         elif inference_request.model_inference_type_string == "token_level_embedding":
             payload = {
                 "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
@@ -4569,9 +4573,76 @@ async def submit_inference_request_to_swiss_army_llama(inference_request):
                 return output_results, output_results_file_type_strings
             except Exception as e:
                 logger.error("Failed to execute token level embedding inference request: {}".format(e))
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT:
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
                     logger.info("Falling back to local Swiss Army Llama.")
-                    return await submit_inference_request_to_swiss_army_llama(inference_request)
+                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
+                else:
+                    return None, None
+        elif inference_request.model_inference_type_string == "embedding_document":
+            # Assume the file content is in the model_input_data_json_b64 field
+            file_content = base64.b64decode(inference_request.model_input_data_json_b64)
+            files = {
+                'file': ('document', file_content, 'application/octet-stream'),
+            }
+            payload = {
+                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+                "json_format": model_parameters.get("json_format", "records"),
+                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", ""),
+                "send_back_json_or_zip_file": model_parameters.get("send_back_json_or_zip_file", "zip")
+            }
+            try:
+                response = await client.post(
+                    f"http://localhost:{port}/get_all_embedding_vectors_for_document/",
+                    data=payload,
+                    files=files,
+                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                )
+                response.raise_for_status()
+                output_results = response.json()
+                output_results_file_type_strings = {
+                    "output_text": "embedding_document",
+                    "output_files": ["NA"]
+                }
+                return output_results, output_results_file_type_strings
+            except Exception as e:
+                logger.error("Failed to execute embedding document inference request: {}".format(e))
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
+                    logger.info("Falling back to local Swiss Army Llama.")
+                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
+                else:
+                    return None, None
+        elif inference_request.model_inference_type_string == "embedding_audio":
+            # Assume the audio content is in the model_input_data_json_b64 field
+            file_content = base64.b64decode(inference_request.model_input_data_json_b64)
+            files = {
+                'file': ('audio', file_content, 'audio/wav'),
+            }
+            payload = {
+                "compute_embeddings_for_resulting_transcript_document": model_parameters.get("compute_embeddings_for_resulting_transcript_document", True),
+                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
+            }
+            try:
+                response = await client.post(
+                    f"http://localhost:{port}/compute_transcript_with_whisper_from_audio/",
+                    data=payload,
+                    files=files,
+                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                )
+                response.raise_for_status()
+                output_results = response.json()
+                output_results_file_type_strings = {
+                    "output_text": "embedding_audio",
+                    "output_files": ["NA"]
+                }
+                return output_results, output_results_file_type_strings
+            except Exception as e:
+                logger.error("Failed to execute embedding audio inference request: {}".format(e))
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
+                    logger.info("Falling back to local Swiss Army Llama.")
+                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
+                else:
+                    return None, None
         else:
             logger.warning("Unsupported inference type: {}".format(inference_request.model_inference_type_string))
             return None, None
