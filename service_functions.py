@@ -3545,9 +3545,9 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         logger.info(f"Total input data tokens: {input_data_tokens}")
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-        input_cost = model_pricing["input_cost"] * input_data_tokens / 1000
-        output_cost = model_pricing["output_cost"] * number_of_tokens_to_generate / 1000
-        per_call_cost = model_pricing["per_call_cost"] * number_of_completions_to_generate
+        input_cost = float(model_pricing["input_cost"]) * float(input_data_tokens) / 1000.0
+        output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
+        per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
         estimated_cost = input_cost + output_cost + per_call_cost
     logger.info(f"Estimated cost: ${estimated_cost:.4f}")
     return estimated_cost
