@@ -98,6 +98,7 @@ async def main():
         host="0.0.0.0",
         port=UVICORN_PORT,
         loop="uvloop",
+        limit_max_request=50 * 1024 * 1024  # 50 MB
     )
     server = Server(uvicorn_config)
     await server.serve()
