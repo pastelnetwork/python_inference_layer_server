@@ -3544,8 +3544,8 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
     logger.info(f"Estimated cost: ${estimated_cost:.4f}")
     return estimated_cost
 
-async def convert_document_to_sentences(file_path: str) -> Dict:
-    logger.info(f"Now calling Swiss Army Llama to convert document at {file_path} to sentences.")
+async def convert_document_to_sentences(file_content: bytes) -> Dict:
+    logger.info("Now calling Swiss Army Llama to convert document to sentences.")
     local_swiss_army_llama_responding = is_swiss_army_llama_responding(local=True)
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
         remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
@@ -3557,23 +3557,26 @@ async def convert_document_to_sentences(file_path: str) -> Dict:
         port = SWISS_ARMY_LLAMA_PORT
     else:
         logger.error(f"Neither the local Swiss Army Llama (supposed to be running on port {SWISS_ARMY_LLAMA_PORT}) nor the remote Swiss Army Llama (supposed to be running, if enabled, on mapped port {REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}) is responding!")
-        raise ValueError(status_code=500, detail="Swiss Army Llama is not responding.")
+        raise ValueError("Swiss Army Llama is not responding.")
     url = f"http://localhost:{port}/convert_document_to_sentences/"
+    hash_obj = hashlib.sha256()
+    hash_obj.update(file_content)
+    file_hash = hash_obj.hexdigest()
+    file_name = f"{file_hash[:25]}.{magika.identify_bytes(file_content).output.ct_label}"
     async with httpx.AsyncClient(timeout=60) as client:
-        with open(file_path, 'rb') as file:
-            files = {'file': file}
-            try:
-                response = await client.post(url, files=files, params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN})
-                response.raise_for_status()
-                return response.json()
-            except Exception as e:
-                logger.error(f"Failed to convert document to sentences: {e}")
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT:
-                    logger.info("Falling back to local Swiss Army Llama.")
-                    return await convert_document_to_sentences(file_path)
-                raise ValueError(status_code=response.status_code if response else 500, detail="Error converting document to sentences")
+        files = {'file': (file_name, file_content, 'application/octet-stream')}
+        try:
+            response = await client.post(url, files=files, params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN})
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.error(f"Failed to convert document to sentences: {e}")
+            if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT:
+                logger.info("Falling back to local Swiss Army Llama.")
+                return await convert_document_to_sentences(file_content)
+            raise ValueError("Error converting document to sentences")
             
-async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dict, model_parameters: Dict, model_inference_type_string: str, input_data: str, input_file_path: str = None) -> float:
+async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dict, model_parameters: Dict, model_inference_type_string: str, input_data: str) -> float:
     model_name = requested_model_data["model_name"]
     if 'swiss_army_llama-' not in model_name:
         api_cost = calculate_api_cost(model_name, input_data, model_parameters)
@@ -3606,25 +3609,24 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
                 memory_cost
             )
         elif model_inference_type_string == "embedding_document":
-            if input_file_path:
-                document_stats = await convert_document_to_sentences(input_file_path)
-                sentences = document_stats["individual_sentences"]
-                total_sentences = document_stats["total_number_of_sentences"]
-                concatenated_sentences = " ".join(sentences)
-                total_tokens = count_tokens(model_name, concatenated_sentences)
-                proposed_cost_in_credits = (
-                    (total_tokens * float(credit_costs["average_tokens_per_sentence"])) +
-                    (total_sentences * float(credit_costs["total_sentences"])) +
-                    (1 if model_parameters.get("query_string") else 0) * float(credit_costs["query_string_included"]) +
-                    compute_cost +
-                    memory_cost
-                )
-            else:
-                raise ValueError("Input file path is required for embedding_document inference type")
+            input_data_binary = base64.b64decode(input_data)
+            document_stats = await convert_document_to_sentences(input_data_binary)
+            sentences = document_stats["individual_sentences"]
+            total_sentences = document_stats["total_number_of_sentences"]
+            concatenated_sentences = " ".join(sentences)
+            total_tokens = count_tokens(model_name, concatenated_sentences)
+            proposed_cost_in_credits = (
+                (total_tokens * float(credit_costs["average_tokens_per_sentence"])) +
+                (total_sentences * float(credit_costs["total_sentences"])) +
+                (1 if model_parameters.get("query_string") else 0) * float(credit_costs["query_string_included"]) +
+                compute_cost +
+                memory_cost
+            )
         elif model_inference_type_string == "embedding_audio":
+            input_data_binary = base64.b64decode(input_data)
             average_sentences_per_second = 0.2
             average_tokens_per_second = 3
-            audio_length_seconds = get_audio_length(input_file_path)
+            audio_length_seconds = get_audio_length(input_data_binary)
             estimated_sentences = audio_length_seconds * average_sentences_per_second
             estimated_tokens = audio_length_seconds * average_tokens_per_second
             proposed_cost_in_credits = (
