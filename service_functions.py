@@ -259,8 +259,16 @@ def pretty_json_func(data):
         return data  # Return data as is if not a dictionary or string
     
 def log_action_with_payload(action_string, payload_name, json_payload):
-    logger.info(f"Now {action_string} {payload_name} with payload:\n{pretty_json_func(json_payload)}")
-
+    max_payload_length_in_characters = 10000
+    formatted_payload = pretty_json_func(json_payload)
+    if len(formatted_payload) > max_payload_length_in_characters:
+        abbreviated_payload = formatted_payload[:max_payload_length_in_characters] + "..."
+        closing_brackets = "]" * (formatted_payload.count("[") - formatted_payload[:max_payload_length_in_characters].count("["))
+        closing_brackets += "}" * (formatted_payload.count("{") - formatted_payload[:max_payload_length_in_characters].count("{"))
+        abbreviated_payload += closing_brackets
+        formatted_payload = abbreviated_payload
+    logger.info(f"Now {action_string} {payload_name} with payload:\n{formatted_payload}")
+    
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
     with open(os.path.join(directory_with_pastel_conf, "pastel.conf"), 'r') as f:
         lines = f.readlines()
