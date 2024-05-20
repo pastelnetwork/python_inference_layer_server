@@ -4,8 +4,11 @@ from logger_config import logger
 from fastapi import APIRouter, Depends, Query, Request, Body
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.exceptions import HTTPException
+from starlette.background import BackgroundTask
 from json import JSONEncoder
 import json
+import os
+import tempfile
 import uuid
 import traceback
 import pandas as pd
@@ -988,6 +991,16 @@ async def get_inference_model_menu_endpoint(
 ):
     model_menu = await service_functions.get_inference_model_menu()
     return model_menu
+
+
+@router.get("/download/{file_name}")
+async def download_file(file_name: str):
+    file_location = os.path.join(tempfile.gettempdir(), file_name)
+    if file_location in service_functions.file_store and service_functions.file_store[file_location] > datetime.utcnow():
+        return service_functions.FileResponse(file_location, background=BackgroundTask(service_functions.remove_file, file_location))
+    else:
+        service_functions.remove_file(file_location)
+        raise HTTPException(status_code=404, detail="File not found or expired")
 
 
 @router.post("/update_inference_sn_reputation_score")

@@ -9,6 +9,9 @@ from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
 import uvloop
 from uvicorn import Config, Server
 from decouple import Config as DecoupleConfig, RepositoryEnv
@@ -33,6 +36,18 @@ app = fastapi.FastAPI(
     redoc_url="/redoc"
 )
 
+class LimitRequestSizeMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, max_request_size: int):
+        super().__init__(app)
+        self.max_request_size = max_request_size
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        request_size = int(request.headers.get('content-length', 0))
+        if request_size > self.max_request_size:
+            return Response("Request size exceeds the limit", status_code=413)
+        return await call_next(request)
+    
+app.add_middleware(LimitRequestSizeMiddleware, max_request_size=50 * 1024 * 1024)
 app.include_router(router, prefix='', tags=['main'])
 
 # Custom Exception Handling Middleware
@@ -98,7 +113,6 @@ async def main():
         host="0.0.0.0",
         port=UVICORN_PORT,
         loop="uvloop",
-        limit_max_request=50 * 1024 * 1024  # 50 MB
     )
     server = Server(uvicorn_config)
     await server.serve()

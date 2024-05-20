@@ -16,6 +16,7 @@ import re
 import sys
 import traceback
 import html
+import tempfile
 import warnings
 import pytz
 from collections.abc import Iterable
@@ -44,7 +45,7 @@ import database_code as db_code
 from sqlmodel import select, delete, update, func, or_, SQLModel
 from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
-from mutagen import File
+from mutagen import File as MutagenFile
 
 encryption_key = None
 magika = Magika()
@@ -178,8 +179,10 @@ BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS = config.get("BURN_TRANSACTION_MAXIMUM_AGE_
 SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE", default=0.51, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE", default=0.85, cast=float)
 SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK = 1
+UVICORN_PORT = config.get("UVICORN_PORT", default=7123, cast=int)
 COIN = 100000 # patoshis in 1 PSL
 challenge_store = {}
+file_store = {} # In-memory store for files with expiration times
 
 def parse_timestamp(timestamp_str):
     try:
@@ -384,7 +387,7 @@ def establish_ssh_tunnel():
             logger.error("Error establishing SSH tunnel: {}".format(e))
         
 def get_audio_length(file_path: str) -> float:
-    audio = File(file_path)
+    audio = MutagenFile(file_path)
     if audio is None or not hasattr(audio.info, 'length'):
         raise ValueError("Could not determine the length of the audio file.")
     return audio.info.length
@@ -403,6 +406,34 @@ def compute_sha3_256_hexdigest(input_str):
     """Compute the SHA3-256 hash of the input string and return the hexadecimal digest."""
     return hashlib.sha3_256(input_str.encode()).hexdigest()
 
+def remove_file(path: str):
+    if os.path.exists(path):
+        os.remove(path)
+    if path in file_store:
+        del file_store[path]
+
+async def save_file(file_content: bytes, filename: str):
+    file_location = os.path.join(tempfile.gettempdir(), filename)
+    with open(file_location, "wb") as buffer:
+        buffer.write(file_content)
+    file_hash = compute_sha3_256_hexdigest(file_content)
+    file_size = os.path.getsize(file_location) # Calculate file size
+    expire_at = datetime.utcnow() + timedelta(hours=24) # Set expiration time (24 hours)
+    file_store[file_location] = expire_at
+    return file_location, file_hash, file_size
+
+async def upload_and_get_file_metadata(file_content: bytes, file_prefix: str = "document") -> Dict:
+    file_name = f"{file_prefix}_{compute_sha3_256_hexdigest(file_content)[:8]}.{magika.identify_bytes(file_content).output.ct_label}"
+    file_location, file_hash, file_size = await save_file(file_content, file_name)
+    external_ip = get_external_ip_func()
+    file_url = f"http://{external_ip}:{UVICORN_PORT}/download/{file_name}"    
+    return {
+        "file_location": file_location,
+        "file_hash": file_hash,
+        "file_size": file_size,
+        "file_url": file_url
+    }
+    
 async def calculate_xor_distance(pastelid1: str, pastelid2: str) -> int:
     hash1 = compute_sha3_256_hexdigest(pastelid1)
     hash2 = compute_sha3_256_hexdigest(pastelid2)
@@ -3566,15 +3597,21 @@ async def convert_document_to_sentences(file_content: bytes) -> Dict:
     else:
         logger.error(f"Neither the local Swiss Army Llama (supposed to be running on port {SWISS_ARMY_LLAMA_PORT}) nor the remote Swiss Army Llama (supposed to be running, if enabled, on mapped port {REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}) is responding!")
         raise ValueError("Swiss Army Llama is not responding.")
+    # Upload file internally and get metadata
+    metadata = await upload_and_get_file_metadata(file_content, "document")
+    file_url = metadata["file_url"]
+    file_hash = metadata["file_hash"]
+    file_size = metadata["file_size"]
+    # Call Swiss Army Llama endpoint
     url = f"http://localhost:{port}/convert_document_to_sentences/"
-    hash_obj = hashlib.sha256()
-    hash_obj.update(file_content)
-    file_hash = hash_obj.hexdigest()
-    file_name = f"{file_hash[:25]}.{magika.identify_bytes(file_content).output.ct_label}"
     async with httpx.AsyncClient(timeout=60) as client:
-        files = {'file': (file_name, file_content, 'application/octet-stream')}
         try:
-            response = await client.post(url, files=files, params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN})
+            response = await client.post(url, json={
+                "url": file_url,
+                "hash": file_hash,
+                "size": file_size,
+                "token": SWISS_ARMY_LLAMA_SECURITY_TOKEN
+            })
             response.raise_for_status()
             return response.json()
         except Exception as e:
@@ -4590,24 +4627,23 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
                     return None, None
         elif inference_request.model_inference_type_string == "embedding_document":
             input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
-            hash_obj = hashlib.sha256()
-            hash_obj.update(input_data_binary)
-            file_hash = hash_obj.hexdigest()
-            file_name = f"{file_hash[:25]}.{magika.identify_bytes(input_data_binary).output.ct_label}"
-            files = {
-                'file': (file_name, input_data_binary, 'application/octet-stream'),
-            }
+            metadata = await upload_and_get_file_metadata(input_data_binary, "document")
+            file_url = metadata["file_url"]
+            file_hash = metadata["file_hash"]
+            file_size = metadata["file_size"]
             payload = {
                 "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
                 "json_format": model_parameters.get("json_format", "records"),
                 "corpus_identifier_string": model_parameters.get("corpus_identifier_string", ""),
-                "send_back_json_or_zip_file": model_parameters.get("send_back_json_or_zip_file", "zip")
+                "send_back_json_or_zip_file": model_parameters.get("send_back_json_or_zip_file", "zip"),
+                "url": file_url,
+                "hash": file_hash,
+                "size": file_size
             }
             try:
                 response = await client.post(
                     f"http://localhost:{port}/get_all_embedding_vectors_for_document/",
-                    data=payload,
-                    files=files,
+                    json=payload,
                     params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
                 )
                 response.raise_for_status()
@@ -4626,23 +4662,22 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
                     return None, None
         elif inference_request.model_inference_type_string == "embedding_audio":
             input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
-            hash_obj = hashlib.sha256()
-            hash_obj.update(input_data_binary)
-            file_hash = hash_obj.hexdigest()
-            file_name = f"{file_hash[:25]}.wav"  # Assuming the audio file is in WAV format
-            files = {
-                'file': (file_name, input_data_binary, 'application/octet-stream'),
-            }
+            metadata = await upload_and_get_file_metadata(input_data_binary, "audio")
+            file_url = metadata["file_url"]
+            file_hash = metadata["file_hash"]
+            file_size = metadata["file_size"]
             payload = {
                 "compute_embeddings_for_resulting_transcript_document": model_parameters.get("compute_embeddings_for_resulting_transcript_document", True),
                 "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
+                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", ""),
+                "url": file_url,
+                "hash": file_hash,
+                "size": file_size
             }
             try:
                 response = await client.post(
                     f"http://localhost:{port}/compute_transcript_with_whisper_from_audio/",
-                    data=payload,
-                    files=files,
+                    json=payload,
                     params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
                 )
                 response.raise_for_status()
@@ -5677,10 +5712,20 @@ async def validate_inference_request_message_data_func(model_instance: SQLModel)
     validation_errors = await validate_credit_pack_ticket_message_data_func(model_instance)
     return validation_errors
 
-def get_external_ip_func():
-    response = httpx.get("https://ipinfo.io/ip")
-    response.raise_for_status()
-    return response.text.strip()
+def get_external_ip_func() -> str:
+    urls = [
+        "https://ipinfo.io/ip",
+        "https://api.ipify.org",
+        "https://ifconfig.me"
+    ]
+    for url in urls:
+        try:
+            response = httpx.get(url)
+            response.raise_for_status()
+            return response.text.strip()
+        except Exception as e:
+            print(f"Failed to get external IP from {url}: {e}")
+    raise RuntimeError("Unable to get external IP address from all fallback options.")
 
 def safe_highlight_func(text, pattern, replacement):
     try:
