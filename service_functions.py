@@ -402,9 +402,12 @@ def convert_uuids_to_strings(data):
     else:
         return data
 
-def compute_sha3_256_hexdigest(input_str):
+def compute_sha3_256_hexdigest(input_str: str):
     """Compute the SHA3-256 hash of the input string and return the hexadecimal digest."""
-    return hashlib.sha3_256(input_str.encode()).hexdigest()
+    return hashlib.sha3_256(input_str.encode('utf-8')).hexdigest()
+
+def compute_sha3_256_hexdigest_of_file(file_data: bytes):
+    return hashlib.sha3_256(file_data).hexdigest()
 
 def remove_file(path: str):
     if os.path.exists(path):
@@ -416,14 +419,14 @@ async def save_file(file_content: bytes, filename: str):
     file_location = os.path.join(tempfile.gettempdir(), filename)
     with open(file_location, "wb") as buffer:
         buffer.write(file_content)
-    file_hash = compute_sha3_256_hexdigest(file_content)
+    file_hash = compute_sha3_256_hexdigest_of_file(file_content)
     file_size = os.path.getsize(file_location) # Calculate file size
     expire_at = datetime.utcnow() + timedelta(hours=24) # Set expiration time (24 hours)
     file_store[file_location] = expire_at
     return file_location, file_hash, file_size
 
 async def upload_and_get_file_metadata(file_content: bytes, file_prefix: str = "document") -> Dict:
-    file_name = f"{file_prefix}_{compute_sha3_256_hexdigest(file_content)[:8]}.{magika.identify_bytes(file_content).output.ct_label}"
+    file_name = f"{file_prefix}_{compute_sha3_256_hexdigest_of_file(file_content)[:8]}.{magika.identify_bytes(file_content).output.ct_label}"
     file_location, file_hash, file_size = await save_file(file_content, file_name)
     external_ip = get_external_ip_func()
     file_url = f"http://{external_ip}:{UVICORN_PORT}/download/{file_name}"    
@@ -3583,7 +3586,7 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
     logger.info(f"Estimated cost: ${estimated_cost:.4f}")
     return estimated_cost
 
-async def convert_document_to_sentences(file_content: bytes) -> Dict:
+async def convert_document_to_sentences(file_content: bytes, tried_local=False) -> Dict:
     logger.info("Now calling Swiss Army Llama to convert document to sentences.")
     local_swiss_army_llama_responding = is_swiss_army_llama_responding(local=True)
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
@@ -3597,16 +3600,14 @@ async def convert_document_to_sentences(file_content: bytes) -> Dict:
     else:
         logger.error(f"Neither the local Swiss Army Llama (supposed to be running on port {SWISS_ARMY_LLAMA_PORT}) nor the remote Swiss Army Llama (supposed to be running, if enabled, on mapped port {REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}) is responding!")
         raise ValueError("Swiss Army Llama is not responding.")
-    # Upload file internally and get metadata
     metadata = await upload_and_get_file_metadata(file_content, "document")
     file_url = metadata["file_url"]
     file_hash = metadata["file_hash"]
     file_size = metadata["file_size"]
-    # Call Swiss Army Llama endpoint
     url = f"http://localhost:{port}/convert_document_to_sentences/"
     async with httpx.AsyncClient(timeout=60) as client:
         try:
-            response = await client.post(url, json={
+            response = await client.post(url, data={
                 "url": file_url,
                 "hash": file_hash,
                 "size": file_size,
@@ -3616,9 +3617,9 @@ async def convert_document_to_sentences(file_content: bytes) -> Dict:
             return response.json()
         except Exception as e:
             logger.error(f"Failed to convert document to sentences: {e}")
-            if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT:
+            if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not tried_local:
                 logger.info("Falling back to local Swiss Army Llama.")
-                return await convert_document_to_sentences(file_content)
+                return await convert_document_to_sentences(file_content, tried_local=True)
             raise ValueError("Error converting document to sentences")
             
 async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dict, model_parameters: Dict, model_inference_type_string: str, input_data: str) -> float:
