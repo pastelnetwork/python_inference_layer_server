@@ -261,15 +261,19 @@ def pretty_json_func(data):
     else:
         return data  # Return data as is if not a dictionary or string
     
-def log_action_with_payload(action_string, payload_name, json_payload):
+def abbreviated_pretty_json_func(data):
     max_payload_length_in_characters = 10000
-    formatted_payload = pretty_json_func(json_payload)
+    formatted_payload = pretty_json_func(data)
     if len(formatted_payload) > max_payload_length_in_characters:
         abbreviated_payload = formatted_payload[:max_payload_length_in_characters] + "..."
         closing_brackets = "]" * (formatted_payload.count("[") - formatted_payload[:max_payload_length_in_characters].count("["))
         closing_brackets += "}" * (formatted_payload.count("{") - formatted_payload[:max_payload_length_in_characters].count("{"))
         abbreviated_payload += closing_brackets
         formatted_payload = abbreviated_payload
+    return formatted_payload    
+    
+def log_action_with_payload(action_string, payload_name, json_payload):
+    formatted_payload = abbreviated_pretty_json_func(json_payload)
     logger.info(f"Now {action_string} {payload_name} with payload:\n{formatted_payload}")
     
 def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~/.pastel/")):
@@ -2031,7 +2035,7 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain
                     credit_pack_purchase_request = db_code.CreditPackPurchaseRequest(**credit_pack_purchase_request_dict)  # noqa: F841
                     credit_pack_purchase_request_response = db_code.CreditPackPurchaseRequestResponse(**credit_pack_purchase_request_response_dict)  # noqa: F841
                     credit_pack_purchase_request_confirmation = db_code.CreditPackPurchaseRequestConfirmation(**credit_pack_purchase_request_confirmation_dict)  # noqa: F841
-                    logger.info(f"Reconstructed credit pack ticket data:\n Purchase Request: {pretty_json_func(credit_pack_purchase_request_dict)}\nPurchase Request Response: {pretty_json_func(credit_pack_purchase_request_response_dict)}\nPurchase Request Confirmation: {pretty_json_func(credit_pack_purchase_request_confirmation_dict)}")
+                    logger.info(f"Reconstructed credit pack ticket data:\n Purchase Request: {abbreviated_pretty_json_func(credit_pack_purchase_request_dict)}\nPurchase Request Response: {abbreviated_pretty_json_func(credit_pack_purchase_request_response_dict)}\nPurchase Request Confirmation: {abbreviated_pretty_json_func(credit_pack_purchase_request_confirmation_dict)}")
             else:
                 logger.error("Failed to verify that the stored blockchain ticket data can be reconstructed exactly!")
                 storage_validation_error_string = "Failed to verify that the stored blockchain ticket data can be reconstructed exactly! Difference: " + str(set(reconstructed_file_data).symmetric_difference(set(credit_pack_combined_blockchain_ticket_data_json)))
@@ -2946,7 +2950,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         logger.info(f"Validating credit pack ticket with TXID: {credit_pack_ticket_txid}")
         # Retrieve the credit pack ticket data from the blockchain
         credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(credit_pack_ticket_txid)
-        logger.info(f"Credit pack ticket data for credit pack with TXID {credit_pack_ticket_txid}:\n\nTicket Request Response:\n\n {pretty_json_func(credit_pack_purchase_request_response.model_dump())} \n\nTicket Request Confirmation:\n\n {pretty_json_func(credit_pack_purchase_request_confirmation.model_dump())}")
+        logger.info(f"Credit pack ticket data for credit pack with TXID {credit_pack_ticket_txid}:\n\nTicket Request Response:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_response.model_dump())} \n\nTicket Request Confirmation:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_confirmation.model_dump())}")
         validation_results = {
             "credit_pack_ticket_is_valid": True,
             "validation_checks": [],
@@ -3656,6 +3660,9 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
             )
         elif model_inference_type_string == "embedding_document":
             input_data_binary = base64.b64decode(input_data)
+            # Save the binary data to a file for debugging purposes
+            with open("debug_document.pdf", "wb") as file:
+                file.write(input_data_binary)            
             document_stats = await convert_document_to_sentences(input_data_binary)
             sentences = document_stats["individual_sentences"]
             total_sentences = document_stats["total_number_of_sentences"]
@@ -3891,7 +3898,7 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
             logger.warning(f"Invalid credit pack ticket: {validation_results['validation_failure_reasons_list']}")
             return False, 0, 0
         else:
-            logger.info(f"Credit pack ticket with txid {credit_pack_ticket_pastel_txid} passed all validation checks: {pretty_json_func(validation_results['validation_checks'])}")
+            logger.info(f"Credit pack ticket with txid {credit_pack_ticket_pastel_txid} passed all validation checks: {abbreviated_pretty_json_func(validation_results['validation_checks'])}")
         current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_pastel_txid)
         if proposed_cost_in_credits >= current_credit_balance:
             logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits:,}, Available: {current_credit_balance:,}")

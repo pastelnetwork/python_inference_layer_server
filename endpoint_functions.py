@@ -2,7 +2,7 @@ import service_functions
 import database_code as db
 from logger_config import logger
 from fastapi import APIRouter, Depends, Query, Request, Body
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse
 from fastapi.exceptions import HTTPException
 from starlette.background import BackgroundTask
 from json import JSONEncoder
@@ -997,7 +997,7 @@ async def get_inference_model_menu_endpoint(
 async def download_file(file_name: str):
     file_location = os.path.join(tempfile.gettempdir(), file_name)
     if file_location in service_functions.file_store and service_functions.file_store[file_location] > datetime.utcnow():
-        return service_functions.FileResponse(file_location, background=BackgroundTask(service_functions.remove_file, file_location))
+        return FileResponse(file_location, background=BackgroundTask(service_functions.remove_file, file_location))
     else:
         service_functions.remove_file(file_location)
         raise HTTPException(status_code=404, detail="File not found or expired")
