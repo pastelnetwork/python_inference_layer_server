@@ -3660,9 +3660,6 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
             )
         elif model_inference_type_string == "embedding_document":
             input_data_binary = base64.b64decode(input_data)
-            # Save the binary data to a file for debugging purposes
-            with open("debug_document.pdf", "wb") as file:
-                file.write(input_data_binary)            
             document_stats = await convert_document_to_sentences(input_data_binary)
             sentences = document_stats["individual_sentences"]
             total_sentences = document_stats["total_number_of_sentences"]
@@ -4266,7 +4263,7 @@ async def submit_inference_request_to_openai_api(inference_request):
     if inference_request.model_inference_type_string == "text_completion":
         model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-        num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+        num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
         output_results = []
         total_input_tokens = 0
         total_output_tokens = 0
@@ -4281,8 +4278,8 @@ async def submit_inference_request_to_openai_api(inference_request):
                     json={
                         "model": inference_request.requested_model_canonical_string.replace("openai-", ""),
                         "messages": [{"role": "user", "content": input_prompt}],
-                        "max_tokens": model_parameters.get("number_of_tokens_to_generate", 1000),
-                        "temperature": model_parameters.get("temperature", 0.7),
+                        "max_tokens": int(model_parameters.get("number_of_tokens_to_generate", 1000)),
+                        "temperature": float(model_parameters.get("temperature", 0.7)),
                         "n": 1
                     }
                 )
@@ -4350,8 +4347,8 @@ async def submit_inference_request_to_openrouter(inference_request):
                 json={
                     "model": inference_request.requested_model_canonical_string,
                     "messages": messages,
-                    "max_tokens": model_parameters.get("number_of_tokens_to_generate", 1000),
-                    "temperature": model_parameters.get("temperature", 0.7),
+                    "max_tokens": int(model_parameters.get("number_of_tokens_to_generate", 1000)),
+                    "temperature": float(model_parameters.get("temperature", 0.7)),
                 }
             )
             if response.status_code == 200:
@@ -4377,7 +4374,7 @@ async def submit_inference_request_to_mistral_api(inference_request):
     if inference_request.model_inference_type_string == "text_completion":
         model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))        
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-        num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+        num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
         output_results = []
         total_input_tokens = 0
         total_output_tokens = 0
@@ -4386,8 +4383,8 @@ async def submit_inference_request_to_mistral_api(inference_request):
             async_response = client.chat_stream(
                 model=inference_request.requested_model_canonical_string.replace("mistralapi-",""),
                 messages=messages,
-                max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
-                temperature=model_parameters.get("temperature", 0.7),
+                max_tokens=int(model_parameters.get("number_of_tokens_to_generate", 1000)),
+                temperature=float(model_parameters.get("temperature", 0.7)),
             )
             completion_text = ""
             prompt_tokens = 0
@@ -4438,7 +4435,7 @@ async def submit_inference_request_to_groq_api(inference_request):
     if inference_request.model_inference_type_string == "text_completion":
         model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-        num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+        num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
         output_results = []
         total_input_tokens = 0
         total_output_tokens = 0
@@ -4446,8 +4443,8 @@ async def submit_inference_request_to_groq_api(inference_request):
             chat_completion = await client.chat.completions.create(
                 messages=[{"role": "user", "content": input_prompt}],
                 model=inference_request.requested_model_canonical_string.replace("groq-",""),
-                max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
-                temperature=model_parameters.get("temperature", 0.7),
+                max_tokens=int(model_parameters.get("number_of_tokens_to_generate", 1000)),
+                temperature=float(model_parameters.get("temperature", 0.7)),
             )
             output_results.append(chat_completion.choices[0].message.content)
             total_input_tokens += chat_completion.usage.prompt_tokens
@@ -4490,15 +4487,15 @@ async def submit_inference_request_to_claude_api(inference_request):
     if inference_request.model_inference_type_string == "text_completion":
         model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-        num_completions = model_parameters.get("number_of_completions_to_generate", 1)
+        num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
         output_results = []
         total_input_tokens = 0
         total_output_tokens = 0
         for i in range(num_completions):
             async with client.messages.stream(
                 model=claude3_model_id_string,
-                max_tokens=model_parameters.get("number_of_tokens_to_generate", 1000),
-                temperature=model_parameters.get("temperature", 0.7),
+                max_tokens=int(model_parameters.get("number_of_tokens_to_generate", 1000)),
+                temperature=float(model_parameters.get("temperature", 0.7)),
                 messages=[{"role": "user", "content": input_prompt}],
             ) as stream:
                 message = await stream.get_final_message()
