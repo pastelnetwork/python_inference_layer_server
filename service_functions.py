@@ -3068,7 +3068,6 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
     
 async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
     try:
-        # Retrieve credit pack request confirmations associated with the requesting user's PastelID from the database
         async with db_code.Session() as db_session:
             credit_pack_request_confirmations_results = await db_session.exec(
                 select(db_code.CreditPackPurchaseRequestConfirmation)
@@ -3078,7 +3077,6 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
         complete_tickets = []
         for request_confirmation in credit_pack_request_confirmations:
             hash_of_request_fields = request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
-            # Retrieve the corresponding txid using the CreditPackPurchaseRequestResponseTxidMapping table
             async with db_code.Session() as db_session:
                 txid_mapping = await db_session.exec(
                     select(db_code.CreditPackPurchaseRequestResponseTxidMapping)
@@ -3087,16 +3085,23 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                 txid_mapping = txid_mapping.one_or_none()
             if txid_mapping:
                 txid = txid_mapping.pastel_api_credit_pack_ticket_registration_txid
-                # Check if the complete credit pack ticket data exists in the database and is up-to-date
                 async with db_code.Session() as db_session:
                     existing_data_result = await db_session.exec(
                         select(db_code.CreditPackCompleteTicketWithBalance)
                         .where(db_code.CreditPackCompleteTicketWithBalance.credit_pack_ticket_registration_txid == txid)
                     )
                     existing_data = existing_data_result.one_or_none()
-                # Ensure existing_data.datetime_last_updated is timezone-aware
-                if existing_data and existing_data.datetime_last_updated.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc) - timedelta(hours=24):
+                if existing_data:
                     complete_ticket = json.loads(existing_data.complete_credit_pack_data_json)
+                    current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
+                    complete_ticket['credit_pack_current_credit_balance'] = current_credit_balance
+                    complete_ticket['balance_as_of_datetime'] = datetime.now(dt.UTC).isoformat()
+                    complete_ticket_json = json.dumps(complete_ticket)
+                    async with db_code.Session() as db_session:
+                        existing_data.complete_credit_pack_data_json = complete_ticket_json
+                        existing_data.datetime_last_updated = datetime.now(dt.UTC)
+                        db_session.add(existing_data)
+                        await db_session.commit()
                 else:
                     current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
                     _, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
@@ -3111,11 +3116,9 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                             "credit_pack_current_credit_balance": current_credit_balance,
                             "balance_as_of_datetime": datetime.now(dt.UTC).isoformat()
                         }
-                        # Convert the complete ticket data to JSON
                         complete_ticket = convert_uuids_to_strings(complete_ticket)
                         complete_ticket = normalize_data(complete_ticket)
                         complete_ticket_json = json.dumps(complete_ticket)
-                        # Insert or update the complete ticket data in the database
                         async with db_code.Session() as db_session:
                             if existing_data:
                                 existing_data.complete_credit_pack_data_json = complete_ticket_json
@@ -3135,6 +3138,7 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
         logger.error(f"Error retrieving credit pack tickets for PastelID {pastelid}: {str(e)}")
         traceback.print_exc()
         raise
+
         
 #________________________________________________________________________________________________________________            
                 
