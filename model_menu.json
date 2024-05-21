@@ -370,114 +370,22 @@
       }
     },
     {
-      "model_name": "openai-gpt-4-0125-preview",
+      "model_name": "openai-gpt-4o",
       "model_url": "",
-      "description": "OpenAI's GPT-4 model with a preview API. Capable of handling more complex tasks and instructions compared to GPT-3.5.",
+      "description": "GPT-4o is OpenAI's most advanced multimodal model that’s faster and cheaper than GPT-4 Turbo with stronger vision capabilities. The model has 128K context and an October 2023 knowledge cutoff.",
       "supported_inference_type_strings": [
-        "text_completion"
+        "text_completion",
+        "image_completion"
       ],
       "input_fields": [
         {
           "name": "input_prompt",
           "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "description": "The maximum number of tokens to generate"
+          "optional": true
         },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openai-gpt-4-turbo-preview",
-      "model_url": "",
-      "description": "OpenAI's GPT-4 model with a turbo preview API. Capable of generating high-quality text at a faster speed compared to the standard GPT-4 preview model.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openai-gpt-4-vision-preview",
-      "model_url": "",
-      "description": "OpenAI's GPT-4 model with vision capabilities. Capable of analyzing and generating responses based on image inputs.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
         {
           "name": "input_image",
           "file_type": "image",
-          "optional": false
-        },
-        {
-          "name": "input_prompt",
-          "file_type": "text",
           "optional": true
         }
       ],
@@ -486,6 +394,11 @@
           "name": "generated_text",
           "file_type": "text",
           "optional": false
+        },
+        {
+          "name": "generated_image",
+          "file_type": "image",
+          "optional": false
         }
       ],
       "model_parameters": [
@@ -493,32 +406,103 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
       "credit_costs": {
-        "api_based_pricing": 1
+        "api_based_pricing": {
+          "text": 5.00,
+          "image": 15.00
+        }
+      }
+    },
+    {
+      "model_name": "openai-gpt-4-turbo",
+      "model_url": "",
+      "description": "GPT-4 Turbo is offered at 128K context with an April 2023 knowledge cutoff and basic support for vision.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "image_completion"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": true
+        },
+        {
+          "name": "input_image",
+          "file_type": "image",
+          "optional": true
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        },
+        {
+          "name": "generated_image",
+          "file_type": "image",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "image_completion"
+          ]
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "image_completion"
+          ]
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "image_completion"
+          ]
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": {
+          "text": 10.00,
+          "image": 30.00
+        }
       }
     },
     {
       "model_name": "openai-gpt-3.5-turbo-0125",
       "model_url": "",
-      "description": "OpenAI's GPT-3.5 Turbo model with a specific version (0125). Provides a good balance between performance and cost-effectiveness.",
+      "description": "GPT-3.5 Turbo is our fast and inexpensive model for simpler tasks. gpt-3.5-turbo-0125 is the flagship model of this family, supports a 16K context window and is optimized for dialog.",
       "supported_inference_type_strings": [
         "text_completion"
       ],
@@ -541,26 +525,68 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The temperature for sampling"
         },
         {
           "name": "number_of_completions_to_generate",
           "type": "int",
           "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
       "credit_costs": {
-        "api_based_pricing": 1
+        "api_based_pricing": 0.50
+      }
+    },
+    {
+      "model_name": "openai-gpt-3.5-turbo-instruct",
+      "model_url": "",
+      "description": "GPT-3.5 Turbo is OpenAI's fast and inexpensive model for simpler tasks. gpt-3.5-turbo-instruct is an Instruct model and only supports a 4K context window.",
+      "supported_inference_type_strings": [
+        "text_completion"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "description": "The temperature for sampling"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 0.50
       }
     },
     {
