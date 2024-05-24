@@ -3656,7 +3656,7 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
                 (estimated_output_tokens * output_token_cost) +
                 compute_cost
             ) + memory_cost
-        elif model_inference_type_string in ["embedding", "token_level_embedding"]:
+        elif model_inference_type_string in ["embedding"]:
             proposed_cost_in_credits = (
                 (input_tokens * float(credit_costs["input_tokens"])) +
                 compute_cost +
@@ -4604,31 +4604,6 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
                 return output_results, output_results_file_type_strings
             except Exception as e:
                 logger.error("Failed to execute embedding inference request: {}".format(e))
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
-                    logger.info("Falling back to local Swiss Army Llama.")
-                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
-                else:
-                    return None, None
-        elif inference_request.model_inference_type_string == "token_level_embedding":
-            payload = {
-                "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", "")
-            }
-            try:
-                response = await client.post(
-                    f"http://localhost:{port}/get_token_level_embeddings_matrix_and_combined_feature_vector_for_string/",
-                    json=payload,
-                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN, "send_back_json_or_zip_file": "json"}
-                )
-                response.raise_for_status()
-                output_results = response.json()
-                output_results_file_type_strings = {
-                    "output_text": "token_level_embedding",
-                    "output_files": ["NA"]
-                }
-                return output_results, output_results_file_type_strings
-            except Exception as e:
-                logger.error("Failed to execute token level embedding inference request: {}".format(e))
                 if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
                     logger.info("Falling back to local Swiss Army Llama.")
                     return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)

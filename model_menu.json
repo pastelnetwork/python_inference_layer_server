@@ -8,8 +8,7 @@
         "text_completion",
         "embedding",
         "embedding_document",
-        "embedding_audio",
-        "token_level_embedding"
+        "embedding_audio"
       ],
       "input_fields": [
         {
@@ -81,11 +80,6 @@
           "compute_cost": 0.8,
           "memory_cost": 0.5
         },
-        "token_level_embedding": {
-          "input_tokens": 0.8,
-          "compute_cost": 0.9,
-          "memory_cost": 0.6
-        },
         "embedding_document": {
           "average_tokens_per_sentence": 0.2,
           "total_sentences": 0.1,
@@ -109,8 +103,7 @@
         "text_completion",
         "embedding",
         "embedding_document",
-        "embedding_audio",
-        "token_level_embedding"
+        "embedding_audio"
       ],
       "input_fields": [
         {
@@ -182,11 +175,6 @@
           "compute_cost": 0.6,
           "memory_cost": 0.4
         },
-        "token_level_embedding": {
-          "input_tokens": 0.6,
-          "compute_cost": 0.7,
-          "memory_cost": 0.5
-        },
         "embedding_document": {
           "average_tokens_per_sentence": 0.1,
           "total_sentences": 0.05,
@@ -210,8 +198,7 @@
         "text_completion",
         "embedding",
         "embedding_document",
-        "embedding_audio",
-        "token_level_embedding"
+        "embedding_audio"
       ],
       "input_fields": [
         {
@@ -283,11 +270,6 @@
           "compute_cost": 0.7,
           "memory_cost": 0.5
         },
-        "token_level_embedding": {
-          "input_tokens": 0.7,
-          "compute_cost": 0.8,
-          "memory_cost": 0.6
-        },
         "embedding_document": {
           "average_tokens_per_sentence": 0.15,
           "total_sentences": 0.08,
@@ -310,8 +292,7 @@
       "supported_inference_type_strings": [
         "embedding",
         "embedding_document",
-        "embedding_audio",
-        "token_level_embedding"
+        "embedding_audio"
       ],
       "input_fields": [
         {
@@ -348,11 +329,6 @@
           "input_tokens": 0.4,
           "compute_cost": 0.5,
           "memory_cost": 0.3
-        },
-        "token_level_embedding": {
-          "input_tokens": 0.5,
-          "compute_cost": 0.6,
-          "memory_cost": 0.4
         },
         "embedding_document": {
           "average_tokens_per_sentence": 0.05,
