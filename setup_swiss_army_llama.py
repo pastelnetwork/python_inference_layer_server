@@ -185,6 +185,7 @@ def setup_swiss_army_llama(security_token):
         python_executable = setup_virtual_environment(swiss_army_llama_path)
     else:
         python_executable = os.path.join(venv_path, 'bin', 'python')
+        run_command(['{} install --upgrade -r {}/requirements.txt'.format(pip_executable, swiss_army_llama_path)], check=True)
     if not is_rust_installed():
         logger.info("Rust is not installed. Installing Rust.")
         run_command("curl https://sh.rustup.rs -sSf | sh -s -- -y", check=True)
