@@ -4743,6 +4743,64 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
                     return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
                 else:
                     return None, None
+        elif inference_request.model_inference_type_string == "semantic_search":
+            payload = {
+                "query_text": model_parameters.get("query_text", ""),
+                "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
+                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+                "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd_first_four"),
+                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
+            }
+            try:
+                response = await client.post(
+                    f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
+                    json=payload,
+                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                )
+                response.raise_for_status()
+                output_results = response.json()
+                output_results_file_type_strings = {
+                    "output_text": "semantic_search",
+                    "output_files": ["NA"]
+                }
+                return output_results, output_results_file_type_strings
+            except Exception as e:
+                logger.error("Failed to execute semantic search request: {}".format(e))
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
+                    logger.info("Falling back to local Swiss Army Llama.")
+                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
+                else:
+                    return None, None
+        elif inference_request.model_inference_type_string == "advanced_semantic_search":
+            payload = {
+                "query_text": model_parameters.get("query_text", ""),
+                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+                "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd"),
+                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "string"),
+                "similarity_filter_percentage": model_parameters.get("similarity_filter_percentage", 0.01),
+                "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 0),
+                "result_sorting_metric": model_parameters.get("result_sorting_metric", "hoeffding_d")
+            }
+            try:
+                response = await client.post(
+                    f"http://localhost:{port}/advanced_search_stored_embeddings_with_query_string_for_semantic_similarity/",
+                    json=payload,
+                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                )
+                response.raise_for_status()
+                output_results = response.json()
+                output_results_file_type_strings = {
+                    "output_text": "advanced_semantic_search",
+                    "output_files": ["NA"]
+                }
+                return output_results, output_results_file_type_strings
+            except Exception as e:
+                logger.error("Failed to execute advanced semantic search request: {}".format(e))
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
+                    logger.info("Falling back to local Swiss Army Llama.")
+                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
+                else:
+                    return None, None
         else:
             logger.warning("Unsupported inference type: {}".format(inference_request.model_inference_type_string))
             return None, None
