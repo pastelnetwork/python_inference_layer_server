@@ -4536,271 +4536,270 @@ async def submit_inference_request_to_claude_api(inference_request):
         logger.warning(f"Unsupported inference type for Claude3 Haiku: {inference_request.model_inference_type_string}")
         return None, None
 
+# Swiss Army Llama related functions:
+
+def determine_swiss_army_llama_port():
+    local_swiss_army_llama_responding = is_swiss_army_llama_responding(local=True)
+    if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
+        remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
+    else:
+        remote_swiss_army_llama_responding = 0
+    
+    if remote_swiss_army_llama_responding and USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
+        return REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
+    elif local_swiss_army_llama_responding:
+        return SWISS_ARMY_LLAMA_PORT
+    return None
+
+async def handle_swiss_army_llama_text_completion(client, inference_request, model_parameters, port, is_fallback):
+    payload = {
+        "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
+        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+        "temperature": model_parameters.get("temperature", 0.7),
+        "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 1000),
+        "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1),
+        "grammar_file_string": model_parameters.get("grammar_file_string", ""),
+    }
+    try:
+        response = await client.post(
+            f"http://localhost:{port}/get_text_completions_from_input_prompt/",
+            json=payload,
+            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+        )
+        response.raise_for_status()
+        output_results = response.json()
+        output_text = output_results[0]["generated_text"]
+        result = magika.identify_bytes(output_text.encode("utf-8"))
+        detected_data_type = result.output.ct_label
+        output_results_file_type_strings = {
+            "output_text": detected_data_type,
+            "output_files": ["NA"]
+        }
+        return output_text, output_results_file_type_strings
+    except Exception as e:
+        return await handle_exception(e, client, inference_request, port, is_fallback, handle_text_completion)
+
+async def handle_swiss_army_llama_embedding(client, inference_request, model_parameters, port, is_fallback):
+    payload = {
+        "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
+        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", "")
+    }
+    try:
+        response = await client.post(
+            f"http://localhost:{port}/get_embedding_vector_for_string/",
+            json=payload,
+            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+        )
+        response.raise_for_status()
+        output_results = response.json()
+        output_results_file_type_strings = {
+            "output_text": "embedding",
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings
+    except Exception as e:
+        return await handle_exception(e, client, inference_request, port, is_fallback, handle_embedding)
+
+async def handle_swiss_army_llama_embedding_document(client, inference_request, model_parameters, port, is_fallback):
+    input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
+    metadata = await upload_and_get_file_metadata(input_data_binary, "document")
+    file_url = metadata["file_url"]
+    file_hash = metadata["file_hash"]
+    file_size = metadata["file_size"]
+    payload = {
+        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+        "json_format": model_parameters.get("json_format", "records"),
+        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", ""),
+        "send_back_json_or_zip_file": model_parameters.get("send_back_json_or_zip_file", "zip"),
+        "url": file_url,
+        "hash": file_hash,
+        "size": file_size
+    }
+    try:
+        response = await client.post(
+            f"http://localhost:{port}/get_all_embedding_vectors_for_document/",
+            json=payload,
+            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+        )
+        response.raise_for_status()
+        output_results = response.json()
+        output_results_file_type_strings = {
+            "output_text": "embedding_document",
+            "output_files": ["NA"]
+        }
+        query_text = model_parameters.get("query_text", None)
+        if query_text:
+            search_payload = {
+                "query_text": query_text,
+                "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
+                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
+            }
+            search_response = await client.post(
+                f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
+                json=search_payload,
+                params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+            )
+            search_response.raise_for_status()
+            search_results = search_response.json()
+            output_results["search_results"] = search_results
+        return output_results, output_results_file_type_strings
+    except Exception as e:
+        return await handle_exception(e, client, inference_request, port, is_fallback, handle_embedding_document)
+
+async def handle_swiss_army_llama_embedding_audio(client, inference_request, model_parameters, port, is_fallback):
+    input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
+    metadata = await upload_and_get_file_metadata(input_data_binary, "audio")
+    file_url = metadata["file_url"]
+    file_hash = metadata["file_hash"]
+    file_size = metadata["file_size"]
+    payload = {
+        "compute_embeddings_for_resulting_transcript_document": model_parameters.get("compute_embeddings_for_resulting_transcript_document", True),
+        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", ""),
+        "url": file_url,
+        "hash": file_hash,
+        "size": file_size
+    }
+    try:
+        response = await client.post(
+            f"http://localhost:{port}/compute_transcript_with_whisper_from_audio/",
+            json=payload,
+            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+        )
+        response.raise_for_status()
+        output_results = response.json()
+        output_results_file_type_strings = {
+            "output_text": "embedding_audio",
+            "output_files": ["NA"]
+        }
+        query_text = model_parameters.get("query_text", None)
+        if query_text:
+            search_payload = {
+                "query_text": query_text,
+                "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
+                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
+            }
+            search_response = await client.post(
+                f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
+                json=search_payload,
+                params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+            )
+            search_response.raise_for_status()
+            search_results = search_response.json()
+            output_results["search_results"] = search_results
+        return output_results, output_results_file_type_strings
+    except Exception as e:
+        return await handle_exception(e, client, inference_request, port, is_fallback, handle_embedding_audio)
+
+async def handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback):
+    input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
+    payload = {
+        "question": model_parameters.get("question", "What is happening in this image?"),
+        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+        "temperature": model_parameters.get("temperature", 0.7),
+        "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 256),
+        "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1)
+    }
+    files = {"image": ("image.png", input_data_binary, "image/png")}
+    try:
+        response = await client.post(
+            f"http://localhost:{port}/ask_question_about_image/",
+            data=payload,
+            files=files,
+            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+        )
+        response.raise_for_status()
+        output_results = response.json()
+        output_results_file_type_strings = {
+            "output_text": "ask_question_about_image",
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings
+    except Exception as e:
+        return await handle_exception(e, client, inference_request, port, is_fallback, handle_image_question)
+
+async def handle_swiss_army_llama_semantic_search(client, inference_request, model_parameters, port, is_fallback):
+    payload = {
+        "query_text": model_parameters.get("query_text", ""),
+        "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
+        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+        "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd_first_four"),
+        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
+    }
+    try:
+        response = await client.post(
+            f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
+            json=payload,
+            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+        )
+        response.raise_for_status()
+        output_results = response.json()
+        output_results_file_type_strings = {
+            "output_text": "semantic_search",
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings
+    except Exception as e:
+        return await handle_exception(e, client, inference_request, port, is_fallback, handle_semantic_search)
+
+async def handle_swiss_army_llama_advanced_semantic_search(client, inference_request, model_parameters, port, is_fallback):
+    payload = {
+        "query_text": model_parameters.get("query_text", ""),
+        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+        "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd"),
+        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "string"),
+        "similarity_filter_percentage": model_parameters.get("similarity_filter_percentage", 0.01),
+        "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 0),
+        "result_sorting_metric": model_parameters.get("result_sorting_metric", "hoeffding_d")
+    }
+    try:
+        response = await client.post(
+            f"http://localhost:{port}/advanced_search_stored_embeddings_with_query_string_for_semantic_similarity/",
+            json=payload,
+            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+        )
+        response.raise_for_status()
+        output_results = response.json()
+        output_results_file_type_strings = {
+            "output_text": "advanced_semantic_search",
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings
+    except Exception as e:
+        return await handle_exception(e, client, inference_request, port, is_fallback, handle_advanced_semantic_search)
+
+async def handle_swiss_army_llama_exception(e, client, inference_request, port, is_fallback, handler_function):
+    logger.error("Failed to execute inference request: {}".format(e))
+    if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
+        logger.info("Falling back to local Swiss Army Llama.")
+        return await handler_function(client, inference_request, model_parameters, SWISS_ARMY_LLAMA_PORT, True)
+    else:
+        return None, None
+    
 async def submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=False):
     logger.info("Now calling Swiss Army Llama with model {}".format(inference_request.requested_model_canonical_string))
     model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+    port = determine_swiss_army_llama_port()
+    if not port:
+        logger.error(f"Neither the local nor the remote Swiss Army Llama is responding!")
+        return None, None
     async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 12)) as client:
-        local_swiss_army_llama_responding = is_swiss_army_llama_responding(local=True)
-        if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
-            remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
-        else:
-            remote_swiss_army_llama_responding = 0
-        if remote_swiss_army_llama_responding and USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
-            port = REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
-        elif local_swiss_army_llama_responding:
-            port = SWISS_ARMY_LLAMA_PORT
-        else:
-            logger.error(f"Neither the local Swiss Army Llama (supposed to be running on port {SWISS_ARMY_LLAMA_PORT}) nor the remote Swiss Army Llama (supposed to be running, if enabled, on mapped port {REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}) is responding!")
-            return None, None
         if inference_request.model_inference_type_string == "text_completion":
-            payload = {
-                "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-                "temperature": model_parameters.get("temperature", 0.7),
-                "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 1000),
-                "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1),
-                "grammar_file_string": model_parameters.get("grammar_file_string", ""),
-            }
-            try:
-                response = await client.post(
-                    f"http://localhost:{port}/get_text_completions_from_input_prompt/",
-                    json=payload,
-                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                )
-                response.raise_for_status()
-                output_results = response.json()
-                output_text = output_results[0]["generated_text"]
-                result = magika.identify_bytes(output_text.encode("utf-8"))
-                detected_data_type = result.output.ct_label
-                output_results_file_type_strings = {
-                    "output_text": detected_data_type,
-                    "output_files": ["NA"]
-                }
-                return output_text, output_results_file_type_strings
-            except Exception as e:
-                logger.error("Failed to execute text completion inference request: {}".format(e))
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
-                    logger.info("Falling back to local Swiss Army Llama.")
-                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
-                else:
-                    return None, None
+            return await handle_swiss_army_llama_text_completion(client, inference_request, model_parameters, port, is_fallback)
         elif inference_request.model_inference_type_string == "embedding":
-            payload = {
-                "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", "")
-            }
-            try:
-                response = await client.post(
-                    f"http://localhost:{port}/get_embedding_vector_for_string/",
-                    json=payload,
-                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                )
-                response.raise_for_status()
-                output_results = response.json()
-                output_results_file_type_strings = {
-                    "output_text": "embedding",
-                    "output_files": ["NA"]
-                }
-                return output_results, output_results_file_type_strings
-            except Exception as e:
-                logger.error("Failed to execute embedding inference request: {}".format(e))
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
-                    logger.info("Falling back to local Swiss Army Llama.")
-                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
-                else:
-                    return None, None
+            return await handle_swiss_army_llama_embedding(client, inference_request, model_parameters, port, is_fallback)
         elif inference_request.model_inference_type_string == "embedding_document":
-            input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
-            metadata = await upload_and_get_file_metadata(input_data_binary, "document")
-            file_url = metadata["file_url"]
-            file_hash = metadata["file_hash"]
-            file_size = metadata["file_size"]
-            payload = {
-                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-                "json_format": model_parameters.get("json_format", "records"),
-                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", ""),
-                "send_back_json_or_zip_file": model_parameters.get("send_back_json_or_zip_file", "zip"),
-                "url": file_url,
-                "hash": file_hash,
-                "size": file_size
-            }
-            try:
-                response = await client.post(
-                    f"http://localhost:{port}/get_all_embedding_vectors_for_document/",
-                    json=payload,
-                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                )
-                response.raise_for_status()
-                output_results = response.json()
-                output_results_file_type_strings = {
-                    "output_text": "embedding_document",
-                    "output_files": ["NA"]
-                }
-                # After getting the embeddings, perform the semantic search query if specified
-                query_text = model_parameters.get("query_text", None)
-                if query_text:
-                    search_payload = {
-                        "query_text": query_text,
-                        "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
-                        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-                        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
-                    }
-                    search_response = await client.post(
-                        f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
-                        json=search_payload,
-                        params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                    )
-                    search_response.raise_for_status()
-                    search_results = search_response.json()
-                    output_results["search_results"] = search_results
-                return output_results, output_results_file_type_strings
-            except Exception as e:
-                logger.error("Failed to execute embedding document inference request: {}".format(e))
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
-                    logger.info("Falling back to local Swiss Army Llama.")
-                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
-                else:
-                    return None, None
+            return await handle_swiss_army_llama_embedding_document(client, inference_request, model_parameters, port, is_fallback)
         elif inference_request.model_inference_type_string == "embedding_audio":
-            input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
-            metadata = await upload_and_get_file_metadata(input_data_binary, "audio")
-            file_url = metadata["file_url"]
-            file_hash = metadata["file_hash"]
-            file_size = metadata["file_size"]
-            payload = {
-                "compute_embeddings_for_resulting_transcript_document": model_parameters.get("compute_embeddings_for_resulting_transcript_document", True),
-                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", ""),
-                "url": file_url,
-                "hash": file_hash,
-                "size": file_size
-            }
-            try:
-                response = await client.post(
-                    f"http://localhost:{port}/compute_transcript_with_whisper_from_audio/",
-                    json=payload,
-                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                )
-                response.raise_for_status()
-                output_results = response.json()
-                output_results_file_type_strings = {
-                    "output_text": "embedding_audio",
-                    "output_files": ["NA"]
-                }
-                # After getting the transcript, perform the query if specified
-                query_text = model_parameters.get("query_text", None)
-                if query_text:
-                    search_payload = {
-                        "query_text": query_text,
-                        "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
-                        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-                        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
-                    }
-                    search_response = await client.post(
-                        f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
-                        json=search_payload,
-                        params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                    )
-                    search_response.raise_for_status()
-                    search_results = search_response.json()
-                    output_results["search_results"] = search_results
-                return output_results, output_results_file_type_strings
-            except Exception as e:
-                logger.error("Failed to execute embedding audio inference request: {}".format(e))
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
-                    logger.info("Falling back to local Swiss Army Llama.")
-                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
-                else:
-                    return None, None
+            return await handle_swiss_army_llama_embedding_audio(client, inference_request, model_parameters, port, is_fallback)
         elif inference_request.model_inference_type_string == "ask_question_about_image":
-            input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
-            payload = {
-                "question": model_parameters.get("question", "What is happening in this image?"),
-                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-                "temperature": model_parameters.get("temperature", 0.7),
-                "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 256),
-                "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1)
-            }
-            files = {"image": ("image.png", input_data_binary, "image/png")}
-            try:
-                response = await client.post(
-                    f"http://localhost:{port}/ask_question_about_image/",
-                    data=payload,
-                    files=files,
-                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                )
-                response.raise_for_status()
-                output_results = response.json()
-                output_results_file_type_strings = {
-                    "output_text": "ask_question_about_image",
-                    "output_files": ["NA"]
-                }
-                return output_results, output_results_file_type_strings
-            except Exception as e:
-                logger.error("Failed to execute ask question about image inference request: {}".format(e))
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
-                    logger.info("Falling back to local Swiss Army Llama.")
-                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
-                else:
-                    return None, None
+            return await handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback)
         elif inference_request.model_inference_type_string == "semantic_search":
-            payload = {
-                "query_text": model_parameters.get("query_text", ""),
-                "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
-                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-                "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd_first_four"),
-                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
-            }
-            try:
-                response = await client.post(
-                    f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
-                    json=payload,
-                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                )
-                response.raise_for_status()
-                output_results = response.json()
-                output_results_file_type_strings = {
-                    "output_text": "semantic_search",
-                    "output_files": ["NA"]
-                }
-                return output_results, output_results_file_type_strings
-            except Exception as e:
-                logger.error("Failed to execute semantic search request: {}".format(e))
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
-                    logger.info("Falling back to local Swiss Army Llama.")
-                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
-                else:
-                    return None, None
+            return await handle_swiss_army_llama_semantic_search(client, inference_request, model_parameters, port, is_fallback)
         elif inference_request.model_inference_type_string == "advanced_semantic_search":
-            payload = {
-                "query_text": model_parameters.get("query_text", ""),
-                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-                "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd"),
-                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "string"),
-                "similarity_filter_percentage": model_parameters.get("similarity_filter_percentage", 0.01),
-                "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 0),
-                "result_sorting_metric": model_parameters.get("result_sorting_metric", "hoeffding_d")
-            }
-            try:
-                response = await client.post(
-                    f"http://localhost:{port}/advanced_search_stored_embeddings_with_query_string_for_semantic_similarity/",
-                    json=payload,
-                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                )
-                response.raise_for_status()
-                output_results = response.json()
-                output_results_file_type_strings = {
-                    "output_text": "advanced_semantic_search",
-                    "output_files": ["NA"]
-                }
-                return output_results, output_results_file_type_strings
-            except Exception as e:
-                logger.error("Failed to execute advanced semantic search request: {}".format(e))
-                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
-                    logger.info("Falling back to local Swiss Army Llama.")
-                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
-                else:
-                    return None, None
+            return await handle_swiss_army_llama_advanced_semantic_search(client, inference_request, model_parameters, port, is_fallback)
         else:
             logger.warning("Unsupported inference type: {}".format(inference_request.model_inference_type_string))
             return None, None
