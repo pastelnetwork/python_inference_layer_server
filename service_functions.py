@@ -4636,6 +4636,23 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
                     "output_text": "embedding_document",
                     "output_files": ["NA"]
                 }
+                # After getting the embeddings, perform the semantic search query if specified
+                query_text = model_parameters.get("query_text", None)
+                if query_text:
+                    search_payload = {
+                        "query_text": query_text,
+                        "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
+                        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+                        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
+                    }
+                    search_response = await client.post(
+                        f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
+                        json=search_payload,
+                        params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                    )
+                    search_response.raise_for_status()
+                    search_results = search_response.json()
+                    output_results["search_results"] = search_results
                 return output_results, output_results_file_type_strings
             except Exception as e:
                 logger.error("Failed to execute embedding document inference request: {}".format(e))
@@ -4670,9 +4687,57 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
                     "output_text": "embedding_audio",
                     "output_files": ["NA"]
                 }
+                # After getting the transcript, perform the query if specified
+                query_text = model_parameters.get("query_text", None)
+                if query_text:
+                    search_payload = {
+                        "query_text": query_text,
+                        "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
+                        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+                        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
+                    }
+                    search_response = await client.post(
+                        f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
+                        json=search_payload,
+                        params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                    )
+                    search_response.raise_for_status()
+                    search_results = search_response.json()
+                    output_results["search_results"] = search_results
                 return output_results, output_results_file_type_strings
             except Exception as e:
                 logger.error("Failed to execute embedding audio inference request: {}".format(e))
+                if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
+                    logger.info("Falling back to local Swiss Army Llama.")
+                    return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
+                else:
+                    return None, None
+        elif inference_request.model_inference_type_string == "ask_question_about_image":
+            input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
+            payload = {
+                "question": model_parameters.get("question", "What is happening in this image?"),
+                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+                "temperature": model_parameters.get("temperature", 0.7),
+                "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 256),
+                "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1)
+            }
+            files = {"image": ("image.png", input_data_binary, "image/png")}
+            try:
+                response = await client.post(
+                    f"http://localhost:{port}/ask_question_about_image/",
+                    data=payload,
+                    files=files,
+                    params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                )
+                response.raise_for_status()
+                output_results = response.json()
+                output_results_file_type_strings = {
+                    "output_text": "ask_question_about_image",
+                    "output_files": ["NA"]
+                }
+                return output_results, output_results_file_type_strings
+            except Exception as e:
+                logger.error("Failed to execute ask question about image inference request: {}".format(e))
                 if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
                     logger.info("Falling back to local Swiss Army Llama.")
                     return await submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=True)
