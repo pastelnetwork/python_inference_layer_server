@@ -286,6 +286,63 @@
       }
     },
     {
+      "model_name": "swiss_army_llama-llava-llama-3-8b-v1_1-int4",
+      "model_url": "https://huggingface.co/xtuner/llava-llama-3-8b-v1_1-gguf/resolve/main/llava-llama-3-8b-v1_1-int4.gguf",
+      "description": "The LLaVA-LLaMA-3-8B-v1.1 model is a powerful language model developed by XTuner; it allows you to ask questions about images and get answers in a conversational manner.",
+      "supported_inference_type_strings": [
+        "ask_question_about_an_image"
+      ],
+      "input_fields": [
+        {
+          "name": "image_data",
+          "file_type": "base64",
+          "optional": false
+        },
+        {
+          "name": "question",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "inference_types_parameter_applies_to": "['ask_question_about_an_image']",
+          "description": "The temperature for text generation"
+        },
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 256,
+          "inference_types_parameter_applies_to": "['ask_question_about_an_image']",
+          "description": "The number of tokens to generate"
+        },
+        {
+          "name": "number_of_completions_to_generate",
+          "type": "int",
+          "default": 1,
+          "inference_types_parameter_applies_to": "['ask_question_about_an_image']",
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "ask_question_about_an_image": {
+          "image_size": 0.5,
+          "compute_cost": 1.2,
+          "memory_cost": 1.0
+        }
+      }
+    },
+    {
       "model_name": "swiss_army_llama-bge-m3-q8_0",
       "model_url": "https://huggingface.co/vonjack/bge-m3-gguf/resolve/main/bge-m3-q8_0.gguf",
       "description": "BGE M3-Embedding: Multi-Lingual, Multi-Functionality, Multi-Granularity Text Embeddings Through Self-Knowledge Distillation. It can support more than 100 working languages, leading to new state-of-the-art performances on multi-lingual and cross-lingual retrieval tasks. It performs dense retrieval, multi-vector retrieval, and sparse retrieval, providing a unified model foundation for real-world IR applications.",
