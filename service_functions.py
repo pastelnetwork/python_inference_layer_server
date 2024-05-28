@@ -4702,19 +4702,21 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_embedding_audio)
 
 async def handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback):
-    input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
+    input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
+    image_data_binary = base64.b64decode(input_data["image"])
+    question = input_data["question"]
     payload = {
-        "question": model_parameters.get("question", "What is happening in this image?"),
+        "question": question,
         "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
         "temperature": model_parameters.get("temperature", 0.7),
         "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 256),
         "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1)
     }
-    files = {"image": ("image.png", input_data_binary, "image/png")}
+    files = {"image": ("image.png", image_data_binary, "image/png")}
     try:
         response = await client.post(
             f"http://localhost:{port}/ask_question_about_image/",
-            data=payload,
+            json=payload,
             files=files,
             params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
         )
@@ -4726,7 +4728,7 @@ async def handle_swiss_army_llama_image_question(client, inference_request, mode
         }
         return output_results, output_results_file_type_strings
     except Exception as e:
-        return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_image_question)
+        return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_image_question)    
 
 async def handle_swiss_army_llama_semantic_search(client, inference_request, model_parameters, port, is_fallback):
     payload = {
