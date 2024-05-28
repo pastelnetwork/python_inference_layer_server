@@ -16,6 +16,7 @@ psutil
 python-decouple
 python-Levenshtein
 pytz
+ruff
 sshtunnel
 sqlalchemy
 sqlmodel
