@@ -3643,10 +3643,13 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
             return final_proposed_cost_in_credits
     else:
         credit_costs = requested_model_data["credit_costs"][model_inference_type_string]
-        input_tokens = count_tokens(model_name, input_data) if model_inference_type_string != "embedding_document" else 0
+        if model_inference_type_string == "ask_question_about_image":
+            input_tokens = 3000
+        else:
+            input_tokens = count_tokens(model_name, input_data) if model_inference_type_string != "embedding_document" else 0
         compute_cost = float(credit_costs["compute_cost"])
         memory_cost = float(credit_costs["memory_cost"])
-        if model_inference_type_string == "text_completion":
+        if model_inference_type_string == "text_completion" or model_inference_type_string == "ask_question_about_image":
             output_token_cost = float(credit_costs["output_tokens"])
             number_of_tokens_to_generate = int(model_parameters.get("number_of_tokens_to_generate", 1000))
             number_of_completions_to_generate = int(model_parameters.get("number_of_completions_to_generate", 1))
