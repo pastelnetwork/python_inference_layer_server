@@ -955,11 +955,11 @@ def is_model_supported(model_menu, desired_model_canonical_string, desired_model
                         for param in matched_model["model_parameters"]:
                             if param["name"] == desired_param:
                                 if "type" in param:
-                                    if param["type"] == "int" and isinstance(desired_value, int):
+                                    if param["type"] == "int" and isinstance(int(desired_value), int):
                                         param_found = True
-                                    elif param["type"] == "float" and isinstance(desired_value, float):
+                                    elif param["type"] == "float" and isinstance(float(desired_value), float):
                                         param_found = True
-                                    elif param["type"] == "string" and isinstance(desired_value, str):
+                                    elif param["type"] == "string" and isinstance(str(desired_value), str):
                                         if "options" in param and desired_value in param["options"]:
                                             param_found = True
                                         elif "options" not in param:
@@ -4305,7 +4305,6 @@ async def submit_inference_request_to_stability_api(inference_request):
         return None, None
 
 async def submit_inference_request_to_openai_api(inference_request):
-    # Integrate with the OpenAI API to perform the inference task
     logger.info("Now accessing OpenAI API...")
     if inference_request.model_inference_type_string == "text_completion":
         model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
@@ -4314,8 +4313,9 @@ async def submit_inference_request_to_openai_api(inference_request):
         output_results = []
         total_input_tokens = 0
         total_output_tokens = 0
-        for i in range(num_completions):
-            async with httpx.AsyncClient() as client:
+        openai_text_completion_response_timeout_seconds = 60
+        async with httpx.AsyncClient(timeout=openai_text_completion_response_timeout_seconds) as client:
+            for i in range(num_completions):
                 response = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     headers={
@@ -4354,27 +4354,28 @@ async def submit_inference_request_to_openai_api(inference_request):
         return output_results, output_results_file_type_strings
     elif inference_request.model_inference_type_string == "embedding":
         input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-        response = await client.post(
-            "https://api.openai.com/v1/embeddings",
-            headers={
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": inference_request.requested_model_canonical_string.replace("openai-", ""),
-                "input": input_text
-            }
-        )
-        if response.status_code == 200:
-            output_results = response.json()["data"][0]["embedding"]
-            output_results_file_type_strings = {
-                "output_text": "embedding",
-                "output_files": ["NA"]
-            }
-            return output_results, output_results_file_type_strings
-        else:
-            logger.error(f"Error generating embedding from OpenAI API: {response.text}")
-            return None, None
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.openai.com/v1/embeddings",
+                headers={
+                    "Authorization": f"Bearer {OPENAI_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": inference_request.requested_model_canonical_string.replace("openai-", ""),
+                    "input": input_text
+                }
+            )
+            if response.status_code == 200:
+                output_results = response.json()["data"][0]["embedding"]
+                output_results_file_type_strings = {
+                    "output_text": "embedding",
+                    "output_files": ["NA"]
+                }
+                return output_results, output_results_file_type_strings
+            else:
+                logger.error(f"Error generating embedding from OpenAI API: {response.text}")
+                return None, None
     elif inference_request.model_inference_type_string == "ask_question_about_an_image":
         model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
@@ -4383,8 +4384,11 @@ async def submit_inference_request_to_openai_api(inference_request):
         question = input_data["question"]
         base64_image = base64.b64encode(image_data_binary).decode('utf-8')
         output_results = []
-        for i in range(num_completions):
-            async with httpx.AsyncClient() as client:
+        total_input_tokens = 0
+        total_output_tokens = 0        
+        openai_vision_timeout_seconds = 90
+        async with httpx.AsyncClient(timeout=openai_vision_timeout_seconds) as client:
+            for i in range(num_completions):
                 response = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     headers={
