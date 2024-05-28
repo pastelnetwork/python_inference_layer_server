@@ -4802,7 +4802,7 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
             return await handle_swiss_army_llama_embedding_document(client, inference_request, model_parameters, port, is_fallback)
         elif inference_request.model_inference_type_string == "embedding_audio":
             return await handle_swiss_army_llama_embedding_audio(client, inference_request, model_parameters, port, is_fallback)
-        elif inference_request.model_inference_type_string == "ask_question_about_image":
+        elif inference_request.model_inference_type_string == "ask_question_about_an_image":
             return await handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback)
         elif inference_request.model_inference_type_string == "semantic_search":
             return await handle_swiss_army_llama_semantic_search(client, inference_request, model_parameters, port, is_fallback)
