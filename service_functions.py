@@ -4551,6 +4551,14 @@ def determine_swiss_army_llama_port():
         return SWISS_ARMY_LLAMA_PORT
     return None
 
+async def handle_swiss_army_llama_exception(e, client, inference_request, port, is_fallback, handler_function):
+    logger.error("Failed to execute inference request: {}".format(e))
+    if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
+        logger.info("Falling back to local Swiss Army Llama.")
+        return await handler_function(client, inference_request, model_parameters, SWISS_ARMY_LLAMA_PORT, True)
+    else:
+        return None, None
+    
 async def handle_swiss_army_llama_text_completion(client, inference_request, model_parameters, port, is_fallback):
     payload = {
         "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
@@ -4577,7 +4585,7 @@ async def handle_swiss_army_llama_text_completion(client, inference_request, mod
         }
         return output_text, output_results_file_type_strings
     except Exception as e:
-        return await handle_exception(e, client, inference_request, port, is_fallback, handle_text_completion)
+        return await handle_swiss_army_llama_exception(e, client, inference_request, port, is_fallback, handle_swiss_army_llama_text_completion)
 
 async def handle_swiss_army_llama_embedding(client, inference_request, model_parameters, port, is_fallback):
     payload = {
@@ -4598,7 +4606,7 @@ async def handle_swiss_army_llama_embedding(client, inference_request, model_par
         }
         return output_results, output_results_file_type_strings
     except Exception as e:
-        return await handle_exception(e, client, inference_request, port, is_fallback, handle_embedding)
+        return await handle_swiss_army_llama_exception(e, client, inference_request, port, is_fallback, handle_swiss_army_llama_embedding)
 
 async def handle_swiss_army_llama_embedding_document(client, inference_request, model_parameters, port, is_fallback):
     input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
@@ -4645,7 +4653,7 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
             output_results["search_results"] = search_results
         return output_results, output_results_file_type_strings
     except Exception as e:
-        return await handle_exception(e, client, inference_request, port, is_fallback, handle_embedding_document)
+        return await handle_swiss_army_llama_exception(e, client, inference_request, port, is_fallback, handle_swiss_army_llama_embedding_document)
 
 async def handle_swiss_army_llama_embedding_audio(client, inference_request, model_parameters, port, is_fallback):
     input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
@@ -4691,7 +4699,7 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
             output_results["search_results"] = search_results
         return output_results, output_results_file_type_strings
     except Exception as e:
-        return await handle_exception(e, client, inference_request, port, is_fallback, handle_embedding_audio)
+        return await handle_swiss_army_llama_exception(e, client, inference_request, port, is_fallback, handle_swiss_army_llama_embedding_audio)
 
 async def handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback):
     input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
@@ -4718,7 +4726,7 @@ async def handle_swiss_army_llama_image_question(client, inference_request, mode
         }
         return output_results, output_results_file_type_strings
     except Exception as e:
-        return await handle_exception(e, client, inference_request, port, is_fallback, handle_image_question)
+        return await handle_swiss_army_llama_exception(e, client, inference_request, port, is_fallback, handle_swiss_army_llama_image_question)
 
 async def handle_swiss_army_llama_semantic_search(client, inference_request, model_parameters, port, is_fallback):
     payload = {
@@ -4742,7 +4750,7 @@ async def handle_swiss_army_llama_semantic_search(client, inference_request, mod
         }
         return output_results, output_results_file_type_strings
     except Exception as e:
-        return await handle_exception(e, client, inference_request, port, is_fallback, handle_semantic_search)
+        return await handle_swiss_army_llama_exception(e, client, inference_request, port, is_fallback, handle_swiss_army_llama_semantic_search)
 
 async def handle_swiss_army_llama_advanced_semantic_search(client, inference_request, model_parameters, port, is_fallback):
     payload = {
@@ -4768,16 +4776,8 @@ async def handle_swiss_army_llama_advanced_semantic_search(client, inference_req
         }
         return output_results, output_results_file_type_strings
     except Exception as e:
-        return await handle_exception(e, client, inference_request, port, is_fallback, handle_advanced_semantic_search)
+        return await handle_swiss_army_llama_exception(e, client, inference_request, port, is_fallback, handle_swiss_army_llama_advanced_semantic_search)
 
-async def handle_swiss_army_llama_exception(e, client, inference_request, port, is_fallback, handler_function):
-    logger.error("Failed to execute inference request: {}".format(e))
-    if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
-        logger.info("Falling back to local Swiss Army Llama.")
-        return await handler_function(client, inference_request, model_parameters, SWISS_ARMY_LLAMA_PORT, True)
-    else:
-        return None, None
-    
 async def submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=False):
     logger.info("Now calling Swiss Army Llama with model {}".format(inference_request.requested_model_canonical_string))
     model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
