@@ -3643,13 +3643,13 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
             return final_proposed_cost_in_credits
     else:
         credit_costs = requested_model_data["credit_costs"][model_inference_type_string]
-        if model_inference_type_string == "ask_question_about_image":
+        if model_inference_type_string == "ask_question_about_an_image":
             input_tokens = 3000
         else:
             input_tokens = count_tokens(model_name, input_data) if model_inference_type_string != "embedding_document" else 0
         compute_cost = float(credit_costs["compute_cost"])
         memory_cost = float(credit_costs["memory_cost"])
-        if model_inference_type_string == "text_completion" or model_inference_type_string == "ask_question_about_image":
+        if model_inference_type_string == "text_completion" or model_inference_type_string == "ask_question_about_an_image":
             output_token_cost = float(credit_costs["output_tokens"])
             number_of_tokens_to_generate = int(model_parameters.get("number_of_tokens_to_generate", 1000))
             number_of_completions_to_generate = int(model_parameters.get("number_of_completions_to_generate", 1))
@@ -4590,6 +4590,38 @@ async def handle_swiss_army_llama_text_completion(client, inference_request, mod
     except Exception as e:
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_text_completion)
 
+async def handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback):
+    input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
+    image_data_binary = base64.b64decode(input_data["image"])
+    question = input_data["question"]
+    payload = {
+        "question": question,
+        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+        "temperature": model_parameters.get("temperature", 0.7),
+        "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 256),
+        "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1)
+    }
+    files = {"image": ("image.png", image_data_binary, "image/png")}
+    try:
+        response = await client.post(
+            f"http://localhost:{port}/ask_question_about_image/",
+            json=payload,
+            files=files,
+            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+        )
+        response.raise_for_status()
+        output_results = response.json()
+        output_text = output_results[0]["generated_text"]
+        result = magika.identify_bytes(output_text.encode("utf-8"))
+        detected_data_type = result.output.ct_label
+        output_results_file_type_strings = {
+            "output_text": detected_data_type,
+            "output_files": ["NA"]
+        }
+        return output_text, output_results_file_type_strings
+    except Exception as e:
+        return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_image_question)    
+    
 async def handle_swiss_army_llama_embedding(client, inference_request, model_parameters, port, is_fallback):
     payload = {
         "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
@@ -4703,35 +4735,6 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
         return output_results, output_results_file_type_strings
     except Exception as e:
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_embedding_audio)
-
-async def handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback):
-    input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
-    image_data_binary = base64.b64decode(input_data["image"])
-    question = input_data["question"]
-    payload = {
-        "question": question,
-        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-        "temperature": model_parameters.get("temperature", 0.7),
-        "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 256),
-        "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1)
-    }
-    files = {"image": ("image.png", image_data_binary, "image/png")}
-    try:
-        response = await client.post(
-            f"http://localhost:{port}/ask_question_about_image/",
-            json=payload,
-            files=files,
-            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-        )
-        response.raise_for_status()
-        output_results = response.json()
-        output_results_file_type_strings = {
-            "output_text": "ask_question_about_image",
-            "output_files": ["NA"]
-        }
-        return output_results, output_results_file_type_strings
-    except Exception as e:
-        return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_image_question)    
 
 async def handle_swiss_army_llama_semantic_search(client, inference_request, model_parameters, port, is_fallback):
     payload = {
