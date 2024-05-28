@@ -54,13 +54,6 @@
           "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
         },
         {
-          "name": "query_string",
-          "type": "string",
-          "default": "",
-          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
-          "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
-        },
-        {
           "name": "corpus_identifier_string",
           "type": "string",
           "default": "",
@@ -149,13 +142,6 @@
           "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
         },
         {
-          "name": "query_string",
-          "type": "string",
-          "default": "",
-          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
-          "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
-        },
-        {
           "name": "corpus_identifier_string",
           "type": "string",
           "default": "",
@@ -242,13 +228,6 @@
           "default": "",
           "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
-        },
-        {
-          "name": "query_string",
-          "type": "string",
-          "default": "",
-          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
-          "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
         },
         {
           "name": "corpus_identifier_string",
@@ -367,13 +346,6 @@
         }
       ],
       "model_parameters": [
-        {
-          "name": "query_string",
-          "type": "string",
-          "default": "",
-          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
-          "description": "The query string used to perform semantic search on the embeddings (optional; default is to not perform any search)."
-        },
         {
           "name": "corpus_identifier_string",
           "type": "string",
@@ -1563,7 +1535,7 @@
       "description": "Whisper large-v2 model for audio transcription",
       "supported_inference_type_strings": [
         "audio_transcription"
-      ],      
+      ],
       "input_fields": [
         {
           "name": "audio",

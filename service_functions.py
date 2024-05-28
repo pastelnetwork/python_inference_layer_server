@@ -22,7 +22,7 @@ import warnings
 import pytz
 from collections.abc import Iterable
 from urllib.parse import quote_plus, unquote_plus
-from datetime import datetime, timedelta, timezone, date
+from datetime import datetime, timedelta, date
 import datetime as dt
 import pandas as pd
 import httpx
@@ -338,6 +338,20 @@ def write_rpc_settings_to_env_file_func(rpc_host, rpc_port, rpc_user, rpc_passwo
                 logger.error(f"Error writing to .env file: {e}")
                 pass
     return
+
+def is_base64_encoded(data):
+    if not isinstance(data, str):
+        return False
+    if len(data) % 4 != 0:
+        return False
+    base64_pattern = re.compile(r'^[A-Za-z0-9+/]+={0,2}$')
+    if not base64_pattern.match(data):
+        return False
+    try:
+        base64.b64decode(data, validate=True)
+        return True
+    except Exception:
+        return False
 
 def kill_open_ssh_tunnels(local_port):
     try:
@@ -3585,6 +3599,8 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         credits_cost = model_pricing["credits_per_call"] * number_of_completions_to_generate
         estimated_cost = credits_cost * 10 / 1000  # Convert credits to dollars ($10 per 1,000 credits)
     elif model_name.endswith("4o-vision"):
+        if input_data is None:
+            logger.error("Input data is empty!")
         input_data_dict = json.loads(input_data)
         image_data_binary = base64.b64decode(input_data_dict["image"]) # Decode image data and question from input_data
         question = input_data_dict["question"]
@@ -3620,7 +3636,6 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
         per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
         estimated_cost = input_cost + output_cost + per_call_cost
-        logger.info(f"Estimated cost: ${estimated_cost:.4f}")
     else:
         # For other models, calculate the cost based on input/output tokens and per-call cost
         input_data_tokens = count_tokens(model_name, input_data)
@@ -3936,6 +3951,9 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
                 if not inference_request_allowed:
                     logger.error(f"Cannot proceed with inference request to model {requested_model} because of risk that it will be rejected and lead to banning!")
                     return False, 0, 0
+        if is_base64_encoded(input_data):
+            input_data = base64.b64decode(input_data)
+            input_data = input_data.decode('utf-8')     
         proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, model_inference_type_string, input_data)
         validation_results = await validate_existing_credit_pack_ticket(credit_pack_ticket_pastel_txid)
         if not validation_results["credit_pack_ticket_is_valid"]:
