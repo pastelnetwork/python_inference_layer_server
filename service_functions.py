@@ -3585,19 +3585,33 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         credits_cost = model_pricing["credits_per_call"] * number_of_completions_to_generate
         estimated_cost = credits_cost * 10 / 1000  # Convert credits to dollars ($10 per 1,000 credits)
     elif model_name.endswith("4o-vision"):
-        image_data_binary = base64.b64decode(input_data["image"]) # Decode image data and question from input_data
-        question = input_data["question"]
+        input_data_dict = json.loads(input_data)
+        image_data_binary = base64.b64decode(input_data_dict["image"]) # Decode image data and question from input_data
+        question = input_data_dict["question"]
+        # Calculate image resolution
         image = Image.open(io.BytesIO(image_data_binary))
-        width, height = image.size # Calculate image resolution
-        resized_width = 768 # Calculate number of tiles and tokens
-        resized_height = 768
-        tiles_x = -(-width // 512)
-        tiles_y = -(-height // 512)
+        width, height = image.size
+        image_file_size_in_mb = len(image_data_binary) / (1024 * 1024)  # Calculate image file size in MB
+        logger.info(f"Submitted image file is {image_file_size_in_mb:.2f}MB and has resolution of {width} x {height}")
+        # Resize logic to fit the larger dimension to 1286 pixels while maintaining aspect ratio
+        target_larger_dimension = 1286
+        aspect_ratio = width / height
+        if width > height:
+            resized_width = target_larger_dimension
+            resized_height = int(target_larger_dimension / aspect_ratio)
+        else:
+            resized_height = target_larger_dimension
+            resized_width = int(target_larger_dimension * aspect_ratio)
+        logger.info(f"Image will be resized automatically by OpenAI to a resolution of {resized_width} x {resized_height}")
+        # Calculate number of tiles and tokens
+        tiles_x = -(-resized_width // 512)
+        tiles_y = -(-resized_height // 512)
         total_tiles = tiles_x * tiles_y
         base_tokens = 85
         tile_tokens = 170 * total_tiles
         total_tokens = base_tokens + tile_tokens
-        question_tokens = count_tokens(model_name, question) # Count tokens in the question
+        # Count tokens in the question
+        question_tokens = count_tokens(model_name, question)
         input_data_tokens = total_tokens + question_tokens
         logger.info(f"Total input data tokens: {input_data_tokens}")
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
@@ -3605,7 +3619,8 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         input_cost = float(model_pricing["input_cost"]) * float(input_data_tokens) / 1000.0
         output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
         per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
-        estimated_cost = input_cost + output_cost + per_call_cost        
+        estimated_cost = input_cost + output_cost + per_call_cost
+        logger.info(f"Estimated cost: ${estimated_cost:.4f}")
     else:
         # For other models, calculate the cost based on input/output tokens and per-call cost
         input_data_tokens = count_tokens(model_name, input_data)
