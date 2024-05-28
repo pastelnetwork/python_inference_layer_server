@@ -5,6 +5,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import io
 import platform
 import math
 import statistics
@@ -46,6 +47,7 @@ from sqlmodel import select, delete, update, func, or_, SQLModel
 from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
+from PIL import Image
 
 encryption_key = None
 magika = Magika()
@@ -3462,6 +3464,7 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         "mistralapi-mistral-embed": {"input_cost": 0.0001, "output_cost": 0, "per_call_cost": 0},
         "openai-gpt-4o": {"input_cost": 0.005, "output_cost": 0.015, "per_call_cost": 0},
         "openai-gpt-4o-2024-05-13": {"input_cost": 0.005, "output_cost": 0.015, "per_call_cost": 0},
+        "openai-gpt-4o-vision": {"input_cost": 0.005, "output_cost": 0.015, "per_call_cost": 0},
         "openai-gpt-4-turbo": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
         "openai-gpt-4-turbo-2024-04-09": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0},
         "openai-gpt-4": {"input_cost": 0.03, "output_cost": 0.06, "per_call_cost": 0},
@@ -3581,6 +3584,28 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
         credits_cost = model_pricing["credits_per_call"] * number_of_completions_to_generate
         estimated_cost = credits_cost * 10 / 1000  # Convert credits to dollars ($10 per 1,000 credits)
+    elif model_name.endswith("4o-vision"):
+        image_data_binary = base64.b64decode(input_data["image"]) # Decode image data and question from input_data
+        question = input_data["question"]
+        image = Image.open(io.BytesIO(image_data_binary))
+        width, height = image.size # Calculate image resolution
+        resized_width = 768 # Calculate number of tiles and tokens
+        resized_height = 768
+        tiles_x = -(-width // 512)
+        tiles_y = -(-height // 512)
+        total_tiles = tiles_x * tiles_y
+        base_tokens = 85
+        tile_tokens = 170 * total_tiles
+        total_tokens = base_tokens + tile_tokens
+        question_tokens = count_tokens(model_name, question) # Count tokens in the question
+        input_data_tokens = total_tokens + question_tokens
+        logger.info(f"Total input data tokens: {input_data_tokens}")
+        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
+        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+        input_cost = float(model_pricing["input_cost"]) * float(input_data_tokens) / 1000.0
+        output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
+        per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
+        estimated_cost = input_cost + output_cost + per_call_cost        
     else:
         # For other models, calculate the cost based on input/output tokens and per-call cost
         input_data_tokens = count_tokens(model_name, input_data)
@@ -4335,6 +4360,66 @@ async def submit_inference_request_to_openai_api(inference_request):
         else:
             logger.error(f"Error generating embedding from OpenAI API: {response.text}")
             return None, None
+    elif inference_request.model_inference_type_string == "ask_question_about_an_image":
+        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
+        input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
+        image_data_binary = base64.b64decode(input_data["image"])
+        question = input_data["question"]
+        base64_image = base64.b64encode(image_data_binary).decode('utf-8')
+        output_results = []
+        for i in range(num_completions):
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {OPENAI_API_KEY}"
+                    },
+                    json={
+                        "model": inference_request.requested_model_canonical_string.replace("openai-", "").replace("-vision", ""),
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": question
+                                    },
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:image/jpeg;base64,{base64_image}"
+                                        }
+                                    }
+                                ]
+                            }
+                        ],
+                        "max_tokens": int(json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8")).get("number_of_tokens_to_generate", 300))
+                    }
+                )
+                if response.status_code == 200:
+                    response_json = response.json()
+                    output_results.append(response_json["choices"][0]["message"]["content"])
+                    total_input_tokens += response_json["usage"]["prompt_tokens"]
+                    total_output_tokens += response_json["usage"]["completion_tokens"]                    
+                else:
+                    logger.error(f"Error generating response from OpenAI API: {response.text}")
+                    return None, None
+        logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
+        logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
+        if num_completions == 1:
+            output_text = output_results[0]
+        else:
+            output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})             
+        logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
+        result = magika.identify_bytes(output_text.encode("utf-8"))
+        detected_data_type = result.output.ct_label
+        output_results_file_type_strings = {
+            "output_text": detected_data_type,
+            "output_files": ["NA"]
+        }
+        return output_results, output_results_file_type_strings               
     else:
         logger.warning(f"Unsupported inference type for OpenAI model: {inference_request.model_inference_type_string}")
         return None, None
@@ -4605,7 +4690,7 @@ async def handle_swiss_army_llama_image_question(client, inference_request, mode
     try:
         response = await client.post(
             f"http://localhost:{port}/ask_question_about_image/",
-            json=payload,
+            data=payload,
             files=files,
             params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
         )
@@ -4620,8 +4705,8 @@ async def handle_swiss_army_llama_image_question(client, inference_request, mode
         }
         return output_text, output_results_file_type_strings
     except Exception as e:
-        return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_image_question)    
-    
+        return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_image_question)
+
 async def handle_swiss_army_llama_embedding(client, inference_request, model_parameters, port, is_fallback):
     payload = {
         "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),

@@ -10,6 +10,7 @@ magika
 mistralai
 mutagen
 pandas
+pillow
 plyvel
 psutil
 python-decouple
