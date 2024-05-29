@@ -4221,7 +4221,18 @@ async def submit_inference_request_to_stability_api(inference_request):
         model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
         if "stability-core" in inference_request.requested_model_canonical_string:
-            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
+            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 3)) as client:
+                data = {
+                    "prompt": prompt,
+                    "aspect_ratio": model_parameters.get("aspect_ratio", "1:1"),
+                    "output_format": model_parameters.get("output_format", "png")
+                }
+                if model_parameters.get("negative_prompt"):
+                    data["negative_prompt"] = model_parameters["negative_prompt"]
+                if model_parameters.get("seed") is not None:
+                    data["seed"] = model_parameters["seed"]
+                if model_parameters.get("style_preset"):
+                    data["style_preset"] = model_parameters["style_preset"]
                 response = await client.post(
                     "https://api.stability.ai/v2beta/stable-image/generate/core",
                     headers={
@@ -4229,14 +4240,7 @@ async def submit_inference_request_to_stability_api(inference_request):
                         "accept": "image/*"
                     },
                     files={"none": ''},
-                    data={
-                        "prompt": prompt,
-                        "aspect_ratio": model_parameters.get("aspect_ratio", "1:1"),
-                        "negative_prompt": model_parameters.get("negative_prompt", ""),
-                        "seed": model_parameters.get("seed", 0),
-                        "style_preset": model_parameters.get("style_preset", ""),
-                        "output_format": model_parameters.get("output_format", "png"),
-                    },
+                    data=data,
                 )
                 if response.status_code == 200:
                     output_results = base64.b64encode(response.content).decode("utf-8")
@@ -4249,11 +4253,19 @@ async def submit_inference_request_to_stability_api(inference_request):
                     logger.error(f"Error generating image from Stability API: {response.text}")
                     return None, None
         else:
-            model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
-            prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             engine_id = inference_request.requested_model_canonical_string
             api_host = "https://api.stability.ai"
-            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
+            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 3)) as client:
+                json_data = {
+                    "text_prompts": [{"text": prompt}],
+                    "cfg_scale": model_parameters.get("cfg_scale", 7),
+                    "height": model_parameters.get("height", 512),
+                    "width": model_parameters.get("width", 512),
+                    "samples": model_parameters.get("num_samples", 1),
+                    "steps": model_parameters.get("steps", 50),
+                }
+                if model_parameters.get("style_preset"):
+                    json_data["style_preset"] = model_parameters["style_preset"]
                 response = await client.post(
                     f"{api_host}/v1/generation/{engine_id}/text-to-image",
                     headers={
@@ -4261,15 +4273,7 @@ async def submit_inference_request_to_stability_api(inference_request):
                         "Accept": "application/json",
                         "Authorization": f"Bearer {STABILITY_API_KEY}"
                     },
-                    json={
-                        "text_prompts": [{"text": prompt}],
-                        "cfg_scale": model_parameters.get("cfg_scale", 7),
-                        "height": model_parameters.get("height", 512),
-                        "width": model_parameters.get("width", 512),
-                        "samples": model_parameters.get("num_samples", 1),
-                        "steps": model_parameters.get("steps", 50),
-                        "style_preset": model_parameters.get("style_preset", None),
-                    },
+                    json=json_data,
                 )
                 if response.status_code == 200:
                     data = response.json()
@@ -4295,7 +4299,16 @@ async def submit_inference_request_to_stability_api(inference_request):
         model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         input_image = base64.b64decode(inference_request.model_input_data_json_b64)
         prompt = model_parameters.get("prompt", "")
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*3)) as client:
+        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 3)) as client:
+            data = {
+                "prompt": prompt,
+                "output_format": model_parameters.get("output_format", "png"),
+                "creativity": model_parameters.get("creativity", 0.3),
+            }
+            if model_parameters.get("seed") is not None:
+                data["seed"] = model_parameters["seed"]
+            if model_parameters.get("negative_prompt"):
+                data["negative_prompt"] = model_parameters["negative_prompt"]
             response = await client.post(
                 "https://api.stability.ai/v2beta/stable-image/upscale/creative",
                 headers={
@@ -4303,13 +4316,7 @@ async def submit_inference_request_to_stability_api(inference_request):
                     "accept": "application/json"
                 },
                 files={"image": input_image},
-                data={
-                    "prompt": prompt,
-                    "output_format": model_parameters.get("output_format", "png"),
-                    "seed": model_parameters.get("seed", 0),
-                    "negative_prompt": model_parameters.get("negative_prompt", ""),
-                    "creativity": model_parameters.get("creativity", 0.3),
-                },
+                data=data,
             )
             if response.status_code == 200:
                 generation_id = response.json().get("id")
@@ -4792,7 +4799,12 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
         document_file_data = input_data_dict['document']
         query_text = input_data_dict['question']
         if is_base64_encoded(document_file_data):
-            document_file_data = base64.b64decode(document_file_data)    
+            document_file_data = base64.b64decode(document_file_data)
+        result = magika.identify_bytes(document_file_data)
+        detected_data_type = result.output.ct_label
+        detected_mime_type = result.output.mime_type
+        file_hash = get_sha256_hash_of_input_data_func(document_file_data)
+        document_file_name = f"{file_hash[:15]}.{detected_data_type}"
     except Exception as e:
         logger.error(f"Error parsing document data from input: {str(e)}")
         traceback.print_exc()
@@ -4800,16 +4812,16 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
     params = {
         "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
         "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd"),
-        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "security_je"),
+        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", ""),
         "json_format": model_parameters.get("json_format", "records"),
         "send_back_json_or_zip_file": model_parameters.get("send_back_json_or_zip_file", "zip"),
         "query_text": query_text
     }
     files = {
-        'file': ('document.pdf', document_file_data, 'application/pdf'),
-        'url': '',
-        'hash': '',
-        'size': ''
+        'file': (document_file_name, document_file_data, detected_mime_type),
+        'url': ('', ''),
+        'hash': ('', ''),
+        'size': ('', '')
     }
     try:
         response = await client.post(
@@ -4820,7 +4832,7 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
         )
         response.raise_for_status()
         if model_parameters.get("send_back_json_or_zip_file", "zip") == "json":
-            output_results = response.json()
+            output_results = await response.json()
         else:
             zip_file_content = await response.aread()
             with zipfile.ZipFile(io.BytesIO(zip_file_content)) as zip_ref:
@@ -4834,7 +4846,7 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
         return output_results, output_results_file_type_strings
     except Exception as e:
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_embedding_document)
-
+    
 async def handle_swiss_army_llama_embedding_audio(client, inference_request, model_parameters, port, is_fallback):
     input_data = inference_request.model_input_data_json_b64
     if is_base64_encoded(input_data):
@@ -4846,21 +4858,22 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
         query_text = input_data_dict.get('question', '')
         if is_base64_encoded(audio_file_data):
             audio_file_data = base64.b64decode(audio_file_data)    
+        file_hash = get_sha256_hash_of_input_data_func(audio_file_data)
+        audio_file_name = f"{file_hash[:15]}.mp3"            
     except Exception as e:
-        logger.error(f"Error parsing audio data from input: {str(e)}")
+        print(f"Error parsing audio data from input: {str(e)}")
         traceback.print_exc()
         raise
     params = {
         "compute_embeddings_for_resulting_transcript_document": model_parameters.get("compute_embeddings_for_resulting_transcript_document", True),
         "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-        "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd"),
-        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "funny")
+        "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd")
     }
     files = {
-        'file': ('audio.mp3', audio_file_data, 'audio/mpeg'),
-        'url': '',
-        'hash': '',
-        'size': ''
+        'file': (audio_file_name, audio_file_data, 'audio/mpeg'),
+        'url': ('', ''),
+        'hash': ('', ''),
+        'size': ('', '')
     }
     try:
         response = await client.post(
