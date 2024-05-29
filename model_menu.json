@@ -1254,7 +1254,7 @@
           "type": "string",
           "default": "k_euler",
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc. Defualt is 'k_euler') [Optional]"
+          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc. Default is 'k_euler') [Optional]"
         },
         {
           "name": "steps",
@@ -1286,9 +1286,9 @@
         {
           "name": "style_preset",
           "type": "string",
-          "default": "enhance",
+          "default": null,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Style Preset: Guides the image model towards a particular style (e.g., '3d-model', 'analog-film', 'anime', etc. Default is 'enhance') [Optional]"
+          "description": "Style Preset: Guides the image model towards a particular style (e.g., '3d-model', 'analog-film', 'anime', etc.) [Optional]"
         }
       ],
       "credit_costs": {
