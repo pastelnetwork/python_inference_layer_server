@@ -1171,7 +1171,7 @@
           "type": "string",
           "default": "1:1",
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "The aspect ratio of the generated image"
+          "description": "The aspect ratio of the generated image [Optional]"
         },
         {
           "name": "seed",
@@ -1185,21 +1185,21 @@
           "type": "string",
           "default": null,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Guides the image model towards a particular style (e.g., 3d-model, analog-film, anime, etc.)"
+          "description": "Style Preset: Guides the image model towards a particular style (e.g., '3d-model', 'analog-film', 'anime', etc.) [Optional]"
         },
         {
           "name": "output_format",
           "type": "string",
           "default": "png",
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "The format of the generated image"
+          "description": "The format of the generated image (e.g., 'png', 'jpg', etc.) [Optional]"
         },
         {
           "name": "negative_prompt",
           "type": "string",
           "default": null,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "A blurb of text describing what you do not wish to see in the output image"
+          "description": "Negative Prompt: A blurb of text describing what you do not wish to see in the output image [Optional]"
         }
       ],
       "credit_costs": {
@@ -1233,62 +1233,62 @@
           "type": "int",
           "default": 512,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "The height of the generated image"
+          "description": "The height of the generated image in pixels [Optional]"
         },
         {
           "name": "width",
           "type": "int",
           "default": 512,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "The width of the generated image"
+          "description": "The width of the generated image in pixels [Optional]"
         },
         {
           "name": "cfg_scale",
           "type": "float",
           "default": 7,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "CFG scale factor"
+          "description": "CFG scale factor [Optional]"
         },
         {
           "name": "sampler",
           "type": "string",
           "default": null,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.)"
+          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.) [Optional]"
         },
         {
           "name": "steps",
           "type": "int",
           "default": 50,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Number of steps for generation"
+          "description": "Number of steps for generation [Optional]"
         },
         {
           "name": "seed",
           "type": "int",
           "default": 0,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Random seed to use for generation"
+          "description": "Random seed to use for generation [Optional]"
         },
         {
           "name": "num_samples",
           "type": "int",
           "default": 1,
-          "description": "Number of samples to generate"
+          "description": "Number of samples to generate [Optional]"
         },
         {
           "name": "negative_prompt",
           "type": "string",
           "default": null,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "A blurb of text describing what you do not wish to see in the output image"
+          "description": "Negative Prompt: A blurb of text describing what you do not wish to see in the output image [Optional]"
         },
         {
           "name": "style_preset",
           "type": "string",
           "default": null,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Guides the image model towards a particular style (e.g., 3d-model, analog-film, anime, etc.)"
+          "description": "Style Preset: Guides the image model towards a particular style (e.g., '3d-model', 'analog-film', 'anime', etc.) [Optional]"
         }
       ],
       "credit_costs": {
@@ -1322,49 +1322,49 @@
           "type": "int",
           "default": 512,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "The height of the generated image"
+          "description": "The height of the generated image in pixels [Optional]"
         },
         {
           "name": "width",
           "type": "int",
           "default": 512,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "The width of the generated image"
+          "description": "The width of the generated image in pixels [Optional]"
         },
         {
           "name": "cfg_scale",
           "type": "float",
           "default": 7,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "CFG scale factor"
+          "description": "CFG scale factor [Optional]"
         },
         {
           "name": "sampler",
           "type": "string",
           "default": null,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.)"
+          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.) [Optional]"
         },
         {
           "name": "steps",
           "type": "int",
           "default": 50,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Number of steps for generation"
+          "description": "Number of steps for generation [Optional]"
         },
         {
           "name": "seed",
           "type": "int",
           "default": 0,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Random seed to use for generation"
+          "description": "Random seed to use for generation [Optional]"
         },
         {
           "name": "num_samples",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Number of samples to generate"
+          "description": "Number of samples to generate [Optional]"
         },
         {
           "name": "negative_prompt",
@@ -1378,7 +1378,7 @@
           "type": "string",
           "default": null,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Guides the image model towards a particular style (e.g., 3d-model, analog-film, anime, etc.)"
+          "description": "Negative Prompt: Guides the image model towards a particular style (e.g., '3d-model', 'analog-film', 'anime', etc.) [Optional]"
         }
       ],
       "credit_costs": {
