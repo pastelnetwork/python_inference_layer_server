@@ -3714,45 +3714,61 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
                 (estimated_output_tokens * output_token_cost) +
                 compute_cost
             ) + memory_cost
-        elif model_inference_type_string in ["embedding"]:
-            proposed_cost_in_credits = (
-                (input_tokens * float(credit_costs["input_tokens"])) +
-                compute_cost +
-                memory_cost
-            )
         elif model_inference_type_string == "embedding_document":
-            input_data_binary = base64.b64decode(input_data)
-            document_stats = await convert_document_to_sentences(input_data_binary)
-            sentences = document_stats["individual_sentences"]
-            total_sentences = document_stats["total_number_of_sentences"]
-            concatenated_sentences = " ".join(sentences)
-            total_tokens = count_tokens(model_name, concatenated_sentences)
-            proposed_cost_in_credits = (
-                (total_tokens * float(credit_costs["average_tokens_per_sentence"])) +
-                (total_sentences * float(credit_costs["total_sentences"])) +
-                (1 if model_parameters.get("query_string") else 0) * float(credit_costs["query_string_included"]) +
-                compute_cost +
-                memory_cost
-            )
+            if is_base64_encoded(input_data):
+                input_data = base64.b64decode(input_data)
+                input_data = input_data.decode('utf-8')
+            try:
+                input_data_dict = json.loads(input_data)
+                document_file_data = input_data_dict['document']
+                if is_base64_encoded(document_file_data):
+                    document_file_data = base64.b64decode(document_file_data)
+                document_stats = await convert_document_to_sentences(document_file_data)
+                sentences = document_stats["individual_sentences"]
+                total_sentences = document_stats["total_number_of_sentences"]
+                concatenated_sentences = " ".join(sentences)
+                total_tokens = count_tokens(model_name, concatenated_sentences)
+                proposed_cost_in_credits = (
+                    (total_tokens * float(credit_costs["average_tokens_per_sentence"])) +
+                    (total_sentences * float(credit_costs["total_sentences"])) +
+                    (1 if model_parameters.get("query_string") else 0) * float(credit_costs["query_string_included"]) +
+                    compute_cost +
+                    memory_cost
+                )
+            except Exception as e:
+                logger.error(f"Error parsing document data from input: {str(e)}")
+                traceback.print_exc()
+                raise
         elif model_inference_type_string == "embedding_audio":
-            input_data_binary = base64.b64decode(input_data)
-            average_sentences_per_second = 0.2
-            average_tokens_per_second = 3
-            audio_length_seconds = get_audio_length(input_data_binary)
-            estimated_sentences = audio_length_seconds * average_sentences_per_second
-            estimated_tokens = audio_length_seconds * average_tokens_per_second
-            proposed_cost_in_credits = (
-                (estimated_sentences * float(credit_costs["total_sentences"])) +
-                (estimated_tokens * float(credit_costs["average_tokens_per_sentence"])) +
-                (1 if model_parameters.get("query_string") else 0) * float(credit_costs["query_string_included"]) +
-                (audio_length_seconds * float(credit_costs["audio_file_length_in_seconds"])) +
-                compute_cost +
-                memory_cost
-            )
-        final_proposed_cost_in_credits = round(proposed_cost_in_credits * CREDIT_COST_MULTIPLIER_FACTOR, 1)
-        final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, final_proposed_cost_in_credits])
-        logger.info(f"Proposed cost in credits (local LLM): {final_proposed_cost_in_credits}")
-        return final_proposed_cost_in_credits
+            if is_base64_encoded(input_data):
+                input_data = base64.b64decode(input_data)
+                input_data = input_data.decode('utf-8')
+            try:
+                input_data_dict = json.loads(input_data)
+                audio_file_data = input_data_dict['audio']
+                if is_base64_encoded(audio_file_data):
+                    audio_file_data = base64.b64decode(audio_file_data)            
+                average_sentences_per_second = 0.2
+                average_tokens_per_second = 3
+                audio_length_seconds = get_audio_length(audio_file_data)
+                estimated_sentences = audio_length_seconds * average_sentences_per_second
+                estimated_tokens = audio_length_seconds * average_tokens_per_second
+                proposed_cost_in_credits = (
+                    (estimated_sentences * float(credit_costs["total_sentences"])) +
+                    (estimated_tokens * float(credit_costs["average_tokens_per_sentence"])) +
+                    (1 if model_parameters.get("query_string") else 0) * float(credit_costs["query_string_included"]) +
+                    (audio_length_seconds * float(credit_costs["audio_file_length_in_seconds"])) +
+                    compute_cost +
+                    memory_cost
+                )
+            except Exception as e:
+                logger.error(f"Error parsing document data from input: {str(e)}")
+                traceback.print_exc()
+                raise
+            final_proposed_cost_in_credits = round(proposed_cost_in_credits * CREDIT_COST_MULTIPLIER_FACTOR, 1)
+            final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, final_proposed_cost_in_credits])
+            logger.info(f"Proposed cost in credits (local LLM): {final_proposed_cost_in_credits}")
+            return final_proposed_cost_in_credits
 
 async def fetch_current_psl_market_price():
     async def check_prices():
@@ -4766,8 +4782,21 @@ async def handle_swiss_army_llama_embedding(client, inference_request, model_par
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_embedding)
 
 async def handle_swiss_army_llama_embedding_document(client, inference_request, model_parameters, port, is_fallback):
-    input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
-    metadata = await upload_and_get_file_metadata(input_data_binary, "document")
+    input_data = inference_request.model_input_data_json_b64
+    if is_base64_encoded(input_data):
+        input_data = base64.b64decode(input_data)
+        input_data = input_data.decode('utf-8')
+    try:
+        input_data_dict = json.loads(input_data)
+        document_file_data = input_data_dict['document']
+        query_text = input_data_dict['question']
+        if is_base64_encoded(document_file_data):
+            document_file_data = base64.b64decode(document_file_data)    
+    except Exception as e:
+        logger.error(f"Error parsing document data from input: {str(e)}")
+        traceback.print_exc()
+        raise
+    metadata = await upload_and_get_file_metadata(document_file_data, "document")
     file_url = metadata["file_url"]
     file_hash = metadata["file_hash"]
     file_size = metadata["file_size"]
@@ -4776,6 +4805,7 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
         "json_format": model_parameters.get("json_format", "records"),
         "corpus_identifier_string": model_parameters.get("corpus_identifier_string", ""),
         "send_back_json_or_zip_file": model_parameters.get("send_back_json_or_zip_file", "zip"),
+        "query_text": query_text,
         "url": file_url,
         "hash": file_hash,
         "size": file_size
@@ -4792,29 +4822,26 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
             "output_text": "embedding_document",
             "output_files": ["NA"]
         }
-        query_text = model_parameters.get("query_text", None)
-        if query_text:
-            search_payload = {
-                "query_text": query_text,
-                "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
-                "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
-            }
-            search_response = await client.post(
-                f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
-                json=search_payload,
-                params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-            )
-            search_response.raise_for_status()
-            search_results = search_response.json()
-            output_results["search_results"] = search_results
         return output_results, output_results_file_type_strings
     except Exception as e:
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_embedding_document)
 
 async def handle_swiss_army_llama_embedding_audio(client, inference_request, model_parameters, port, is_fallback):
-    input_data_binary = base64.b64decode(inference_request.model_input_data_json_b64)
-    metadata = await upload_and_get_file_metadata(input_data_binary, "audio")
+    input_data = inference_request.model_input_data_json_b64
+    if is_base64_encoded(input_data):
+        input_data = base64.b64decode(input_data)
+        input_data = input_data.decode('utf-8')
+    try:
+        input_data_dict = json.loads(input_data)
+        audio_file_data = input_data_dict['audio']
+        query_text = input_data_dict['question']
+        if is_base64_encoded(audio_file_data):
+            audio_file_data = base64.b64decode(audio_file_data)    
+    except Exception as e:
+        logger.error(f"Error parsing audio data from input: {str(e)}")
+        traceback.print_exc()
+        raise    
+    metadata = await upload_and_get_file_metadata(audio_file_data, "audio")
     file_url = metadata["file_url"]
     file_hash = metadata["file_hash"]
     file_size = metadata["file_size"]
@@ -4838,10 +4865,9 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
             "output_text": "embedding_audio",
             "output_files": ["NA"]
         }
-        query_text = model_parameters.get("query_text", None)
-        if query_text:
+        if len(query_text) > 0:
             search_payload = {
-                "query_text": query_text,
+                "query_text": str(query_text),
                 "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
                 "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
                 "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
