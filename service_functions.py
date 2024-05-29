@@ -4797,29 +4797,35 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
         logger.error(f"Error parsing document data from input: {str(e)}")
         traceback.print_exc()
         raise
-    payload = {
+    params = {
         "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
+        "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd"),
+        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "security_je"),
         "json_format": model_parameters.get("json_format", "records"),
-        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", ""),
         "send_back_json_or_zip_file": model_parameters.get("send_back_json_or_zip_file", "zip"),
         "query_text": query_text
     }
-    files = {'file': document_file_data}
+    files = {
+        'file': ('document.pdf', document_file_data, 'application/pdf'),
+        'url': '',
+        'hash': '',
+        'size': ''
+    }
     try:
         response = await client.post(
             f"http://localhost:{port}/get_all_embedding_vectors_for_document/",
-            data=payload,
+            params=params,
             files=files,
-            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+            headers={"accept": "application/json", "Content-Type": "multipart/form-data"}
         )
         response.raise_for_status()
         if model_parameters.get("send_back_json_or_zip_file", "zip") == "json":
             output_results = response.json()
-        else: # Handle ZIP file response
-            zip_file_content = await response.read()
-            with zipfile.ZipFile(io.BytesIO(zip_file_content)) as zip_ref: # Extract the JSON file from the ZIP archive
+        else:
+            zip_file_content = await response.aread()
+            with zipfile.ZipFile(io.BytesIO(zip_file_content)) as zip_ref:
                 json_file_name = os.path.splitext(inference_request.input_files[0])[0] + ".json"
-                with zip_ref.open(json_file_name) as json_file: # Extract the JSON file and read its content
+                with zip_ref.open(json_file_name) as json_file:
                     output_results = json.load(json_file)
         output_results_file_type_strings = {
             "output_text": "embedding_document",
@@ -4844,19 +4850,24 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
         logger.error(f"Error parsing audio data from input: {str(e)}")
         traceback.print_exc()
         raise
-    payload = {
+    params = {
         "compute_embeddings_for_resulting_transcript_document": model_parameters.get("compute_embeddings_for_resulting_transcript_document", True),
         "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
         "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd"),
-        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
+        "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "funny")
     }
-    files = {'file': audio_file_data}
+    files = {
+        'file': ('audio.mp3', audio_file_data, 'audio/mpeg'),
+        'url': '',
+        'hash': '',
+        'size': ''
+    }
     try:
         response = await client.post(
             f"http://localhost:{port}/compute_transcript_with_whisper_from_audio/",
-            data=payload,
+            params=params,
             files=files,
-            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+            headers={"accept": "application/json", "Content-Type": "multipart/form-data"}
         )
         response.raise_for_status()
         output_results = response.json()
@@ -4866,22 +4877,23 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
         }
         if query_text:
             search_payload = {
-                "query_text": str(query_text),
+                "query_text": query_text,
                 "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
                 "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
+                "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd"),
+                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "funny")
             }
             search_response = await client.post(
                 f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
                 json=search_payload,
-                params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                headers={"accept": "application/json", "Content-Type": "application/json"}
             )
             search_response.raise_for_status()
             search_results = search_response.json()
             output_results["search_results"] = search_results
         return output_results, output_results_file_type_strings
     except Exception as e:
-        return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_embedding_audio)    
+        return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_embedding_audio)
 
 async def handle_swiss_army_llama_semantic_search(client, inference_request, model_parameters, port, is_fallback):
     payload = {
