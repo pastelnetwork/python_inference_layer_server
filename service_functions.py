@@ -3765,10 +3765,10 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
                 logger.error(f"Error parsing document data from input: {str(e)}")
                 traceback.print_exc()
                 raise
-            final_proposed_cost_in_credits = round(proposed_cost_in_credits * CREDIT_COST_MULTIPLIER_FACTOR, 1)
-            final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, final_proposed_cost_in_credits])
-            logger.info(f"Proposed cost in credits (local LLM): {final_proposed_cost_in_credits}")
-            return final_proposed_cost_in_credits
+        final_proposed_cost_in_credits = round(proposed_cost_in_credits * CREDIT_COST_MULTIPLIER_FACTOR, 1)
+        final_proposed_cost_in_credits = max([MINIMUM_COST_IN_CREDITS, final_proposed_cost_in_credits])
+        logger.info(f"Proposed cost in credits (local LLM): {final_proposed_cost_in_credits}")
+        return final_proposed_cost_in_credits
 
 async def fetch_current_psl_market_price():
     async def check_prices():
