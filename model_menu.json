@@ -1190,9 +1190,9 @@
         {
           "name": "output_format",
           "type": "string",
-          "default": "png",
+          "default": "jpeg",
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "The format of the generated image (e.g., 'png', 'jpg', etc.) [Optional]"
+          "description": "The format of the generated image (e.g., 'png', 'jpeg', 'webp', etc.) [Optional]"
         },
         {
           "name": "negative_prompt",
