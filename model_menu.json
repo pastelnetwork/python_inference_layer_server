@@ -1252,9 +1252,9 @@
         {
           "name": "sampler",
           "type": "string",
-          "default": null,
+          "default": "k_euler",
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.) [Optional]"
+          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc. Defualt is 'k_euler') [Optional]"
         },
         {
           "name": "steps",
@@ -1279,16 +1279,16 @@
         {
           "name": "negative_prompt",
           "type": "string",
-          "default": null,
+          "default": "",
           "inference_types_parameter_applies_to": "['text_to_image']",
           "description": "Negative Prompt: A blurb of text describing what you do not wish to see in the output image [Optional]"
         },
         {
           "name": "style_preset",
           "type": "string",
-          "default": null,
+          "default": "enhance",
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Style Preset: Guides the image model towards a particular style (e.g., '3d-model', 'analog-film', 'anime', etc.) [Optional]"
+          "description": "Style Preset: Guides the image model towards a particular style (e.g., '3d-model', 'analog-film', 'anime', etc. Default is 'enhance') [Optional]"
         }
       ],
       "credit_costs": {
