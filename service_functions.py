@@ -4159,7 +4159,7 @@ async def process_inference_confirmation(inference_request_id: str, inference_co
         if matching_transaction_found:
             logger.info(f"Found correct inference request confirmation tracking transaction in burn address (with {num_confirmations} confirmation blocks so far)! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};")
             computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(inference_request.credit_pack_ticket_pastel_txid)
-            logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance:,} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} tracking transactions from tracking address to burn address.")       
+            logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance:,.1f} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} tracking transactions from tracking address to burn address.")       
             # Update the inference request status to "confirmed"
             inference_request.status = "confirmed"
             async with db_code.Session() as db:
@@ -4225,7 +4225,7 @@ async def submit_inference_request_to_stability_api(inference_request):
                 data = {
                     "prompt": prompt,
                     "aspect_ratio": model_parameters.get("aspect_ratio", "1:1"),
-                    "output_format": model_parameters.get("output_format", "png")
+                    "output_format": model_parameters.get("output_format", "jpeg")
                 }
                 if model_parameters.get("negative_prompt"):
                     data["negative_prompt"] = model_parameters["negative_prompt"]
