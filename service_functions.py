@@ -49,6 +49,7 @@ from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
 from PIL import Image
+from fastapi import UploadFile
 
 encryption_key = None
 magika = Magika()
@@ -4237,13 +4238,14 @@ async def submit_inference_request_to_stability_api(inference_request):
                     "https://api.stability.ai/v2beta/stable-image/generate/core",
                     headers={
                         "authorization": f"Bearer {STABILITY_API_KEY}",
-                        "accept": "image/*"
+                        "accept": "application/json"
                     },
                     files={"none": ''},
                     data=data,
                 )
                 if response.status_code == 200:
-                    output_results = base64.b64encode(response.content).decode("utf-8")
+                    response_json = response.content
+                    output_results = json.loads(response_json)
                     output_results_file_type_strings = {
                         "output_text": "base64_image",
                         "output_files": ["NA"]
@@ -4793,18 +4795,12 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
     input_data = inference_request.model_input_data_json_b64
     if is_base64_encoded(input_data):
         input_data = base64.b64decode(input_data)
-        input_data = input_data.decode('utf-8')
     try:
-        input_data_dict = json.loads(input_data)
-        document_file_data = input_data_dict['document']
-        query_text = input_data_dict['question']
-        if is_base64_encoded(document_file_data):
-            document_file_data = base64.b64decode(document_file_data)
-        result = magika.identify_bytes(document_file_data)
-        detected_data_type = result.output.ct_label
-        detected_mime_type = result.output.mime_type
-        file_hash = get_sha256_hash_of_input_data_func(document_file_data)
-        document_file_name = f"{file_hash[:15]}.{detected_data_type}"
+        file_metadata = await upload_and_get_file_metadata(input_data, file_prefix="document")
+        file_url = file_metadata["file_url"]
+        file_hash = file_metadata["file_hash"]
+        file_size = file_metadata["file_size"]
+        query_text = model_parameters.get("query_text", None)
     except Exception as e:
         logger.error(f"Error parsing document data from input: {str(e)}")
         traceback.print_exc()
@@ -4818,27 +4814,29 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
         "query_text": query_text
     }
     files = {
-        'file': (document_file_name, document_file_data, detected_mime_type),
-        'url': ('', ''),
-        'hash': ('', ''),
-        'size': ('', '')
+        'url': (None, file_url),
+        'hash': (None, file_hash),
+        'size': (None, str(file_size))
     }
     try:
         response = await client.post(
             f"http://localhost:{port}/get_all_embedding_vectors_for_document/",
             params=params,
             files=files,
-            headers={"accept": "application/json", "Content-Type": "multipart/form-data"}
+            headers={"accept": "application/json"}
         )
         response.raise_for_status()
         if model_parameters.get("send_back_json_or_zip_file", "zip") == "json":
             output_results = await response.json()
         else:
-            zip_file_content = await response.aread()
+            zip_file_content = await response.read()
             with zipfile.ZipFile(io.BytesIO(zip_file_content)) as zip_ref:
-                json_file_name = os.path.splitext(inference_request.input_files[0])[0] + ".json"
-                with zip_ref.open(json_file_name) as json_file:
-                    output_results = json.load(json_file)
+                json_file_names = [name for name in zip_ref.namelist() if name.endswith('.json')]
+                if json_file_names:
+                    with zip_ref.open(json_file_names[0]) as json_file:
+                        output_results = json.load(json_file)
+                else:
+                    raise ValueError("No JSON file found in the ZIP response.")
         output_results_file_type_strings = {
             "output_text": "embedding_document",
             "output_files": ["NA"]
@@ -4851,15 +4849,13 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
     input_data = inference_request.model_input_data_json_b64
     if is_base64_encoded(input_data):
         input_data = base64.b64decode(input_data)
-        input_data = input_data.decode('utf-8')
     try:
-        input_data_dict = json.loads(input_data)
-        audio_file_data = input_data_dict['audio']
-        query_text = input_data_dict.get('question', '')
-        if is_base64_encoded(audio_file_data):
-            audio_file_data = base64.b64decode(audio_file_data)    
-        file_hash = get_sha256_hash_of_input_data_func(audio_file_data)
-        audio_file_name = f"{file_hash[:15]}.mp3"            
+        file_metadata = await upload_and_get_file_metadata(input_data, file_prefix="audio")
+        file_url = file_metadata["file_url"]
+        file_hash = file_metadata["file_hash"]
+        file_size = file_metadata["file_size"]
+        query_text = model_parameters.get("query_text", "")
+        corpus_identifier_string = model_parameters.get("corpus_identifier_string", "")
     except Exception as e:
         print(f"Error parsing audio data from input: {str(e)}")
         traceback.print_exc()
@@ -4867,20 +4863,20 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
     params = {
         "compute_embeddings_for_resulting_transcript_document": model_parameters.get("compute_embeddings_for_resulting_transcript_document", True),
         "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
-        "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd")
+        "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd"),
+        "corpus_identifier_string": corpus_identifier_string
     }
     files = {
-        'file': (audio_file_name, audio_file_data, 'audio/mpeg'),
-        'url': ('', ''),
-        'hash': ('', ''),
-        'size': ('', '')
+        'url': (None, file_url),
+        'hash': (None, file_hash),
+        'size': (None, str(file_size))
     }
     try:
         response = await client.post(
             f"http://localhost:{port}/compute_transcript_with_whisper_from_audio/",
             params=params,
             files=files,
-            headers={"accept": "application/json", "Content-Type": "multipart/form-data"}
+            headers={"accept": "application/json"}
         )
         response.raise_for_status()
         output_results = response.json()
@@ -4894,7 +4890,7 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
                 "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
                 "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
                 "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd"),
-                "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "funny")
+                "corpus_identifier_string": corpus_identifier_string
             }
             search_response = await client.post(
                 f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
