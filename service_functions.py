@@ -19,7 +19,6 @@ import traceback
 import html
 import tempfile
 import warnings
-import zipfile
 import pytz
 from collections.abc import Iterable
 from urllib.parse import quote_plus, unquote_plus
@@ -49,7 +48,6 @@ from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
 from PIL import Image
-from fastapi import UploadFile
 
 encryption_key = None
 magika = Magika()
@@ -4770,33 +4768,22 @@ async def handle_swiss_army_llama_image_question(client, inference_request, mode
     except Exception as e:
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_image_question)
 
-async def handle_swiss_army_llama_embedding(client, inference_request, model_parameters, port, is_fallback):
-    payload = {
-        "text": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
-        "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", "")
-    }
-    try:
-        response = await client.post(
-            f"http://localhost:{port}/get_embedding_vector_for_string/",
-            json=payload,
-            params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-        )
-        response.raise_for_status()
-        output_results = response.json()
-        output_results_file_type_strings = {
-            "output_text": "embedding",
-            "output_files": ["NA"]
-        }
-        return output_results, output_results_file_type_strings
-    except Exception as e:
-        return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_embedding)
-
 async def handle_swiss_army_llama_embedding_document(client, inference_request, model_parameters, port, is_fallback):
     input_data = inference_request.model_input_data_json_b64
     if is_base64_encoded(input_data):
         input_data = base64.b64decode(input_data)
+        input_data = input_data.decode('utf-8')
     try:
-        file_metadata = await upload_and_get_file_metadata(input_data, file_prefix="document")
+        input_data_dict = json.loads(input_data)
+        document_file_data = input_data_dict['document']
+        if is_base64_encoded(document_file_data):
+            document_file_data = base64.b64decode(document_file_data)
+    except Exception as e:
+        logger.error(f"Error decoding audio data: {str(e)}")
+        traceback.print_exc()
+        raise("Error decoding audio data")
+    try:
+        file_metadata = await upload_and_get_file_metadata(document_file_data, file_prefix="document")
         file_url = file_metadata["file_url"]
         file_hash = file_metadata["file_hash"]
         file_size = file_metadata["file_size"]
@@ -4827,20 +4814,18 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
         )
         response.raise_for_status()
         if model_parameters.get("send_back_json_or_zip_file", "zip") == "json":
-            output_results = await response.json()
+            output_results = response.json()
+            output_results_file_type_strings = {
+                "output_text": "embedding_document",
+                "output_files": ["NA"]
+            }            
         else:
-            zip_file_content = await response.read()
-            with zipfile.ZipFile(io.BytesIO(zip_file_content)) as zip_ref:
-                json_file_names = [name for name in zip_ref.namelist() if name.endswith('.json')]
-                if json_file_names:
-                    with zip_ref.open(json_file_names[0]) as json_file:
-                        output_results = json.load(json_file)
-                else:
-                    raise ValueError("No JSON file found in the ZIP response.")
-        output_results_file_type_strings = {
-            "output_text": "embedding_document",
-            "output_files": ["NA"]
-        }
+            zip_file_content = response.read()
+            output_results = base64.b64encode(zip_file_content).decode('utf-8')
+            output_results_file_type_strings = {
+                "output_text": "NA",
+                "output_files": ["zip"]
+            }
         return output_results, output_results_file_type_strings
     except Exception as e:
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_embedding_document)
@@ -4849,8 +4834,18 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
     input_data = inference_request.model_input_data_json_b64
     if is_base64_encoded(input_data):
         input_data = base64.b64decode(input_data)
+        input_data = input_data.decode('utf-8')
     try:
-        file_metadata = await upload_and_get_file_metadata(input_data, file_prefix="audio")
+        input_data_dict = json.loads(input_data)
+        audio_file_data = input_data_dict['audio']
+        if is_base64_encoded(audio_file_data):
+            audio_file_data = base64.b64decode(audio_file_data) 
+    except Exception as e:
+        logger.error(f"Error decoding audio data: {str(e)}")
+        traceback.print_exc()
+        raise("Error decoding audio data")
+    try:
+        file_metadata = await upload_and_get_file_metadata(audio_file_data, file_prefix="audio")
         file_url = file_metadata["file_url"]
         file_hash = file_metadata["file_hash"]
         file_size = file_metadata["file_size"]
@@ -4964,8 +4959,6 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
     async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 12)) as client:
         if inference_request.model_inference_type_string == "text_completion":
             return await handle_swiss_army_llama_text_completion(client, inference_request, model_parameters, port, is_fallback)
-        elif inference_request.model_inference_type_string == "embedding":
-            return await handle_swiss_army_llama_embedding(client, inference_request, model_parameters, port, is_fallback)
         elif inference_request.model_inference_type_string == "embedding_document":
             return await handle_swiss_army_llama_embedding_document(client, inference_request, model_parameters, port, is_fallback)
         elif inference_request.model_inference_type_string == "embedding_audio":
