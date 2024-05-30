@@ -30,17 +30,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -51,14 +51,14 @@
           "type": "string",
           "default": "",
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
+          "description": "Grammar File String: The grammar file used to restrict text generation [Optional] (Default is to not use any grammar file. Examples: `json`, `list`)"
         },
         {
           "name": "corpus_identifier_string",
           "type": "string",
           "default": "",
           "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
-          "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
+          "description": "Corpus Identifier String: Identifies the subset of the stored embeddings to use in the semantic search [Optional] (Default is to use just the embeddings from the uploaded document or audio file transcript)."
         }
       ],
       "credit_costs": {
@@ -118,17 +118,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -139,14 +139,14 @@
           "type": "string",
           "default": "",
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
+          "description": "Grammar File String: The grammar file used to restrict text generation [Optional] (Default is to not use any grammar file. Examples: `json`, `list`)"
         },
         {
           "name": "corpus_identifier_string",
           "type": "string",
           "default": "",
           "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
-          "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
+          "description": "Corpus Identifier String: Identifies the subset of the stored embeddings to use in the semantic search [Optional] (Default is to use just the embeddings from the uploaded document or audio file transcript)."
         }
       ],
       "credit_costs": {
@@ -206,17 +206,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -227,14 +227,14 @@
           "type": "string",
           "default": "",
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The grammar file used to restrict text generation (optional; default is to not use any grammar file). Examples: `json`, `list`"
+          "description": "Grammar File String: The grammar file used to restrict text generation [Optional] (Default is to not use any grammar file. Examples: `json`, `list`)"
         },
         {
           "name": "corpus_identifier_string",
           "type": "string",
           "default": "",
           "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
-          "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
+          "description": "Corpus Identifier String: Identifies the subset of the stored embeddings to use in the semantic search [Optional] (Default is to use just the embeddings from the uploaded document or audio file transcript)."
         }
       ],
       "credit_costs": {
@@ -292,24 +292,24 @@
       ],
       "model_parameters": [
         {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The maximum number of tokens to generate [Optional]"
+        },
+        {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['ask_question_about_an_image']",
-          "description": "The temperature for text generation"
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 256,
-          "inference_types_parameter_applies_to": "['ask_question_about_an_image']",
-          "description": "The number of tokens to generate"
-        },
-        {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
-          "inference_types_parameter_applies_to": "['ask_question_about_an_image']",
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -351,7 +351,7 @@
           "type": "string",
           "default": "",
           "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
-          "description": "Identifies the subset of the stored embeddings to use in the semantic search (optional; default is to use just the embeddings from the uploaded document or audio file transcript)."
+          "description": "Corpus Identifier String: Identifies the subset of the stored embeddings to use in the semantic search [Optional] (Default is to use just the embeddings from the uploaded document or audio file transcript)."
         }
       ],
       "credit_costs": {
@@ -402,17 +402,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -451,24 +451,24 @@
       ],
       "model_parameters": [
         {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The maximum number of tokens to generate [Optional]"
+        },
+        {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['ask_question_about_an_image']",
-          "description": "The temperature for text generation"
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 256,
-          "inference_types_parameter_applies_to": "['ask_question_about_an_image']",
-          "description": "The number of tokens to generate"
-        },
-        {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
-          "inference_types_parameter_applies_to": "['ask_question_about_an_image']",
+          "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
         }
       ],
@@ -502,28 +502,22 @@
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
-          "description": "The maximum number of tokens to generate",
-          "inference_types_parameter_applies_to": [
-            "text_completion"
-          ]
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "description": "The temperature for sampling",
-          "inference_types_parameter_applies_to": [
-            "text_completion"
-          ]
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
-          "description": "The number of completions to generate",
-          "inference_types_parameter_applies_to": [
-            "text_completion"
-          ]
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The number of completions to generate"
         }
       ],
       "credit_costs": {
@@ -557,17 +551,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -605,17 +599,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -681,17 +675,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -730,17 +724,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -779,17 +773,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -828,17 +822,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -877,17 +871,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -926,17 +920,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -975,17 +969,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -1024,17 +1018,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -1073,17 +1067,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -1122,17 +1116,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -1412,17 +1406,17 @@
           "type": "int",
           "default": 1000,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
+          "description": "The maximum number of tokens to generate [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
+          "description": "The temperature for sampling [Optional]"
         },
         {
-          "name": "number_of_completions_to_generate",
+          "name": "number_of_completions_to_generate [Optional]",
           "type": "int",
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
@@ -1431,150 +1425,6 @@
       ],
       "credit_costs": {
         "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/google/palm-2-chat-bison",
-      "model_url": "",
-      "description": "Google's PaLM 2 Chat Bison model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openrouter/mistralai/mistral-7b-instruct",
-      "model_url": "",
-      "description": "Mistral's Mistral 7B Instruct model accessed through OpenRouter.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling"
-        },
-        {
-          "name": "number_of_completions_to_generate",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "whisper-large-v2",
-      "model_url": "https://huggingface.co/openai/whisper-large-v2",
-      "description": "Whisper large-v2 model for audio transcription",
-      "supported_inference_type_strings": [
-        "audio_transcription"
-      ],
-      "input_fields": [
-        {
-          "name": "audio",
-          "file_type": "audio",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "language",
-          "type": "string",
-          "default": "en",
-          "description": "The target language for transcription"
-        },
-        {
-          "name": "task",
-          "type": "string",
-          "default": "transcribe",
-          "description": "The task to perform (transcribe or translate)"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.0,
-          "description": "The temperature for sampling"
-        }
-      ],
-      "credit_costs": {
-        "input_tokens": 0,
-        "output_tokens": 1.5,
-        "compute_cost": 1.0,
-        "memory_cost": 0.5
       }
     }
   ]
