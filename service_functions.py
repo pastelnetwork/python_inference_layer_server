@@ -408,8 +408,14 @@ def establish_ssh_tunnel():
         except Exception as e:
             logger.error("Error establishing SSH tunnel: {}".format(e))
         
-def get_audio_length(file_path: str) -> float:
-    audio = MutagenFile(file_path)
+def get_audio_length(audio_input) -> float:
+    if isinstance(audio_input, bytes):
+        audio_file = io.BytesIO(audio_input)
+        audio = MutagenFile(audio_file)
+    elif isinstance(audio_input, str):
+        audio = MutagenFile(audio_input)
+    else:
+        raise ValueError("audio_input must be either bytes or a file path string.")
     if audio is None or not hasattr(audio.info, 'length'):
         raise ValueError("Could not determine the length of the audio file.")
     return audio.info.length
@@ -3750,14 +3756,8 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
                 audio_file_data = input_data_dict['audio']
                 if is_base64_encoded(audio_file_data):
                     audio_file_data = base64.b64decode(audio_file_data)            
-                average_sentences_per_second = 0.2
-                average_tokens_per_second = 3
                 audio_length_seconds = get_audio_length(audio_file_data)
-                estimated_sentences = audio_length_seconds * average_sentences_per_second
-                estimated_tokens = audio_length_seconds * average_tokens_per_second
                 proposed_cost_in_credits = (
-                    (estimated_sentences * float(credit_costs["total_sentences"])) +
-                    (estimated_tokens * float(credit_costs["average_tokens_per_sentence"])) +
                     (1 if model_parameters.get("query_string") else 0) * float(credit_costs["query_string_included"]) +
                     (audio_length_seconds * float(credit_costs["audio_file_length_in_seconds"])) +
                     compute_cost +

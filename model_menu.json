@@ -81,8 +81,8 @@
           "memory_cost": 0.8
         },
         "embedding_audio": {
-          "audio_file_length_in_seconds": 0.04,
-          "query_string_included": 0.4,
+          "audio_file_length_in_seconds": 0.5,
+          "query_string_included": 1.5,
           "compute_cost": 1.2,
           "memory_cost": 1.0
         }
@@ -1178,7 +1178,7 @@
           "type": "int",
           "default": 0,
           "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Random seed to use for generation"
+          "description": "Random seed to use for generation [Optional]"
         },
         {
           "name": "style_preset",
