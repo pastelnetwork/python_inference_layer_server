@@ -12,6 +12,12 @@
     home_dir: "/home/{{ ubuntu_user }}"
     
   tasks:
+    - name: Update and upgrade apt packages
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: dist
+        autoremove: yes
+
     - name: Check if Oh My Zsh is installed
       stat:
         path: "{{ oh_my_zsh_install_flag }}"
