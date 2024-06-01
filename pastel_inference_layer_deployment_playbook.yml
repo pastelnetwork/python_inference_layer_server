@@ -110,9 +110,7 @@
 
     - name: Ensure pyenv is initialized in zsh
       shell: |
-        export PYENV_ROOT="$HOME/.pyenv"
-        export PATH="$PYENV_ROOT/bin:$PATH"
-        eval "$(pyenv init --path)"
+        source {{ home_dir }}/.zshrc
         pyenv --version
       args:
         executable: /bin/zsh
@@ -122,9 +120,7 @@
 
     - name: Ensure pyenv is initialized in bash
       shell: |
-        export PYENV_ROOT="$HOME/.pyenv"
-        export PATH="$PYENV_ROOT/bin:$PATH"
-        eval "$(pyenv init --path)"
+        source {{ home_dir }}/.bashrc
         pyenv --version
       args:
         executable: /bin/bash
@@ -134,9 +130,7 @@
 
     - name: Install Python 3.12 using pyenv in zsh
       shell: |
-        export PYENV_ROOT="$HOME/.pyenv"
-        export PATH="$PYENV_ROOT/bin:$PATH"
-        eval "$(pyenv init --path)"
+        source {{ home_dir }}/.zshrc
         pyenv install -s 3.12
       args:
         executable: /bin/zsh
@@ -144,9 +138,7 @@
 
     - name: Install Python 3.12 using pyenv in bash
       shell: |
-        export PYENV_ROOT="$HOME/.pyenv"
-        export PATH="$PYENV_ROOT/bin:$PATH"
-        eval "$(pyenv init --path)"
+        source {{ home_dir }}/.bashrc
         pyenv install -s 3.12
       args:
         executable: /bin/bash
@@ -154,9 +146,7 @@
 
     - name: Create and activate virtual environment in zsh
       shell: |
-        export PYENV_ROOT="$HOME/.pyenv"
-        export PATH="$PYENV_ROOT/bin:$PATH"
-        eval "$(pyenv init --path)"
+        source {{ home_dir }}/.zshrc
         cd {{ home_dir }}/python_inference_layer_server
         pyenv local 3.12
         python -m venv venv
@@ -171,9 +161,7 @@
 
     - name: Create and activate virtual environment in bash
       shell: |
-        export PYENV_ROOT="$HOME/.pyenv"
-        export PATH="$PYENV_ROOT/bin:$PATH"
-        eval "$(pyenv init --path)"
+        source {{ home_dir }}/.bashrc
         cd {{ home_dir }}/python_inference_layer_server
         pyenv local 3.12
         python -m venv venv
