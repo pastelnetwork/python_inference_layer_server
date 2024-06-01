@@ -1,0 +1,269 @@
+---
+- name: Pastel Inference Layer Deployment
+  hosts: all
+  become: yes
+  vars:
+    ubuntu_user: ubuntu
+    oh_my_zsh_install_script: "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh"
+    rust_install_script: "https://sh.rustup.rs"
+    atuin_install_script: "https://setup.atuin.sh"
+    zshrc_path: "/home/{{ ubuntu_user }}/.zshrc"
+    oh_my_zsh_install_flag: "/home/{{ ubuntu_user }}/.oh-my-zsh"
+    home_dir: "/home/{{ ubuntu_user }}"
+    
+  tasks:
+    - name: Check if Oh My Zsh is installed
+      stat:
+        path: "{{ oh_my_zsh_install_flag }}"
+      register: oh_my_zsh_installed
+
+    - name: Install Oh My Zsh
+      become_user: "{{ ubuntu_user }}"
+      shell: >
+        sh -c "$(curl -fsSL {{ oh_my_zsh_install_script }})" && touch {{ oh_my_zsh_install_flag }}
+      when: not oh_my_zsh_installed.stat.exists
+
+    - name: Install Rust
+      become_user: "{{ ubuntu_user }}"
+      shell: >
+        curl -fsSL {{ rust_install_script }} | sh -s -- -y
+
+    - name: Ensure Rust environment is loaded
+      lineinfile:
+        path: "{{ zshrc_path }}"
+        regexp: 'source $HOME/.cargo/env'
+        line: 'source $HOME/.cargo/env'
+        state: present
+      become_user: "{{ ubuntu_user }}"
+
+    - name: Install Atuin
+      become_user: "{{ ubuntu_user }}"
+      shell: >
+        /bin/bash -c "$(curl --proto '=https' --tlsv1.2 -sSf {{ atuin_install_script }})"
+
+    - name: Ensure Atuin environment is loaded
+      lineinfile:
+        path: "{{ zshrc_path }}"
+        regexp: 'eval "$(atuin init zsh)"'
+        line: 'eval "$(atuin init zsh)"'
+        state: present
+      become_user: "{{ ubuntu_user }}"
+
+    - name: Install dependencies for pyenv
+      apt:
+        name:
+          - build-essential
+          - libssl-dev
+          - zlib1g-dev
+          - libbz2-dev
+          - libreadline-dev
+          - libsqlite3-dev
+          - wget
+          - curl
+          - llvm
+          - libncurses5-dev
+          - libncursesw5-dev
+          - xz-utils
+          - tk-dev
+          - libffi-dev
+          - liblzma-dev
+          - python3-openssl
+          - git
+        state: present
+        update_cache: yes
+
+    - name: Clone pyenv repository
+      git:
+        repo: 'https://github.com/pyenv/pyenv.git'
+        dest: '{{ home_dir }}/.pyenv'
+        update: yes
+        force: yes
+
+    - name: Check if zsh is installed
+      command: which zsh
+      register: zsh_installed
+      ignore_errors: yes
+
+    - name: Set pyenv environment variables in .zshrc if zsh is found
+      blockinfile:
+        path: '{{ home_dir }}/.zshrc'
+        block: |
+          export PYENV_ROOT="$HOME/.pyenv"
+          export PATH="$PYENV_ROOT/bin:$PATH"
+          eval "$(pyenv init --path)"
+      when: zsh_installed.rc == 0
+
+    - name: Set pyenv environment variables in .bashrc if zsh is not found
+      blockinfile:
+        path: '{{ home_dir }}/.bashrc'
+        block: |
+          export PYENV_ROOT="$HOME/.pyenv"
+          export PATH="$PYENV_ROOT/bin:$PATH"
+          eval "$(pyenv init --path)"
+      when: zsh_installed.rc != 0
+
+    - name: Ensure pyenv is initialized in zsh
+      shell: |
+        export PYENV_ROOT="$HOME/.pyenv"
+        export PATH="$PYENV_ROOT/bin:$PATH"
+        eval "$(pyenv init --path)"
+        pyenv --version
+      args:
+        executable: /bin/zsh
+      register: pyenv_version_zsh
+      changed_when: "'pyenv' not in pyenv_version_zsh.stdout"
+      when: zsh_installed.rc == 0
+
+    - name: Ensure pyenv is initialized in bash
+      shell: |
+        export PYENV_ROOT="$HOME/.pyenv"
+        export PATH="$PYENV_ROOT/bin:$PATH"
+        eval "$(pyenv init --path)"
+        pyenv --version
+      args:
+        executable: /bin/bash
+      register: pyenv_version_bash
+      changed_when: "'pyenv' not in pyenv_version_bash.stdout"
+      when: zsh_installed.rc != 0
+
+    - name: Install Python 3.12 using pyenv in zsh
+      shell: |
+        export PYENV_ROOT="$HOME/.pyenv"
+        export PATH="$PYENV_ROOT/bin:$PATH"
+        eval "$(pyenv init --path)"
+        pyenv install -s 3.12
+      args:
+        executable: /bin/zsh
+      when: zsh_installed.rc == 0
+
+    - name: Install Python 3.12 using pyenv in bash
+      shell: |
+        export PYENV_ROOT="$HOME/.pyenv"
+        export PATH="$PYENV_ROOT/bin:$PATH"
+        eval "$(pyenv init --path)"
+        pyenv install -s 3.12
+      args:
+        executable: /bin/bash
+      when: zsh_installed.rc != 0
+
+    - name: Create and activate virtual environment in zsh
+      shell: |
+        export PYENV_ROOT="$HOME/.pyenv"
+        export PATH="$PYENV_ROOT/bin:$PATH"
+        eval "$(pyenv init --path)"
+        cd {{ home_dir }}/python_inference_layer_server
+        pyenv local 3.12
+        python -m venv venv
+        source venv/bin/activate
+        python -m pip install --upgrade pip
+        python -m pip install wheel
+        python -m pip install --upgrade setuptools wheel
+        pip install -r requirements.txt
+      args:
+        executable: /bin/zsh
+      when: zsh_installed.rc == 0
+
+    - name: Create and activate virtual environment in bash
+      shell: |
+        export PYENV_ROOT="$HOME/.pyenv"
+        export PATH="$PYENV_ROOT/bin:$PATH"
+        eval "$(pyenv init --path)"
+        cd {{ home_dir }}/python_inference_layer_server
+        pyenv local 3.12
+        python -m venv venv
+        source venv/bin/activate
+        python -m pip install --upgrade pip
+        python -m pip install wheel
+        python -m pip install --upgrade setuptools wheel
+        pip install -r requirements.txt
+      args:
+        executable: /bin/bash
+      when: zsh_installed.rc != 0
+
+    - name: Determine the user shell
+      shell: echo $SHELL
+      register: user_shell
+
+    - name: Set shell path and profile file
+      set_fact:
+        shell_path: "{{ user_shell.stdout }}"
+        profile_file: "{{ 'zshrc' if '/zsh' in user_shell.stdout else 'bashrc' }}"
+
+    - name: Check if the application directory exists
+      stat:
+        path: ~/python_inference_layer_server
+      register: app_dir
+
+    - name: Clone the repository if the directory doesn't exist
+      git:
+        repo: https://github.com/pastelnetwork/python_inference_layer_server
+        dest: ~/python_inference_layer_server
+      when: not app_dir.stat.exists
+
+    - name: Run initial setup script if the directory was just created
+      shell: |
+        chmod +x initial_inference_server_setup_script.sh
+        ./initial_inference_server_setup_script.sh
+      args:
+        chdir: ~/python_inference_layer_server
+      when: not app_dir.stat.exists
+
+    - name: Update code
+      shell: |
+        source ~/.{{ profile_file }}
+        git stash
+        git pull
+      args:
+        chdir: ~/python_inference_layer_server
+        executable: "{{ shell_path }}"
+
+    - name: Get the name of the existing tmux session
+      shell: tmux list-sessions -F '#{session_name}' | head -1
+      register: tmux_session_name
+      ignore_errors: true
+
+    - name: Create tmux session if it doesn't exist
+      shell: tmux new-session -d -s default_session
+      when: tmux_session_name.stdout == ""
+      args:
+        executable: "{{ shell_path }}"
+
+    - name: Set the tmux session name
+      set_fact:
+        session_name: "{{ tmux_session_name.stdout if tmux_session_name.stdout else 'default_session' }}"
+
+    - name: Check if supernode_script window exists
+      shell: tmux list-windows -t {{ session_name }} -F '#{window_name}' | grep -q '^supernode_script$'
+      register: window_exists
+      ignore_errors: true
+
+    - name: Kill supernode_script window if it exists
+      shell: tmux kill-window -t {{ session_name }}:supernode_script
+      when: window_exists.rc == 0
+
+    - name: Create temporary script
+      copy:
+        content: |
+          #!/bin/{{ 'zsh' if '/zsh' in shell_path else 'bash' }}
+          source ~/.{{ profile_file }}
+          cd ~/python_inference_layer_server
+          pyenv local 3.12
+          source venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade setuptools
+          python -m pip install wheel
+          pip install -r requirements.txt
+          python main.py
+        dest: ~/run_script.sh
+        mode: '0755'
+
+    - name: Launch script in new tmux window
+      shell: |
+        tmux new-window -t {{ session_name }}: -n supernode_script -d "{{ shell_path }} -c '~/run_script.sh'"
+      args:
+        executable: "{{ shell_path }}"
+
+    - name: Remove temporary script
+      file:
+        path: ~/run_script.sh
+        state: absent
