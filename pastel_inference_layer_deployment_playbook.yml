@@ -109,16 +109,28 @@
           eval "$(pyenv init --path)"
       when: zsh_installed.rc != 0
 
+    - name: Ensure pyenv directories have correct permissions
+      file:
+        path: /home/ubuntu/.pyenv
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+        recurse: yes
+
     - name: Ensure pyenv is available and install Python 3.12
+      become: no
       shell: |
         export PATH="/home/ubuntu/.pyenv/bin:$PATH"
         eval "$(pyenv init --path)"
         eval "$(pyenv init -)"
-        eval "$(pyenv virtualenv-init -)"
         pyenv install 3.12
       args:
         executable: /bin/bash
-
+      environment:
+        PYENV_ROOT: "/home/ubuntu/.pyenv"
+      become_user: ubuntu
+      
     - name: Create and activate virtual environment in zsh
       shell: |
         source {{ zshrc_path }}
