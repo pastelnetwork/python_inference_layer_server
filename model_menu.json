@@ -376,6 +376,59 @@
       }
     },
     {
+      "model_name": "swiss_army_llama-nomic-embed-text-v1.5.Q6_K",
+      "model_url": "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5.Q6_K.gguf",
+      "description": "Nomic Embed Text v1.5 is a powerful language model developed by Nomic AI. It provides high-quality embeddings for semantic search and clustering tasks.",
+      "supported_inference_type_strings": [
+        "embedding",
+        "embedding_document",
+        "embedding_audio"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "embeddings",
+          "file_type": "json",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "corpus_identifier_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
+          "description": "Corpus Identifier String: Identifies the subset of the stored embeddings to use in the semantic search [Optional] (Default is to use just the embeddings from the uploaded document or audio file transcript)."
+        }
+      ],
+      "credit_costs": {
+        "embedding": {
+          "input_tokens": 0.2,
+          "compute_cost": 0.2,
+          "memory_cost": 0.1
+        },
+        "embedding_document": {
+          "average_tokens_per_sentence": 0.05,
+          "total_sentences": 0.02,
+          "query_string_included": 0.2,
+          "compute_cost": 0.4,
+          "memory_cost": 0.3
+        },
+        "embedding_audio": {
+          "audio_file_length_in_seconds": 0.01,
+          "query_string_included": 0.2,
+          "compute_cost": 0.5,
+          "memory_cost": 0.4
+        }
+      }
+    },    
+    {
       "model_name": "openai-gpt-4o",
       "model_url": "",
       "description": "GPT-4o is OpenAI's most advanced multimodal model that\u2019s faster and cheaper than GPT-4 Turbo with stronger vision capabilities. The model has 128K context and an October 2023 knowledge cutoff.",
