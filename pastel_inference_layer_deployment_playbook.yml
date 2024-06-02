@@ -109,41 +109,15 @@
           eval "$(pyenv init --path)"
       when: zsh_installed.rc != 0
 
-    - name: Ensure pyenv is initialized in zsh
+    - name: Ensure pyenv is available and install Python 3.12
       shell: |
-        source {{ zshrc_path }}
-        pyenv --version
-      args:
-        executable: /bin/zsh
-      register: pyenv_version_zsh
-      changed_when: "'pyenv' not in pyenv_version_zsh.stdout"
-      when: zsh_installed.rc == 0
-
-    - name: Ensure pyenv is initialized in bash
-      shell: |
-        source {{ bashrc_path }}
-        pyenv --version
+        export PATH="/home/ubuntu/.pyenv/bin:$PATH"
+        eval "$(pyenv init --path)"
+        eval "$(pyenv init -)"
+        eval "$(pyenv virtualenv-init -)"
+        pyenv install 3.12
       args:
         executable: /bin/bash
-      register: pyenv_version_bash
-      changed_when: "'pyenv' not in pyenv_version_bash.stdout"
-      when: zsh_installed.rc != 0
-
-    - name: Install Python 3.12 using pyenv in zsh
-      shell: |
-        source {{ zshrc_path }}
-        pyenv install -s 3.12
-      args:
-        executable: /bin/zsh
-      when: zsh_installed.rc == 0
-
-    - name: Install Python 3.12 using pyenv in bash
-      shell: |
-        source {{ bashrc_path }}
-        pyenv install -s 3.12
-      args:
-        executable: /bin/bash
-      when: zsh_installed.rc != 0
 
     - name: Create and activate virtual environment in zsh
       shell: |
