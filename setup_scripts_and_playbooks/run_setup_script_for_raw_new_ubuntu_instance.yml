@@ -1,0 +1,9 @@
+- name: Run setup script on remote server
+  hosts: all
+  become: yes
+  tasks:
+    - name: Run setup script via curl and bash
+      ansible.builtin.shell: |
+        sudo curl -sSL https://raw.githubusercontent.com/pastelnetwork/ansible_playbook_for_initial_setup_of_fresh_machine_for_sn/master/automatic_sn_setup.sh | sudo bash 
+      args:
+        executable: /bin/bash

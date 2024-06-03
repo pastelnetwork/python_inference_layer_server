@@ -1,0 +1,28 @@
+---
+- name: Verify and clean up model files
+  hosts: all
+  gather_facts: no
+
+  vars:
+    model_files:
+      - { name: "bge-m3-q8_0.gguf", size: 617542656 }
+      - { name: "download.lock", size: 0 }
+      - { name: "Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M.gguf", size: 4920733728 }
+      - { name: "Lexi-Llama-3-8B-Uncensored_Q5_K_M.gguf", size: 5732987136 }
+      - { name: "llava-llama-3-8b-v1_1-int4.gguf", size: 4921246944 }
+      - { name: "llava-llama-3-8b-v1_1-mmproj-f16.gguf", size: 624434368 }
+      - { name: "Meta-Llama-3-8B-Instruct.Q3_K_S.gguf", size: 3665011936 }
+      - { name: "nomic-embed-text-v1.5.Q6_K.gguf", size: 113042528 }
+
+  tasks:
+    - name: Check and delete invalid files
+      shell: |
+        if [ -f /home/ubuntu/swiss_army_llama/models/{{ item.name }} ]; then
+          actual_size=$(stat -c%s /home/ubuntu/swiss_army_llama/models/{{ item.name }})
+          if [ "$actual_size" -ne {{ item.size }} ]; then
+            rm /home/ubuntu/swiss_army_llama/models/{{ item.name }}
+          fi
+        fi
+      loop: "{{ model_files }}"
+      args:
+        warn: false

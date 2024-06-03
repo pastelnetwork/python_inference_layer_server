@@ -1,0 +1,15 @@
+---
+- name: Copy a specific files to all machines
+  hosts: all
+  tasks:
+    - name: Copy key to remote directory with mode 600
+      copy:
+        src: "vastai_privkey"
+        dest: "/home/ubuntu/vastai_privkey"
+        mode: '0600'
+
+    - name: Copy key to remote directory with mode 600
+      copy:
+        src: "env_encryption_key_for_supernode_inference_app"
+        dest: "/home/ubuntu/env_encryption_key_for_supernode_inference_app"
+        mode: '0600'

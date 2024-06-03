@@ -1,0 +1,102 @@
+---
+- name: Update code and run Python script in tmux
+  hosts: all
+  gather_facts: false
+  become: true
+  become_user: ubuntu
+  tasks:
+    - name: Determine the user shell
+      shell: echo $SHELL
+      register: user_shell
+      async: 600
+      poll: 10
+      ignore_errors: yes
+
+    - name: Set shell path and profile file
+      set_fact:
+        shell_path: "{{ user_shell.stdout }}"
+        profile_file: "{{ 'zshrc' if '/zsh' in user_shell.stdout else 'bashrc' }}"
+      ignore_errors: yes
+
+    - name: Update code
+      shell: |
+        source ~/.{{ profile_file }}
+        git stash
+        git pull
+      args:
+        chdir: /home/ubuntu/python_inference_layer_server
+        executable: "{{ shell_path }}"
+      async: 600
+      poll: 10
+      ignore_errors: yes
+
+    - name: Get the name of the existing tmux session
+      shell: tmux list-sessions -F '#{session_name}' | head -1
+      register: tmux_session_name
+      ignore_errors: yes
+      async: 600
+      poll: 10
+
+    - name: Create tmux session if it doesn't exist
+      shell: tmux new-session -d -s default_session
+      when: tmux_session_name.stdout == ""
+      args:
+        executable: "{{ shell_path }}"
+      async: 600
+      poll: 10
+      ignore_errors: yes
+
+    - name: Set the tmux session name
+      set_fact:
+        session_name: "{{ tmux_session_name.stdout if tmux_session_name.stdout else 'default_session' }}"
+      ignore_errors: yes
+
+    - name: Check if supernode_script window exists
+      shell: tmux list-windows -t {{ session_name }} -F '#{window_name}' | grep -q '^supernode_script$'
+      register: window_exists
+      ignore_errors: yes
+      async: 600
+      poll: 10
+
+    - name: Kill supernode_script window if it exists
+      shell: tmux kill-window -t {{ session_name }}:supernode_script
+      when: window_exists.rc == 0
+      async: 600
+      poll: 10
+      ignore_errors: yes
+
+    - name: Create temporary script
+      copy:
+        content: |
+          #!/bin/{{ 'zsh' if '/zsh' in shell_path else 'bash' }}
+          source ~/.{{ profile_file }}
+          cd /home/ubuntu/python_inference_layer_server
+          pyenv local 3.12
+          source venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade setuptools
+          python -m pip install wheel
+          pip install -r requirements.txt
+          python main.py
+        dest: /home/ubuntu/run_script.sh
+        mode: '0755'
+      retries: 3
+      delay: 60
+      ignore_errors: yes
+
+    - name: Launch script in new tmux window
+      shell: |
+        tmux new-window -t {{ session_name }}: -n supernode_script -d "{{ shell_path }} -c '/home/ubuntu/run_script.sh'"
+      args:
+        executable: "{{ shell_path }}"
+      async: 600
+      poll: 10
+      ignore_errors: yes
+
+    - name: Remove temporary script
+      file:
+        path: /home/ubuntu/run_script.sh
+        state: absent
+      retries: 3
+      delay: 60
+      ignore_errors: yes
