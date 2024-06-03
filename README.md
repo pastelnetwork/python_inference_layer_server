@@ -1995,42 +1995,28 @@ The complete playbook is shown below, with explanation to follow:
           eval "$(pyenv init --path)"
       when: zsh_installed.rc != 0
 
-    - name: Ensure pyenv is initialized in zsh
-      shell: |
-        source {{ zshrc_path }}
-        pyenv --version
-      args:
-        executable: /bin/zsh
-      register: pyenv_version_zsh
-      changed_when: "'pyenv' not in pyenv_version_zsh.stdout"
-      when: zsh_installed.rc == 0
+    - name: Ensure pyenv directories have correct permissions
+      file:
+        path: /home/ubuntu/.pyenv
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+        recurse: yes
 
-    - name: Ensure pyenv is initialized in bash
+    - name: Ensure pyenv is available and install Python 3.12
+      become: no
       shell: |
-        source {{ bashrc_path }}
-        pyenv --version
-      args:
-        executable: /bin/bash
-      register: pyenv_version_bash
-      changed_when: "'pyenv' not in pyenv_version_bash.stdout"
-      when: zsh_installed.rc != 0
-
-    - name: Install Python 3.12 using pyenv in zsh
-      shell: |
-        source {{ zshrc_path }}
-        pyenv install -s 3.12
-      args:
-        executable: /bin/zsh
-      when: zsh_installed.rc == 0
-
-    - name: Install Python 3.12 using pyenv in bash
-      shell: |
-        source {{ bashrc_path }}
-        pyenv install -s 3.12
+        export PATH="/home/ubuntu/.pyenv/bin:$PATH"
+        eval "$(pyenv init --path)"
+        eval "$(pyenv init -)"
+        pyenv install 3.12
       args:
         executable: /bin/bash
-      when: zsh_installed.rc != 0
-
+      environment:
+        PYENV_ROOT: "/home/ubuntu/.pyenv"
+      become_user: ubuntu
+      
     - name: Create and activate virtual environment in zsh
       shell: |
         source {{ zshrc_path }}
@@ -2088,7 +2074,7 @@ The complete playbook is shown below, with explanation to follow:
       args:
         chdir: /home/{{ ubuntu_user }}/python_inference_layer_server
       when: not app_dir.stat.exists
-      
+
     - name: Update code
       shell: |
         source /home/{{ ubuntu_user }}/.{{ profile_file }}
