@@ -2083,12 +2083,12 @@ The complete playbook is shown below, with explanation to follow:
 
     - name: Run initial setup script if the directory was just created
       shell: |
-        chmod +x initial_inference_server_setup_script.sh
-        ./initial_inference_server_setup_script.sh
+        chmod +x setup_scripts_and_playbooks/initial_inference_server_setup_script.sh
+        ./setup_scripts_and_playbooks/initial_inference_server_setup_script.sh
       args:
         chdir: /home/{{ ubuntu_user }}/python_inference_layer_server
       when: not app_dir.stat.exists
-
+      
     - name: Update code
       shell: |
         source /home/{{ ubuntu_user }}/.{{ profile_file }}
