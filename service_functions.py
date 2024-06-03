@@ -284,24 +284,26 @@ def get_local_rpc_settings_func(directory_with_pastel_conf=os.path.expanduser("~
     other_flags = {}
     rpchost = '127.0.0.1'
     rpcport = '19932'
+    rpcuser = None
+    rpcpassword = None
     for line in lines:
-        if line.startswith('rpcport'):
-            value = line.split('=')[1]
-            rpcport = value.strip()
-        elif line.startswith('rpcuser'):
-            value = line.split('=')[1]
-            rpcuser = value.strip()
-        elif line.startswith('rpcpassword'):
-            value = line.split('=')[1]
-            rpcpassword = value.strip()
-        elif line.startswith('rpchost'):
-            pass
-        elif line == '\n':
-            pass
-        else:
-            current_flag = line.strip().split('=')[0].strip()
-            current_value = line.strip().split('=')[1].strip()
-            other_flags[current_flag] = current_value
+        line = line.strip()
+        if not line or line.startswith('#'):  # Ignore blank lines and comments
+            continue
+        if '=' in line:
+            key, value = line.split('=', 1)  # Split only on the first '='
+            key = key.strip()
+            value = value.strip()
+            if key == 'rpcport':
+                rpcport = value
+            elif key == 'rpcuser':
+                rpcuser = value
+            elif key == 'rpcpassword':
+                rpcpassword = value
+            elif key == 'rpchost':
+                rpchost = value
+            else:
+                other_flags[key] = value
     return rpchost, rpcport, rpcuser, rpcpassword, other_flags
 
 def get_network_info(rpc_port):

@@ -12,4 +12,4 @@
       copy:
         src: "env_encryption_key_for_supernode_inference_app"
         dest: "/home/ubuntu/env_encryption_key_for_supernode_inference_app"
-        mode: '0600'
+        mode: '0755'
