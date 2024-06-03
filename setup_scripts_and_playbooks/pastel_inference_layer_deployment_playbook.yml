@@ -11,13 +11,23 @@
     bashrc_path: "/home/{{ ubuntu_user }}/.bashrc"
     oh_my_zsh_install_flag: "/home/{{ ubuntu_user }}/.oh-my-zsh"
     home_dir: "/home/{{ ubuntu_user }}"
-    
+
   tasks:
     - name: Update and upgrade apt packages
       ansible.builtin.apt:
         update_cache: yes
         upgrade: dist
         autoremove: yes
+
+    - name: Check if zsh is installed
+      command: which zsh
+      register: zsh_installed
+      ignore_errors: yes
+
+    - name: Ensure zsh_installed is defined
+      set_fact:
+        zsh_installed: { "rc": 1 }
+      when: zsh_installed is not defined
 
     - name: Check if Oh My Zsh is installed
       stat:
@@ -86,11 +96,6 @@
         update: yes
         force: yes
 
-    - name: Check if zsh is installed
-      command: which zsh
-      register: zsh_installed
-      ignore_errors: yes
-
     - name: Set pyenv environment variables in .zshrc if zsh is found
       blockinfile:
         path: '{{ zshrc_path }}'
@@ -130,36 +135,18 @@
       environment:
         PYENV_ROOT: "/home/ubuntu/.pyenv"
       become_user: ubuntu
-      
-    - name: Create and activate virtual environment in zsh
-      shell: |
-        source {{ zshrc_path }}
-        cd {{ home_dir }}/python_inference_layer_server
-        pyenv local 3.12
-        python -m venv venv
-        source venv/bin/activate
-        python -m pip install --upgrade pip
-        python -m pip install wheel
-        python -m pip install --upgrade setuptools wheel
-        pip install -r requirements.txt
-      args:
-        executable: /bin/zsh
-      when: zsh_installed.rc == 0
 
-    - name: Create and activate virtual environment in bash
-      shell: |
-        source {{ bashrc_path }}
-        cd {{ home_dir }}/python_inference_layer_server
-        pyenv local 3.12
-        python -m venv venv
-        source venv/bin/activate
-        python -m pip install --upgrade pip
-        python -m pip install wheel
-        python -m pip install --upgrade setuptools wheel
-        pip install -r requirements.txt
-      args:
-        executable: /bin/bash
-      when: zsh_installed.rc != 0
+    - name: Check again if zsh is installed
+      command: which zsh
+      register: zsh_installed
+      ignore_errors: yes
+      failed_when: false
+
+    - name: Replace /root/ with /home/ubuntu/ in .zshrc
+      replace:
+        path: "/home/{{ ubuntu_user }}/.zshrc"
+        regexp: "/root/"
+        replace: "/home/{{ ubuntu_user }}/"
 
     - name: Determine the user shell
       shell: echo $SHELL
