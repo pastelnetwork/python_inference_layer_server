@@ -86,6 +86,9 @@
           - liblzma-dev
           - python3-openssl
           - git
+          - redis
+          - redis-server
+          - redis-tools
         state: present
         update_cache: yes
 
