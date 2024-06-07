@@ -48,9 +48,11 @@ from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
 from PIL import Image
+from cachetools import TTLCache
 
 encryption_key = None
 magika = Magika()
+cache = TTLCache(maxsize=100, ttl=60) # Initialize the cache with a TTL of 1 minute
 
 SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "OPENAI_API_KEY", "CLAUDE3_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "STABILITY_API_KEY", "OPENROUTER_API_KEY"]
 LOCAL_PASTEL_ID_PASSPHRASE = None
@@ -405,7 +407,7 @@ def establish_ssh_tunnel():
             logger.error("SSH tunnel error: {}".format(e))
         except Exception as e:
             logger.error("Error establishing SSH tunnel: {}".format(e))
-        
+                
 def get_audio_length(audio_input) -> float:
     if isinstance(audio_input, bytes):
         audio_file = io.BytesIO(audio_input)
@@ -703,7 +705,37 @@ async def check_masternode_top_func():
     masternode_top_command_output = await rpc_connection.masternode('top')
     return masternode_top_command_output
 
-async def check_supernode_list_func():
+async def filter_supernodes_by_ping_response_time_and_port_response(supernode_list, max_response_time_in_milliseconds=800):
+    cache_key = "filtered_supernodes"
+    cached_data = cache.get(cache_key) # Retrieve cached data
+    if cached_data:
+        return cached_data
+    full_supernode_list = supernode_list # Fetch the full supernode list if only pastelIDs are provided
+    if isinstance(supernode_list[0], str):
+        full_supernode_list = await check_supernode_list_func()
+        full_supernode_list = [node for node in full_supernode_list if node['extKey'] in supernode_list]
+    async def ping_and_check_ports(supernode):
+        ip_address_port = supernode.get('ipaddress:port')
+        if not ip_address_port:
+            return None
+        ip_address = ip_address_port.split(":")[0]
+        try:
+            async with httpx.AsyncClient() as client: # Ping the IP address
+                response = await client.get(f'http://{ip_address}:7123', timeout=max_response_time_in_milliseconds / 1000)
+                if response.status_code != 200:
+                    return None
+                response = await client.get(f'http://{ip_address}:8089', timeout=max_response_time_in_milliseconds / 1000)
+                if response.status_code != 200:
+                    return None
+            return supernode
+        except httpx.RequestError:
+            return None
+    ping_results = await asyncio.gather(*(ping_and_check_ports(supernode) for supernode in full_supernode_list))
+    filtered_supernodes = [supernode['extKey'] for supernode in ping_results if supernode is not None]
+    cache[cache_key] = filtered_supernodes
+    return filtered_supernodes
+
+async def check_supernode_list_func(use_filtering_of_supernodes_based_on_ping_and_port_responses=0):
     global rpc_connection
     masternode_list_full_command_output = await rpc_connection.masternodelist('full')
     masternode_list_rank_command_output = await rpc_connection.masternodelist('rank')
@@ -729,8 +761,13 @@ async def check_supernode_list_func():
     masternode_list_full_df['lastpaidtime'] = pd.to_datetime(masternode_list_full_df['lastpaidtime'], unit='s')
     masternode_list_full_df['activeseconds'] = masternode_list_full_df['activeseconds'].astype(int)
     masternode_list_full_df['lastpaidblock'] = masternode_list_full_df['lastpaidblock'].astype(int)
-    masternode_list_full_df['activedays'] = masternode_list_full_df['activeseconds'].apply(lambda x: float(x)/86400.0)
+    masternode_list_full_df['activedays'] = masternode_list_full_df['activeseconds'].apply(lambda x: float(x) / 86400.0)
     masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int, errors='ignore')
+    masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['supernode_status'].isin(['ENABLED', 'PRE_ENABLED'])]
+    if use_filtering_of_supernodes_based_on_ping_and_port_responses:
+        supernode_list = masternode_list_full_df['extKey'].tolist()
+        filtered_supernodes = await filter_supernodes_by_ping_response_time_and_port_response(supernode_list)
+        masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['extKey'].isin(filtered_supernodes)]
     masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['supernode_status'].isin(['ENABLED', 'PRE_ENABLED'])]
     # If you need to temporarily exclude a given machine:
     # masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['ipaddress:port'] != '154.38.164.75:29933']

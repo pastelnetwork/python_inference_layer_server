@@ -1,6 +1,7 @@
 aiosqlite
 anthropic
 asyncio
+cachetools
 cryptography
 fastapi
 fuzzywuzzy 
