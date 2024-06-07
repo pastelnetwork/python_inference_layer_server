@@ -5201,8 +5201,9 @@ async def full_rescan_burn_transactions():
         burn_transactions = await rpc_connection.scanburntransactions("*")
         chunk_size = 500  # Adjust the chunk size as needed
         ignore_unconfirmed_transactions = 1
-        decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, ignore_unconfirmed_transactions)
-        logger.info(f"Decoded {len(decoded_tx_data_list):,} new burn transactions in total!")
+        if burn_transactions:
+            decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, ignore_unconfirmed_transactions)
+            logger.info(f"Decoded {len(decoded_tx_data_list):,} new burn transactions in total!")
     if not block_hash_exists:
         logger.info("No block hash records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
@@ -6051,8 +6052,6 @@ rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings
 network, burn_address = get_network_info(rpc_port)
 masternode_collateral_amount = required_collateral(network)
 rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
-if 'genpassphrase' in other_flags.keys():
-    LOCAL_PASTEL_ID_PASSPHRASE = other_flags['genpassphrase']
 
 if rpc_port == '9932':
     burn_address = 'PtpasteLBurnAddressXXXXXXXXXXbJ5ndd'
@@ -6065,6 +6064,8 @@ encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the 
 decrypt_sensitive_fields()
 MY_PASTELID = asyncio.run(get_my_local_pastelid_func())
 logger.info(f"Using local PastelID: {MY_PASTELID}")
+if 'genpassphrase' in other_flags.keys():
+    LOCAL_PASTEL_ID_PASSPHRASE = other_flags['genpassphrase']
 
 use_encrypt_new_secrets = 0
 if use_encrypt_new_secrets:
