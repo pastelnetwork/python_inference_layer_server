@@ -129,7 +129,7 @@ WantedBy=multi-user.target
 def ensure_pyenv_setup():
     if not is_pyenv_installed():
         logger.info("Installing pyenv...")
-        run_command(["sudo apt-get update && sudo apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python3-openssl git redis redis-tools"])
+        run_command(["sudo apt-get update && sudo apt-get install -y build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev python3-openssl git redis redis-server redis-tools"])
         run_command(["curl https://pyenv.run | bash"])
     if not is_python_3_12_installed():
         logger.info("Installing Python 3.12 using pyenv...")

@@ -52,9 +52,8 @@ from PIL import Image
 encryption_key = None
 magika = Magika()
 
-SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "MY_PASTELID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "OPENAI_API_KEY", "CLAUDE3_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "STABILITY_API_KEY", "OPENROUTER_API_KEY"]
+SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "OPENAI_API_KEY", "CLAUDE3_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "STABILITY_API_KEY", "OPENROUTER_API_KEY"]
 LOCAL_PASTEL_ID_PASSPHRASE = None
-MY_PASTELID_PASSPHRASE = None
 SWISS_ARMY_LLAMA_SECURITY_TOKEN = None
 OPENAI_API_KEY = None
 CLAUDE3_API_KEY = None
@@ -132,9 +131,8 @@ def encrypt_sensitive_data(data, encryption_key):
     return url_encoded_encrypted_data
 
 def decrypt_sensitive_fields():
-    global LOCAL_PASTEL_ID_PASSPHRASE, MY_PASTELID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, OPENAI_API_KEY, CLAUDE3_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, STABILITY_API_KEY, OPENROUTER_API_KEY, encryption_key
+    global LOCAL_PASTEL_ID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, OPENAI_API_KEY, CLAUDE3_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, STABILITY_API_KEY, OPENROUTER_API_KEY, encryption_key
     LOCAL_PASTEL_ID_PASSPHRASE = decrypt_sensitive_data(get_env_value("LOCAL_PASTEL_ID_PASSPHRASE"), encryption_key)
-    MY_PASTELID_PASSPHRASE = decrypt_sensitive_data(get_env_value("MY_PASTELID_PASSPHRASE"), encryption_key)
     SWISS_ARMY_LLAMA_SECURITY_TOKEN = decrypt_sensitive_data(get_env_value("SWISS_ARMY_LLAMA_SECURITY_TOKEN"), encryption_key)
     OPENAI_API_KEY = decrypt_sensitive_data(get_env_value("OPENAI_API_KEY"), encryption_key)
     CLAUDE3_API_KEY = decrypt_sensitive_data(get_env_value("CLAUDE3_API_KEY"), encryption_key)
@@ -6053,6 +6051,8 @@ rpc_host, rpc_port, rpc_user, rpc_password, other_flags = get_local_rpc_settings
 network, burn_address = get_network_info(rpc_port)
 masternode_collateral_amount = required_collateral(network)
 rpc_connection = AsyncAuthServiceProxy(f"http://{rpc_user}:{rpc_password}@{rpc_host}:{rpc_port}")
+if 'genpassphrase' in other_flags.keys():
+    LOCAL_PASTEL_ID_PASSPHRASE = other_flags['genpassphrase']
 
 if rpc_port == '9932':
     burn_address = 'PtpasteLBurnAddressXXXXXXXXXXbJ5ndd'
