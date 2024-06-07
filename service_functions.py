@@ -11,6 +11,7 @@ import math
 import statistics
 import time
 import uuid
+import socket
 import subprocess
 import random
 import re
@@ -53,6 +54,7 @@ from cachetools import TTLCache
 encryption_key = None
 magika = Magika()
 cache = TTLCache(maxsize=100, ttl=3*60) # Initialize the cache with a TTL of 3 minutes
+local_ip = get_local_ip()
 
 SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "OPENAI_API_KEY", "CLAUDE3_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "STABILITY_API_KEY", "OPENROUTER_API_KEY"]
 LOCAL_PASTEL_ID_PASSPHRASE = None
@@ -705,6 +707,10 @@ async def check_masternode_top_func():
     masternode_top_command_output = await rpc_connection.masternode('top')
     return masternode_top_command_output
 
+def get_local_ip():
+    hostname = socket.gethostname()
+    return socket.gethostbyname(hostname)
+
 async def filter_supernodes_by_ping_response_time_and_port_response(supernode_list, max_response_time_in_milliseconds=800):
     cache_key = "filtered_supernodes"
     current_time = time.time()
@@ -717,7 +723,7 @@ async def filter_supernodes_by_ping_response_time_and_port_response(supernode_li
         full_supernode_list = full_supernode_list_df[full_supernode_list_df['extKey'].isin(supernode_list)]
     async def ping_and_check_ports(supernode):
         ip_address_port = supernode.get('ipaddress:port')
-        if not ip_address_port:
+        if not ip_address_port or ip_address_port.startswith(local_ip):
             return None
         ip_address = ip_address_port.split(":")[0]
         try:
