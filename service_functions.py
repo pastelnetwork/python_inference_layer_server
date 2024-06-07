@@ -5053,23 +5053,26 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
 async def process_transactions_in_chunks_old(transactions, chunk_size):
     decoded_tx_data_list = []
     chunk_count = 0
-    for i in range(0, len(transactions), chunk_size):
-        chunk = transactions[i:i + chunk_size]
-        chunk_count += 1
-        logger.info(f"Processing burn transactions chunk {chunk_count} of {math.ceil(len(transactions) / chunk_size)} (total transaction count of {len(transactions):,})...")
-        # Create tasks for each transaction that needs processing
-        tasks = [create_transaction_task(transaction) for transaction in chunk if transaction['category'] == 'receive' and transaction['amount'] > 0]
-        transactions_to_insert = await asyncio.gather(*tasks)
-        # Filter out None values and prepare to bulk insert
-        transactions_to_insert = [txn for txn in transactions_to_insert if txn]
-        if transactions_to_insert:
-            async with db_code.Session() as db:
-                db.add_all(transactions_to_insert)
-                await db.commit()
-                logger.info(f"Added {len(transactions_to_insert):,} new burn transactions to the database successfully.")
-        await db_code.consolidate_wal_data()  # Consolidate WAL after processing each chunk
-        decoded_tx_data_list.extend(chunk)  # Optional: Keep track of processed chunks
-    return decoded_tx_data_list
+    if transactions:
+        for i in range(0, len(transactions), chunk_size):
+            chunk = transactions[i:i + chunk_size]
+            chunk_count += 1
+            logger.info(f"Processing burn transactions chunk {chunk_count} of {math.ceil(len(transactions) / chunk_size)} (total transaction count of {len(transactions):,})...")
+            # Create tasks for each transaction that needs processing
+            tasks = [create_transaction_task(transaction) for transaction in chunk if transaction['category'] == 'receive' and transaction['amount'] > 0]
+            transactions_to_insert = await asyncio.gather(*tasks)
+            # Filter out None values and prepare to bulk insert
+            transactions_to_insert = [txn for txn in transactions_to_insert if txn]
+            if transactions_to_insert:
+                async with db_code.Session() as db:
+                    db.add_all(transactions_to_insert)
+                    await db.commit()
+                    logger.info(f"Added {len(transactions_to_insert):,} new burn transactions to the database successfully.")
+            await db_code.consolidate_wal_data()  # Consolidate WAL after processing each chunk
+            decoded_tx_data_list.extend(chunk)  # Optional: Keep track of processed chunks
+        return decoded_tx_data_list
+    else:
+        return []
 
 async def process_transactions_in_chunks(transactions, chunk_size, ignore_unconfirmed_transactions=0):
     decoded_tx_data_list = []
