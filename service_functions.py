@@ -739,13 +739,22 @@ async def filter_supernodes_by_ping_response_time_and_port_response(supernode_li
             return supernode
         except httpx.RequestError:
             return None
+    ping_results = []
     random_number = random.random()
     if random_number < probability_of_port_check:
         ping_results = await asyncio.gather(*(ping_and_check_ports(supernode) for supernode in full_supernode_list.to_dict(orient='records')))
         filtered_supernodes = [supernode['extKey'] for supernode in ping_results if supernode is not None]
+        successful_nodes = {supernode['extKey'] for supernode in ping_results if supernode is not None}
+        failed_nodes = {supernode['extKey'] for supernode in full_supernode_list.to_dict(orient='records') if supernode['extKey'] not in successful_nodes}
+        cache[cache_key] = {
+            'successful': successful_nodes,
+            'failed': failed_nodes
+        }
     else:
-        filtered_supernodes = [supernode['extKey'] for supernode in ping_results]
-    cache[cache_key] = filtered_supernodes
+        cached_results = cache.get(cache_key, {'successful': [], 'failed': []})
+        successful_nodes = cached_results['successful']
+        failed_nodes = cached_results['failed']
+        filtered_supernodes = list(successful_nodes) + list(failed_nodes)
     return filtered_supernodes
 
 async def check_supernode_list_func(use_filtering_of_supernodes_based_on_ping_and_port_responses=0):
@@ -777,13 +786,10 @@ async def check_supernode_list_func(use_filtering_of_supernodes_based_on_ping_an
     masternode_list_full_df['activedays'] = masternode_list_full_df['activeseconds'].apply(lambda x: float(x) / 86400.0)
     masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int, errors='ignore')
     masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['supernode_status'].isin(['ENABLED', 'PRE_ENABLED'])]
-    if use_filtering_of_supernodes_based_on_ping_and_port_responses:
+    if use_filtering_of_supernodes_based_on_ping_and_port_responses == 1:
         supernode_list = masternode_list_full_df['extKey'].tolist()
         filtered_supernodes = await filter_supernodes_by_ping_response_time_and_port_response(supernode_list)
         masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['extKey'].isin(filtered_supernodes)]
-    masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['supernode_status'].isin(['ENABLED', 'PRE_ENABLED'])]
-    # If you need to temporarily exclude a given machine:
-    # masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['ipaddress:port'] != '154.38.164.75:29933']
     masternode_list_full_df__json = masternode_list_full_df.to_json(orient='index')
     return masternode_list_full_df, masternode_list_full_df__json
     
