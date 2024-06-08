@@ -713,6 +713,7 @@ async def check_masternode_top_func():
     return masternode_top_command_output
 
 async def filter_supernodes_by_ping_response_time_and_port_response(supernode_list, max_response_time_in_milliseconds=800):
+    probability_of_port_check = 0.1
     cache_key = "filtered_supernodes"
     current_time = time.time()
     cached_data = cache.get(cache_key)
@@ -738,8 +739,12 @@ async def filter_supernodes_by_ping_response_time_and_port_response(supernode_li
             return supernode
         except httpx.RequestError:
             return None
-    ping_results = await asyncio.gather(*(ping_and_check_ports(supernode) for supernode in full_supernode_list.to_dict(orient='records')))
-    filtered_supernodes = [supernode['extKey'] for supernode in ping_results if supernode is not None]
+    random_number = random.random()
+    if random_number < probability_of_port_check:
+        ping_results = await asyncio.gather(*(ping_and_check_ports(supernode) for supernode in full_supernode_list.to_dict(orient='records')))
+        filtered_supernodes = [supernode['extKey'] for supernode in ping_results if supernode is not None]
+    else:
+        filtered_supernodes = [supernode['extKey'] for supernode in ping_results]
     cache[cache_key] = filtered_supernodes
     return filtered_supernodes
 
