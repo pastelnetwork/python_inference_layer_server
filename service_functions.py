@@ -175,6 +175,7 @@ TARGET_VALUE_PER_CREDIT_IN_USD = config.get("TARGET_VALUE_PER_CREDIT_IN_USD", de
 TARGET_PROFIT_MARGIN = config.get("TARGET_PROFIT_MARGIN", default=0.1, cast=float)
 MINIMUM_COST_IN_CREDITS = config.get("MINIMUM_COST_IN_CREDITS", default=0.1, cast=float)
 MINUTES_BETWEEN_REFRESHING_SUPERNODE_PING_AND_PORT_RESPONSE_DATA = config.get("MINUTES_BETWEEN_REFRESHING_SUPERNODE_PING_AND_PORT_RESPONSE_DATA", default=3, cast=int)
+PROBABILITY_OF_PORT_CHECK = config.get("PROBABILITY_OF_PORT_CHECK", default=0.03, cast=float)
 CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER = config.get("CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER", default=10, cast=int) # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis     
 MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET = config.get("MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET", default=50, cast=int)
 MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
@@ -713,7 +714,6 @@ async def check_masternode_top_func():
     return masternode_top_command_output
 
 async def filter_supernodes_by_ping_response_time_and_port_response(supernode_list, max_response_time_in_milliseconds=800):
-    probability_of_port_check = 0.1
     cache_key = "filtered_supernodes"
     current_time = time.time()
     cached_data = cache.get(cache_key)
@@ -741,7 +741,7 @@ async def filter_supernodes_by_ping_response_time_and_port_response(supernode_li
             return None
     ping_results = []
     random_number = random.random()
-    if random_number < probability_of_port_check:
+    if random_number < PROBABILITY_OF_PORT_CHECK:
         ping_results = await asyncio.gather(*(ping_and_check_ports(supernode) for supernode in full_supernode_list.to_dict(orient='records')))
         filtered_supernodes = [supernode['extKey'] for supernode in ping_results if supernode is not None]
         successful_nodes = {supernode['extKey'] for supernode in ping_results if supernode is not None}
