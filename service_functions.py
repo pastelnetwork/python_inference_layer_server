@@ -729,10 +729,10 @@ async def filter_supernodes_by_ping_response_time_and_port_response(supernode_li
         ip_address = ip_address_port.split(":")[0]
         try:
             async with httpx.AsyncClient() as client:
-                response = await client.get(f'http://{ip_address}:7123', timeout=max_response_time_in_milliseconds / 1000)
+                response = await client.get(f'http://{ip_address}:7123/liveness_ping', timeout=max_response_time_in_milliseconds / 1000)
                 if response.status_code != 200:
                     return None
-                response = await client.get(f'http://{ip_address}:8089', timeout=max_response_time_in_milliseconds / 1000)
+                response = await client.get(f'http://{ip_address}:8089/get_list_of_available_model_names', timeout=max_response_time_in_milliseconds / 1000)
                 if response.status_code != 200:
                     return None
             return supernode

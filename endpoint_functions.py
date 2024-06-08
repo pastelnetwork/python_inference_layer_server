@@ -37,6 +37,12 @@ class DateTimeEncoder(JSONEncoder):
     def default(self, obj):
         if isinstance(obj, (datetime.date, datetime.datetime)):
             return obj.isoformat()
+        
+@router.get("/liveness_ping", response_model=dict)
+async def liveness_ping_function():
+    current_utc_timestamp = datetime.now(timezone.utc)
+    response_dict = {'status': 'alive', 'timestamp': current_utc_timestamp}
+    return response_dict     
 
 @router.get("/supernode_list_json", response_model=dict)
 async def get_supernode_list_json(
