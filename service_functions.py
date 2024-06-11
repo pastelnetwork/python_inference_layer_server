@@ -183,7 +183,7 @@ MAXIMUM_LOCAL_UTC_TIMESTAMP_DIFFERENCE_IN_SECONDS = config.get("MAXIMUM_LOCAL_UT
 MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS = config.get("MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS", default=1, cast=int)
 MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED = config.get("MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED", default=10, cast=int)
 MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION = config.get("MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION", default=3, cast=int)
-MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES = config.get("MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES", default=10, cast=int)
+MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES = config.get("MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES", default=10, cast=int)
 BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS = config.get("BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS", default=3, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE", default=0.51, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE", default=0.85, cast=float)
@@ -713,7 +713,6 @@ async def check_masternode_top_func():
     masternode_top_command_output = await rpc_connection.masternode('top')
     return masternode_top_command_output
 
-
 async def filter_supernodes_by_ping_response_time_and_port_response(supernode_list, max_response_time_in_milliseconds=800):
     cache_key = "filtered_supernodes"
     cached_data = cache.get(cache_key)
@@ -795,7 +794,7 @@ async def check_supernode_list_func(use_filtering_of_supernodes_based_on_ping_an
     
 async def get_local_machine_supernode_data_func():
     local_machine_ip = get_external_ip_func()
-    supernode_list_full_df, _ = await check_supernode_list_func(0)
+    supernode_list_full_df, _ = await check_supernode_list_func()
     proper_port_number = statistics.mode([x.split(':')[1] for x in supernode_list_full_df['ipaddress:port'].values.tolist()])
     local_machine_ip_with_proper_port = local_machine_ip + ':' + proper_port_number
     local_machine_supernode_data = supernode_list_full_df[supernode_list_full_df['ipaddress:port'] == local_machine_ip_with_proper_port]
@@ -813,7 +812,7 @@ async def get_my_local_pastelid_func():
     return my_local_pastelid
 
 async def get_sn_data_from_pastelid_func(specified_pastelid):
-    supernode_list_full_df, _ = await check_supernode_list_func(0)
+    supernode_list_full_df, _ = await check_supernode_list_func()
     specified_machine_supernode_data = supernode_list_full_df[supernode_list_full_df['extKey'] == specified_pastelid]
     if len(specified_machine_supernode_data) == 0:
         logger.error('Specified machine is not a supernode!')
@@ -822,7 +821,7 @@ async def get_sn_data_from_pastelid_func(specified_pastelid):
         return specified_machine_supernode_data
 
 async def get_sn_data_from_sn_pubkey_func(specified_sn_pubkey):
-    supernode_list_full_df, _ = await check_supernode_list_func(0)
+    supernode_list_full_df, _ = await check_supernode_list_func()
     specified_machine_supernode_data = supernode_list_full_df[supernode_list_full_df['pubkey'] == specified_sn_pubkey]
     if len(specified_machine_supernode_data) == 0:
         logger.error('Specified machine is not a supernode!')
@@ -847,7 +846,7 @@ async def decompress_data_with_zstd_func(compressed_input_data):
 async def list_sn_messages_func():
     global rpc_connection
     datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
-    supernode_list_df, _ = await check_supernode_list_func(0)
+    supernode_list_df, _ = await check_supernode_list_func()
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
     async with db_code.Session() as db:
         # Retrieve messages from the database that meet the timestamp criteria
@@ -997,7 +996,7 @@ async def broadcast_message_to_all_sns_using_pastelid_func(message_to_send, mess
     }, ensure_ascii=False)
     compressed_message, _ = await compress_data_with_zstd_func(signed_message_to_send.encode('utf-8'))
     compressed_message_base64 = base64.b64encode(compressed_message).decode('utf-8')
-    list_of_receiving_sn_pastelids = (await check_supernode_list_func(0))[0]['extKey'].values.tolist()
+    list_of_receiving_sn_pastelids = (await check_supernode_list_func())[0]['extKey'].values.tolist()
     if verbose:
         logger.info(f"Now sending message to ALL {len(list_of_receiving_sn_pastelids)} SNs: `{message_to_send}`")        
     async def send_message(receiving_sn_pastelid):
@@ -1050,7 +1049,7 @@ def is_model_supported(model_menu, desired_model_canonical_string, desired_model
     return False
         
 async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_pastelid, message_body, message_type):
-    supernode_list_df, _ = await check_supernode_list_func(0)
+    supernode_list_df, _ = await check_supernode_list_func()
     n = 4
     local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
     local_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
@@ -1329,7 +1328,7 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
     local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
     sending_sn_pastelid = local_machine_supernode_data['extKey'][0]  # Assuming this is a list
     # Find the 3 closest Supernodes to the receiving end user's PastelID
-    supernode_list_df, _ = await check_supernode_list_func(0)
+    supernode_list_df, _ = await check_supernode_list_func()
     closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(3, to_pastelid, supernode_list_df)
     if not closest_supernodes:
         raise ValueError(f"No Supernodes found for PastelID: {to_pastelid}.")
@@ -2232,10 +2231,10 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
         # Get the best block hash and merkle root
         best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
         # Get the list of all supernodes
-        supernode_list_df, _ = await check_supernode_list_func(0)
+        supernode_list_df, _ = await check_supernode_list_func()
         number_of_supernodes_found = len(supernode_list_df) - 1
-        if number_of_supernodes_found < MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES:
-            logger.warning(f"Fewer than {MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES} supernodes available. Using all {number_of_supernodes_found} available supernodes.")
+        if number_of_supernodes_found < MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES:
+            logger.warning(f"Fewer than {MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES} supernodes available. Using all {number_of_supernodes_found} available supernodes.")
             all_other_supernode_pastelids = [x for x in supernode_list_df['extKey'].tolist() if x != MY_PASTELID]
             return all_other_supernode_pastelids
         # Compute the XOR distance between each supernode's hash(pastelid) and the best block's merkle root
@@ -2250,23 +2249,42 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
         # Sort the supernodes based on their XOR distances in ascending order
         sorted_supernodes = sorted(xor_distances, key=lambda x: x[1])
         # Select the supernodes with the closest XOR distances
-        potentially_agreeing_supernodes = [supernode[0] for supernode in sorted_supernodes[:MAXIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES] if supernode[0] != MY_PASTELID]
+        potentially_agreeing_supernodes = [supernode[0] for supernode in sorted_supernodes if supernode[0] != MY_PASTELID]
         return potentially_agreeing_supernodes
     except Exception as e:
         logger.error(f"Error selecting potentially agreeing supernodes: {str(e)}")
         traceback.print_exc()
         raise
 
-async def send_price_agreement_request_to_supernodes(request: db_code.CreditPackPurchasePriceAgreementRequest, supernodes: List[str]) -> List[db_code.CreditPackPurchasePriceAgreementRequestResponse]:
+async def check_liveness(supernode_base_url: str) -> bool:
     try:
         async with httpx.AsyncClient() as client:
-            tasks = []
-            supernode_list_df, _ = await check_supernode_list_func(0)
-            for supernode_pastelid in supernodes:
-                payload = {}
+            response = await client.get(f"{supernode_base_url}/liveness_ping", timeout=5)
+            return response.status_code == 200
+    except httpx.RequestError:
+        return False
+    
+async def get_supernode_url_and_check_liveness(supernode_pastelid, supernode_list_df, client):
+    try:
+        supernode_base_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
+        is_alive = await check_liveness(supernode_base_url)
+        return supernode_base_url, is_alive
+    except Exception as e:
+        logger.warning(f"Error getting supernode URL or checking liveness for supernode {supernode_pastelid}: {str(e)}")
+        return None, False
+        
+async def send_price_agreement_request_to_supernodes(request: db_code.CreditPackPurchasePriceAgreementRequest, supernodes: List[str]) -> List[db_code.CreditPackPurchasePriceAgreementRequestResponse]:
+    async with httpx.AsyncClient() as client:
+        supernode_list_df, _ = await check_supernode_list_func()
+        tasks = []
+        for supernode_pastelid in supernodes:
+            task = asyncio.create_task(get_supernode_url_and_check_liveness(supernode_pastelid, supernode_list_df, client))
+            tasks.append(task)
+        supernode_urls_and_statuses = await asyncio.gather(*tasks)
+        request_tasks = []
+        for supernode_base_url, is_alive in supernode_urls_and_statuses:
+            if is_alive:
                 try:
-                    supernode_base_url = await get_supernode_url_from_pastelid_func(supernode_pastelid, supernode_list_df)
-                    url = f"{supernode_base_url}/credit_pack_price_agreement_request"
                     challenge_dict = await request_and_sign_challenge(supernode_base_url)
                     challenge = challenge_dict["challenge"]
                     challenge_id = challenge_dict["challenge_id"]
@@ -2278,29 +2296,27 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
                         "challenge": challenge,
                         "challenge_id": challenge_id,
                         "challenge_signature": challenge_signature
-                    }     
-                except Exception as e:
-                    logger.warning(f"Error getting challenge from supernode {supernode_pastelid}: {str(e)}")        
-                if len(payload) > 0:
+                    }
+                    url = f"{supernode_base_url}/credit_pack_price_agreement_request"
                     task = asyncio.create_task(client.post(url, json=payload))
-                    tasks.append(task)
-            responses = await asyncio.gather(*tasks, return_exceptions=True)
-            price_agreement_request_responses = []
-            for response in responses:
-                if isinstance(response, httpx.Response):
-                    if response.status_code == 200:
-                        price_agreement_request_response = db_code.CreditPackPurchasePriceAgreementRequestResponse(**response.json())
-                        price_agreement_request_responses.append(price_agreement_request_response)
-                    else:
-                        logger.warning(f"Error sending price agreement request to supernode {response.url}: {response.text}")
+                    request_tasks.append(task)
+                except Exception as e:
+                    logger.warning(f"Error preparing request for supernode {supernode_base_url}: {str(e)}")
+            else:
+                logger.warning(f"Supernode {supernode_base_url} is not responding on port 7123")
+        responses = await asyncio.gather(*request_tasks, return_exceptions=True)
+        price_agreement_request_responses = []
+        for response in responses:
+            if isinstance(response, httpx.Response):
+                if response.status_code == 200:
+                    price_agreement_request_response = db_code.CreditPackPurchasePriceAgreementRequestResponse(**response.json())
+                    price_agreement_request_responses.append(price_agreement_request_response)
                 else:
-                    logger.error(f"Error sending price agreement request to supernode: {str(response)}")
-            return price_agreement_request_responses
-    except Exception as e:
-        logger.error(f"Error sending price agreement request to supernodes: {str(e)}")
-        traceback.print_exc()
-        raise
-    
+                    logger.warning(f"Error sending price agreement request to supernode {response.url}: {response.text}")
+            else:
+                logger.error(f"Error sending price agreement request to supernode: {str(response)}")
+        return price_agreement_request_responses
+
 async def request_and_sign_challenge(supernode_url: str) -> Dict[str, str]:
     async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
         response = await client.get(f"{supernode_url}/request_challenge/{MY_PASTELID}")
@@ -2320,7 +2336,7 @@ async def send_credit_pack_purchase_request_final_response_to_supernodes(respons
     try:
         async with httpx.AsyncClient() as client:
             tasks = []
-            supernode_list_df, _ = await check_supernode_list_func(0)
+            supernode_list_df, _ = await check_supernode_list_func()
             for supernode_pastelid in supernodes:
                 payload = {}
                 try:
