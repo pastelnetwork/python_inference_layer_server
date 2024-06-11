@@ -2,6 +2,7 @@ from logger_config import setup_logger
 from endpoint_functions import router
 import asyncio
 import os
+import random
 import traceback
 import fastapi
 import threading
@@ -100,6 +101,7 @@ async def startup():
         asyncio.create_task(periodic_ticket_listing_and_validation())
         asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
         await generate_supernode_inference_ip_blacklist()  # Compile IP blacklist text file of unresponsive Supernodes for inference tasks
+        asyncio.create_task(schedule_generate_supernode_inference_ip_blacklist())  # Schedule the task
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         
@@ -107,6 +109,13 @@ async def startup():
 async def startup_event():
     await startup()
 
+async def schedule_generate_supernode_inference_ip_blacklist():
+    while True:
+        jitter = random.randint(-180, 180)  # Jitter of up to 3 minutes (180 seconds)
+        interval_seconds = 3600 + jitter  # 3600 seconds = 60 minutes
+        await asyncio.sleep(interval_seconds)
+        await generate_supernode_inference_ip_blacklist()
+        
 async def main():
     uvicorn_config = Config(
         "main:app",
