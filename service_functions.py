@@ -21,6 +21,8 @@ import html
 import tempfile
 import warnings
 import pytz
+import ping3
+from pathlib import Path
 from collections.abc import Iterable
 from urllib.parse import quote_plus, unquote_plus
 from datetime import datetime, timedelta, date
@@ -49,7 +51,6 @@ from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
 from PIL import Image
-from cachetools import TTLCache
 
 encryption_key = None
 magika = Magika()
@@ -184,6 +185,7 @@ MAXIMUM_LOCAL_PASTEL_BLOCK_HEIGHT_DIFFERENCE_IN_BLOCKS = config.get("MAXIMUM_LOC
 MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED = config.get("MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED", default=10, cast=int)
 MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION = config.get("MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION", default=3, cast=int)
 MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES = config.get("MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES", default=10, cast=int)
+MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS = config.get("MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS", default=30, cast=int)
 BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS = config.get("BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS", default=3, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE", default=0.51, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE", default=0.85, cast=float)
@@ -192,7 +194,6 @@ UVICORN_PORT = config.get("UVICORN_PORT", default=7123, cast=int)
 COIN = 100000 # patoshis in 1 PSL
 challenge_store = {}
 file_store = {} # In-memory store for files with expiration times
-cache = TTLCache(maxsize=100, ttl=MINUTES_BETWEEN_REFRESHING_SUPERNODE_PING_AND_PORT_RESPONSE_DATA*60) # Initialize the cache with a TTL
 
 def parse_timestamp(timestamp_str):
     try:
@@ -537,8 +538,7 @@ def EncodeDecimal(o):
     raise TypeError(repr(o) + " is not JSON serializable")
     
 class AsyncAuthServiceProxy:
-    max_concurrent_requests = 500
-    _semaphore = asyncio.BoundedSemaphore(max_concurrent_requests)
+    _semaphore = asyncio.BoundedSemaphore(MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS)
     def __init__(self, service_url, service_name=None, reconnect_timeout=15, reconnect_amount=2, request_timeout=90):
         self.service_url = service_url
         self.service_name = service_name
@@ -713,50 +713,47 @@ async def check_masternode_top_func():
     masternode_top_command_output = await rpc_connection.masternode('top')
     return masternode_top_command_output
 
-async def filter_supernodes_by_ping_response_time_and_port_response(supernode_list, max_response_time_in_milliseconds=800):
-    cache_key = "filtered_supernodes"
-    cached_data = cache.get(cache_key)
-    if cached_data:
-        return cached_data
-    full_supernode_list = supernode_list
-    if isinstance(supernode_list[0], str):
-        full_supernode_list_df, _ = await check_supernode_list_func(0)
-        full_supernode_list = full_supernode_list_df[full_supernode_list_df['extKey'].isin(supernode_list)]
+async def generate_supernode_inference_ip_blacklist(max_response_time_in_milliseconds=800):
+    blacklist_path = Path('supernode_inference_ip_blacklist.txt')
+    logger.info("Now compiling Supernode IP blacklist based on Supernode responses to pings and port checks...")
+    if not blacklist_path.exists():
+        blacklist_path.touch()
+    full_supernode_list_df, _ = await check_supernode_list_func()
+    ping_failures = 0
+    port_7123_failures = 0
     async def ping_and_check_ports(supernode):
+        nonlocal ping_failures, port_7123_failures
         ip_address_port = supernode.get('ipaddress:port')
         if not ip_address_port or ip_address_port.startswith(local_ip):
             return None
         ip_address = ip_address_port.split(":")[0]
+        if not ping3.ping(ip_address, timeout=max_response_time_in_milliseconds / 1000):
+            ping_failures += 1
+            return None
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(f'http://{ip_address}:7123/liveness_ping', timeout=max_response_time_in_milliseconds / 1000)
                 if response.status_code != 200:
-                    return None
-                response = await client.get(f'http://{ip_address}:8089/get_list_of_available_model_names', timeout=max_response_time_in_milliseconds / 1000)
-                if response.status_code != 200:
+                    port_7123_failures += 1
                     return None
             return supernode
         except httpx.RequestError:
+            port_7123_failures += 1
             return None
-    ping_results = []
-    random_number = random.random()
-    if random_number < PROBABILITY_OF_PORT_CHECK:
-        ping_results = await asyncio.gather(*(ping_and_check_ports(supernode) for supernode in full_supernode_list.to_dict(orient='records')))
-        filtered_supernodes = [supernode['extKey'] for supernode in ping_results if supernode is not None]
-        successful_nodes = {supernode['extKey'] for supernode in ping_results if supernode is not None}
-        failed_nodes = {supernode['extKey'] for supernode in full_supernode_list.to_dict(orient='records') if supernode['extKey'] not in successful_nodes}
-        cache[cache_key] = {
-            'successful': successful_nodes,
-            'failed': failed_nodes
-        }
-    else:
-        cached_results = cache.get(cache_key, {'successful': [], 'failed': []})
-        successful_nodes = cached_results['successful']
-        failed_nodes = cached_results['failed']
-        filtered_supernodes = list(successful_nodes) + list(failed_nodes)
+    ping_results = await asyncio.gather(*(ping_and_check_ports(supernode) for supernode in full_supernode_list_df.to_dict(orient='records')))
+    filtered_supernodes = [supernode['extKey'] for supernode in ping_results if supernode is not None]
+    successful_nodes = {supernode['extKey'] for supernode in ping_results if supernode is not None}
+    failed_nodes = {supernode['ipaddress:port'] for supernode in full_supernode_list_df.to_dict(orient='records') if supernode['extKey'] not in successful_nodes}
+    logger.info(f"Ping failures: {ping_failures}")
+    logger.info(f"Port 7123 failures: {port_7123_failures}")
+    logger.info(f"There were {len(failed_nodes)} failed Supernodes out of {len(full_supernode_list_df)} total Supernodes, a failure rate of {len(failed_nodes) / len(full_supernode_list_df) * 100:.2f}%")
+    with blacklist_path.open('w') as blacklist_file:
+        for failed_node in failed_nodes:
+            ip_address = failed_node.split(':')[0]
+            blacklist_file.write(f"{ip_address}\n")
     return filtered_supernodes
 
-async def check_supernode_list_func(use_filtering_of_supernodes_based_on_ping_and_port_responses=0):
+async def check_supernode_list_func():
     global rpc_connection
     masternode_list_full_command_output = await rpc_connection.masternodelist('full')
     masternode_list_rank_command_output = await rpc_connection.masternodelist('rank')
@@ -785,10 +782,6 @@ async def check_supernode_list_func(use_filtering_of_supernodes_based_on_ping_an
     masternode_list_full_df['activedays'] = masternode_list_full_df['activeseconds'].apply(lambda x: float(x) / 86400.0)
     masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int, errors='ignore')
     masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['supernode_status'].isin(['ENABLED', 'PRE_ENABLED'])]
-    if use_filtering_of_supernodes_based_on_ping_and_port_responses == 1:
-        supernode_list = masternode_list_full_df['extKey'].tolist()
-        filtered_supernodes = await filter_supernodes_by_ping_response_time_and_port_response(supernode_list)
-        masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['extKey'].isin(filtered_supernodes)]
     masternode_list_full_df__json = masternode_list_full_df.to_json(orient='index')
     return masternode_list_full_df, masternode_list_full_df__json
     
@@ -2225,13 +2218,18 @@ async def generate_credit_pack_request_rejection_message(credit_pack_request: db
         raise ValueError(f"Invalid credit purchase request rejection message: {', '.join(rejection_validation_errors)}")
     await save_credit_pack_purchase_request_rejection(rejection_message)
     return rejection_message
-    
+
 async def select_potentially_agreeing_supernodes() -> List[str]:
     try:
-        # Get the best block hash and merkle root
-        best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()
-        # Get the list of all supernodes
-        supernode_list_df, _ = await check_supernode_list_func()
+        blacklist_path = Path('supernode_inference_ip_blacklist.txt')
+        blacklisted_ips = set()
+        if blacklist_path.exists(): # Read the blacklist file if it exists
+            with blacklist_path.open('r') as blacklist_file:
+                blacklisted_ips = {line.strip() for line in blacklist_file if line.strip()}
+        else:
+            logger.info("Blacklist file not found. Proceeding without blacklist filtering.")
+        best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func() # Get the best block hash and merkle root
+        supernode_list_df, _ = await check_supernode_list_func() # Get the list of all supernodes
         number_of_supernodes_found = len(supernode_list_df) - 1
         if number_of_supernodes_found < MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES:
             logger.warning(f"Fewer than {MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES} supernodes available. Using all {number_of_supernodes_found} available supernodes.")
@@ -2240,6 +2238,10 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
         # Compute the XOR distance between each supernode's hash(pastelid) and the best block's merkle root
         xor_distances = []
         for _, row in supernode_list_df.iterrows():
+            ip_address_port = row['ipaddress:port']
+            ip_address = ip_address_port.split(":")[0]
+            if ip_address in blacklisted_ips:
+                continue
             supernode_pastelid = row['extKey']
             supernode_pastelid_hash = get_sha256_hash_of_input_data_func(supernode_pastelid)
             supernode_pastelid_int = int(supernode_pastelid_hash, 16)
@@ -2254,7 +2256,7 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
     except Exception as e:
         logger.error(f"Error selecting potentially agreeing supernodes: {str(e)}")
         traceback.print_exc()
-        raise
+        raise    
 
 async def check_liveness(supernode_base_url: str) -> bool:
     try:
@@ -2272,8 +2274,15 @@ async def get_supernode_url_and_check_liveness(supernode_pastelid, supernode_lis
     except Exception as e:
         logger.warning(f"Error getting supernode URL or checking liveness for supernode {supernode_pastelid}: {str(e)}")
         return None, False
-        
+
 async def send_price_agreement_request_to_supernodes(request: db_code.CreditPackPurchasePriceAgreementRequest, supernodes: List[str]) -> List[db_code.CreditPackPurchasePriceAgreementRequestResponse]:
+    blacklist_path = Path('supernode_inference_ip_blacklist.txt')
+    blacklisted_ips = set()
+    if blacklist_path.exists():
+        with blacklist_path.open('r') as blacklist_file:
+            blacklisted_ips = {line.strip() for line in blacklist_file if line.strip()}
+    else:
+        logger.info("Blacklist file not found. Proceeding without blacklist filtering.")
     async with httpx.AsyncClient() as client:
         supernode_list_df, _ = await check_supernode_list_func()
         tasks = []
@@ -2281,11 +2290,16 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             task = asyncio.create_task(get_supernode_url_and_check_liveness(supernode_pastelid, supernode_list_df, client))
             tasks.append(task)
         supernode_urls_and_statuses = await asyncio.gather(*tasks)
-        request_tasks = []
-        for supernode_base_url, is_alive in supernode_urls_and_statuses:
+        price_agreement_semaphore = asyncio.Semaphore(MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS)
+        async def send_request(supernode_base_url, payload):
+            async with price_agreement_semaphore:
+                response = await client.post(supernode_base_url, json=payload)
+                return response
+        async def process_supernode(supernode_base_url, is_alive):
             if is_alive:
                 try:
-                    challenge_dict = await request_and_sign_challenge(supernode_base_url)
+                    async with price_agreement_semaphore:
+                        challenge_dict = await request_and_sign_challenge(supernode_base_url)
                     challenge = challenge_dict["challenge"]
                     challenge_id = challenge_dict["challenge_id"]
                     challenge_signature = challenge_dict["challenge_signature"]
@@ -2298,12 +2312,18 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
                         "challenge_signature": challenge_signature
                     }
                     url = f"{supernode_base_url}/credit_pack_price_agreement_request"
-                    task = asyncio.create_task(client.post(url, json=payload))
-                    request_tasks.append(task)
+                    return await send_request(url, payload)
                 except Exception as e:
                     logger.warning(f"Error preparing request for supernode {supernode_base_url}: {str(e)}")
+                    return None
             else:
                 logger.warning(f"Supernode {supernode_base_url} is not responding on port 7123")
+                return None
+        request_tasks = []
+        for supernode_base_url, is_alive in supernode_urls_and_statuses:
+            ip_address = supernode_base_url.split(":")[1].replace("//", "").split("/")[0]  # Extract the IP address
+            if ip_address not in blacklisted_ips:
+                request_tasks.append(process_supernode(supernode_base_url, is_alive))
         responses = await asyncio.gather(*request_tasks, return_exceptions=True)
         price_agreement_request_responses = []
         for response in responses:
@@ -2313,7 +2333,7 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
                     price_agreement_request_responses.append(price_agreement_request_response)
                 else:
                     logger.warning(f"Error sending price agreement request to supernode {response.url}: {response.text}")
-            else:
+            elif response is not None:
                 logger.error(f"Error sending price agreement request to supernode: {str(response)}")
         return price_agreement_request_responses
 
@@ -2704,7 +2724,7 @@ async def send_credit_pack_storage_completion_announcement_to_supernodes(respons
     try:
         async with httpx.AsyncClient() as client:
             tasks = []
-            supernode_list_df, _ = await check_supernode_list_func(0)
+            supernode_list_df, _ = await check_supernode_list_func()
             for supernode_pastelid in agreeing_supernode_pastelids:
                 payload = {}
                 try:
