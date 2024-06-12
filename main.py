@@ -112,7 +112,7 @@ async def startup_event():
 async def schedule_generate_supernode_inference_ip_blacklist():
     while True:
         jitter = random.randint(-180, 180)  # Jitter of up to 3 minutes (180 seconds)
-        interval_seconds = 3600 + jitter  # 3600 seconds = 60 minutes
+        interval_seconds = 600 + jitter  # 600 seconds = 10 minutes
         await asyncio.sleep(interval_seconds)
         await generate_supernode_inference_ip_blacklist()
         
