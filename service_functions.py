@@ -2274,7 +2274,7 @@ async def get_supernode_url_and_check_liveness(supernode_pastelid, supernode_lis
     except Exception as e:
         logger.warning(f"Error getting supernode URL or checking liveness for supernode {supernode_pastelid}: {str(e)}")
         return None, False
-
+    
 async def send_price_agreement_request_to_supernodes(request: db_code.CreditPackPurchasePriceAgreementRequest, supernodes: List[str]) -> List[db_code.CreditPackPurchasePriceAgreementRequestResponse]:
     blacklist_path = Path('supernode_inference_ip_blacklist.txt')
     blacklisted_ips = set()
@@ -2324,7 +2324,8 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
         datetime_start = datetime.now() 
         responses = await asyncio.gather(*request_tasks, return_exceptions=True)
         datetime_end = datetime.now()
-        logger.info(f"Finished sending price agreement requests to supernodes in {datetime_end - datetime_start:.2f} seconds!")
+        duration = datetime_end - datetime_start
+        logger.info(f"Finished sending price agreement requests to supernodes in {duration.total_seconds():.2f} seconds!")
         price_agreement_request_responses = []
         for response in responses:
             if isinstance(response, httpx.Response):
