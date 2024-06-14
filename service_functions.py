@@ -2283,7 +2283,7 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             blacklisted_ips = {line.strip() for line in blacklist_file if line.strip()}
     else:
         logger.info("Blacklist file not found. Proceeding without blacklist filtering.")
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS*4)) as client:
         supernode_list_df, _ = await check_supernode_list_func()
         tasks = []
         for supernode_pastelid in supernodes:
@@ -2297,25 +2297,21 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
                 return response
         async def process_supernode(supernode_base_url, is_alive):
             if is_alive:
-                try:
-                    async with price_agreement_semaphore:
-                        challenge_dict = await request_and_sign_challenge(supernode_base_url)
-                    challenge = challenge_dict["challenge"]
-                    challenge_id = challenge_dict["challenge_id"]
-                    challenge_signature = challenge_dict["challenge_signature"]
-                    request_dict = request.model_dump()
-                    request_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in request_dict.items()}
-                    payload = {
-                        "credit_pack_price_agreement_request": request_dict,
-                        "challenge": challenge,
-                        "challenge_id": challenge_id,
-                        "challenge_signature": challenge_signature
-                    }
-                    url = f"{supernode_base_url}/credit_pack_price_agreement_request"
-                    return await send_request(url, payload)
-                except Exception as e:
-                    logger.warning(f"Error preparing request for supernode {supernode_base_url}: {str(e)}")
-                    return None
+                async with price_agreement_semaphore:
+                    challenge_dict = await request_and_sign_challenge(supernode_base_url)
+                challenge = challenge_dict["challenge"]
+                challenge_id = challenge_dict["challenge_id"]
+                challenge_signature = challenge_dict["challenge_signature"]
+                request_dict = request.model_dump()
+                request_dict = {k: (str(v) if isinstance(v, uuid.UUID) else v) for k, v in request_dict.items()}
+                payload = {
+                    "credit_pack_price_agreement_request": request_dict,
+                    "challenge": challenge,
+                    "challenge_id": challenge_id,
+                    "challenge_signature": challenge_signature
+                }
+                url = f"{supernode_base_url}/credit_pack_price_agreement_request"
+                return await send_request(url, payload)
             else:
                 logger.warning(f"Supernode {supernode_base_url} is not responding on port 7123")
                 return None
@@ -2324,7 +2320,11 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             ip_address = supernode_base_url.split(":")[1].replace("//", "").split("/")[0]  # Extract the IP address
             if ip_address not in blacklisted_ips:
                 request_tasks.append(process_supernode(supernode_base_url, is_alive))
+        logger.info(f"Now sending out {len(request_tasks):,} price agreement requests to potentially agreeing supernodes...")
+        datetime_start = datetime.now() 
         responses = await asyncio.gather(*request_tasks, return_exceptions=True)
+        datetime_end = datetime.now()
+        logger.info(f"Finished sending price agreement requests to supernodes in {datetime_end - datetime_start:.2f} seconds!")
         price_agreement_request_responses = []
         for response in responses:
             if isinstance(response, httpx.Response):
@@ -2335,6 +2335,7 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
                     logger.warning(f"Error sending price agreement request to supernode {response.url}: {response.text}")
             elif response is not None:
                 logger.error(f"Error sending price agreement request to supernode: {str(response)}")
+        logger.info(f"Received a total of {len(price_agreement_request_responses):,} valid price agreement responses from supernodes out of {len(request_tasks):,} total requests sent, a success rate of {len(price_agreement_request_responses)/len(request_tasks):.2%}")
         return price_agreement_request_responses
 
 async def request_and_sign_challenge(supernode_url: str) -> Dict[str, str]:
@@ -6139,6 +6140,14 @@ def highlight_rules_func(text):
     text = text.replace('#COLOR13_OPEN#', '<span style="color: #f2ebd3;">').replace('#COLOR13_CLOSE#', '</span>')
     return text
 
+async def ensure_burn_address_imported_as_watch_address_in_local_wallet():
+    burn_address_already_imported = await check_if_address_is_already_imported_in_local_wallet(burn_address)
+    if not burn_address_already_imported:
+        logger.info(f"Burn address is NOT yet imported! Now attempting to import burn address {burn_address} as a watch address in the local wallet...")
+        await import_address_func(burn_address, "burn_address", True)
+    else:
+        logger.info(f"Burn address {burn_address} is already imported as a watch address in the local wallet!")
+    
 
 #_______________________________________________________________
 
