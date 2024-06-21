@@ -542,7 +542,7 @@ class AsyncAuthServiceProxy:
     def __init__(self, service_url, service_name=None, reconnect_timeout=15, reconnect_amount=2, request_timeout=90):
         self.service_url = service_url
         self.service_name = service_name
-        self.url = urlparse.urlparse(service_url)        
+        self.url = urlparse(service_url)
         self.id_count = 0
         user = self.url.username
         password = self.url.password
@@ -551,6 +551,7 @@ class AsyncAuthServiceProxy:
         self.reconnect_timeout = reconnect_timeout
         self.reconnect_amount = reconnect_amount
         self.request_timeout = request_timeout
+        self.client = httpx.AsyncClient(timeout=request_timeout, http2=True)
 
     def __getattr__(self, name):
         if name.startswith('__') and name.endswith('__'):
@@ -559,7 +560,7 @@ class AsyncAuthServiceProxy:
             name = f"{self.service_name}.{name}"
         return AsyncAuthServiceProxy(self.service_url, name)
 
-    async def __call__(self, *args, headers=None):
+    async def __call__(self, *args):
         async with self._semaphore:  # Acquire a semaphore
             self.id_count += 1
             postdata = json.dumps({
@@ -568,17 +569,13 @@ class AsyncAuthServiceProxy:
                 'params': args,
                 'id': self.id_count
             }, default=EncodeDecimal)
-            
-            default_headers = {
+            headers = {
                 'Host': self.url.hostname,
                 'User-Agent': "AuthServiceProxy/0.1",
-                'Authorization': self.auth_header,
+                'Authorization': self.auth_header.decode(),
                 'Content-type': 'application/json',
-                'Connection': 'keep-alive'
+                'Connection': 'keep-alive'  # Crucial for maintaining keep-alive behavior
             }
-            # Merge default headers with provided headers
-            if headers:
-                default_headers.update(headers)
             for i in range(self.reconnect_amount):
                 try:
                     if i > 0:
@@ -586,9 +583,13 @@ class AsyncAuthServiceProxy:
                         sleep_time = self.reconnect_timeout * (2 ** i)
                         logger.info(f"Waiting for {sleep_time} seconds before retrying.")
                         await asyncio.sleep(sleep_time)
-                    response = await self._client.post(
-                        self.service_url, headers=default_headers, data=postdata
+                    response = await self.client.post(
+                        self.service_url,
+                        headers=headers,
+                        content=postdata
                     )
+                    response.raise_for_status()
+                    response_json = response.json()
                     break
                 except Exception as e:
                     logger.error(f"Error occurred in __call__: {e}")
@@ -600,7 +601,6 @@ class AsyncAuthServiceProxy:
             else:
                 logger.error("Reconnect tries exceeded.")
                 return
-            response_json = response.json()
             if response_json['error'] is not None:
                 raise JSONRPCException(response_json['error'])
             elif 'result' not in response_json:
@@ -608,6 +608,8 @@ class AsyncAuthServiceProxy:
                     'code': -343, 'message': 'missing JSON-RPC result'})
             else:
                 return response_json['result']
+    async def close(self):
+        await self.client.aclose()
                     
 async def get_current_pastel_block_height_func():
     best_block_hash = await rpc_connection.getbestblockhash()
