@@ -5,7 +5,7 @@ cryptography
 fastapi
 fuzzywuzzy 
 groq
-httpx
+httpx[http2]
 magika
 mistralai
 mutagen
