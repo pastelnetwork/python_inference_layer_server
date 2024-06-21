@@ -559,8 +559,8 @@ class AsyncAuthServiceProxy:
             name = f"{self.service_name}.{name}"
         return AsyncAuthServiceProxy(self.service_url, name)
 
-    async def __call__(self, *args):
-        async with self._semaphore: # Acquire a semaphore
+    async def __call__(self, *args, headers=None):
+        async with self._semaphore:  # Acquire a semaphore
             self.id_count += 1
             postdata = json.dumps({
                 'version': '2.0',
@@ -568,13 +568,17 @@ class AsyncAuthServiceProxy:
                 'params': args,
                 'id': self.id_count
             }, default=EncodeDecimal)
-            headers = {
+            
+            default_headers = {
                 'Host': self.url.hostname,
                 'User-Agent': "AuthServiceProxy/0.1",
                 'Authorization': self.auth_header,
                 'Content-type': 'application/json',
                 'Connection': 'keep-alive'
             }
+            # Merge default headers with provided headers
+            if headers:
+                default_headers.update(headers)
             for i in range(self.reconnect_amount):
                 try:
                     if i > 0:
@@ -583,7 +587,8 @@ class AsyncAuthServiceProxy:
                         logger.info(f"Waiting for {sleep_time} seconds before retrying.")
                         await asyncio.sleep(sleep_time)
                     response = await self._client.post(
-                        self.service_url, headers=headers, data=postdata)
+                        self.service_url, headers=default_headers, data=postdata
+                    )
                     break
                 except Exception as e:
                     logger.error(f"Error occurred in __call__: {e}")
@@ -603,7 +608,7 @@ class AsyncAuthServiceProxy:
                     'code': -343, 'message': 'missing JSON-RPC result'})
             else:
                 return response_json['result']
-                
+                    
 async def get_current_pastel_block_height_func():
     best_block_hash = await rpc_connection.getbestblockhash()
     best_block_details = await rpc_connection.getblock(best_block_hash)
