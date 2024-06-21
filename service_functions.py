@@ -30,7 +30,7 @@ import datetime as dt
 import pandas as pd
 import httpx
 from httpx import AsyncClient, Limits, Timeout
-import urllib.parse as urlparse
+from urllib.parse import urlparse
 from logger_config import logger
 import zstandard as zstd
 from sqlalchemy.exc import OperationalError, InvalidRequestError
