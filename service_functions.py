@@ -543,7 +543,6 @@ class AsyncAuthServiceProxy:
         self.service_url = service_url
         self.service_name = service_name
         self.url = urlparse.urlparse(service_url)        
-        self.client = AsyncClient(timeout=Timeout(request_timeout), limits=Limits(max_connections=200, max_keepalive_connections=10))
         self.id_count = 0
         user = self.url.username
         password = self.url.password
@@ -564,7 +563,7 @@ class AsyncAuthServiceProxy:
         async with self._semaphore: # Acquire a semaphore
             self.id_count += 1
             postdata = json.dumps({
-                'version': '1.1',
+                'version': '2.0',
                 'method': self.service_name,
                 'params': args,
                 'id': self.id_count
@@ -573,7 +572,8 @@ class AsyncAuthServiceProxy:
                 'Host': self.url.hostname,
                 'User-Agent': "AuthServiceProxy/0.1",
                 'Authorization': self.auth_header,
-                'Content-type': 'application/json'
+                'Content-type': 'application/json',
+                'Connection': 'keep-alive'
             }
             for i in range(self.reconnect_amount):
                 try:
@@ -582,7 +582,7 @@ class AsyncAuthServiceProxy:
                         sleep_time = self.reconnect_timeout * (2 ** i)
                         logger.info(f"Waiting for {sleep_time} seconds before retrying.")
                         await asyncio.sleep(sleep_time)
-                    response = await self.client.post(
+                    response = await self._client.post(
                         self.service_url, headers=headers, data=postdata)
                     break
                 except Exception as e:
@@ -605,14 +605,12 @@ class AsyncAuthServiceProxy:
                 return response_json['result']
                 
 async def get_current_pastel_block_height_func():
-    global rpc_connection
     best_block_hash = await rpc_connection.getbestblockhash()
     best_block_details = await rpc_connection.getblock(best_block_hash)
     curent_block_height = best_block_details['height']
     return curent_block_height
 
 async def get_best_block_hash_and_merkle_root_func():
-    global rpc_connection
     best_block_height = await get_current_pastel_block_height_func()
     best_block_hash = await rpc_connection.getblockhash(best_block_height)
     best_block_details = await rpc_connection.getblock(best_block_hash)
@@ -620,13 +618,11 @@ async def get_best_block_hash_and_merkle_root_func():
     return best_block_hash, best_block_merkle_root, best_block_height
 
 async def get_last_block_data_func():
-    global rpc_connection
     current_block_height = await get_current_pastel_block_height_func()
     block_data = await rpc_connection.getblock(str(current_block_height))
     return block_data
 
 async def check_psl_address_balance_alternative_func(address_to_check):
-    global rpc_connection
     address_amounts_dict = await rpc_connection.listaddressamounts()
     # Convert the dictionary into a list of dictionaries, each representing a row
     data = [{'address': address, 'amount': amount} for address, amount in address_amounts_dict.items()]
@@ -639,17 +635,14 @@ async def check_psl_address_balance_alternative_func(address_to_check):
     return balance_at_address
 
 async def check_psl_address_balance_func(address_to_check):
-    global rpc_connection
     balance_at_address = await rpc_connection.z_getbalance(address_to_check)
     return balance_at_address
 
 async def get_raw_transaction_func(txid):
-    global rpc_connection
     raw_transaction_data = await rpc_connection.getrawtransaction(txid, 1) 
     return raw_transaction_data
 
 async def verify_message_with_pastelid_func(pastelid, message_to_verify, pastelid_signature_on_message) -> str:
-    global rpc_connection
     verification_result = await rpc_connection.pastelid('verify', message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
     return verification_result['verification']
 
@@ -673,7 +666,6 @@ async def verify_challenge_signature(pastelid: str, signature: str, challenge_id
     Verifies the signature of the PastelID on the challenge string associated with the provided challenge ID.
     If the signature is valid and the challenge ID exists and hasn't expired, it returns True. Otherwise, it returns False.
     """
-    global rpc_connection
     if challenge_id not in challenge_store:
         return False
     challenge_data = challenge_store[challenge_id]
@@ -709,7 +701,6 @@ async def verify_challenge_signature_from_inference_request_id(inference_request
         return False
 
 async def check_masternode_top_func():
-    global rpc_connection
     masternode_top_command_output = await rpc_connection.masternode('top')
     return masternode_top_command_output
 
@@ -754,7 +745,6 @@ async def generate_supernode_inference_ip_blacklist(max_response_time_in_millise
     return filtered_supernodes
 
 async def check_supernode_list_func():
-    global rpc_connection
     masternode_list_full_command_output = await rpc_connection.masternodelist('full')
     masternode_list_rank_command_output = await rpc_connection.masternodelist('rank')
     masternode_list_pubkey_command_output = await rpc_connection.masternodelist('pubkey')
@@ -837,7 +827,6 @@ async def decompress_data_with_zstd_func(compressed_input_data):
     return zstd_decompressed_data
 
 async def list_sn_messages_func():
-    global rpc_connection
     datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
     supernode_list_df, _ = await check_supernode_list_func()
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
@@ -897,7 +886,6 @@ async def list_sn_messages_func():
     return combined_messages_df
 
 async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase) -> str:
-    global rpc_connection
     results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
     return results_dict['signature']
 
@@ -934,7 +922,6 @@ async def verify_received_message_using_pastelid_func(message_received, sending_
     return verification_status
 
 async def send_message_to_sn_using_pastelid_func(message_to_send, message_type, receiving_sn_pastelid, pastelid_passphrase):
-    global rpc_connection
     local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
     sending_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
     sending_sn_pubkey = local_machine_supernode_data['pubkey'].values.tolist()[0]
@@ -954,7 +941,6 @@ async def send_message_to_sn_using_pastelid_func(message_to_send, message_type, 
     return signed_message_to_send, pastelid_signature_on_message
 
 async def broadcast_message_to_list_of_sns_using_pastelid_func(message_to_send, message_type, list_of_receiving_sn_pastelids, pastelid_passphrase, verbose=0):
-    global rpc_connection
     local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
     sending_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
     sending_sn_pubkey = local_machine_supernode_data['pubkey'].values.tolist()[0]
@@ -976,7 +962,6 @@ async def broadcast_message_to_list_of_sns_using_pastelid_func(message_to_send, 
     return signed_message_to_send
 
 async def broadcast_message_to_all_sns_using_pastelid_func(message_to_send, message_type, pastelid_passphrase, verbose=0):
-    global rpc_connection
     local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
     sending_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
     sending_sn_pubkey = local_machine_supernode_data['pubkey'].values.tolist()[0]
@@ -1913,7 +1898,6 @@ def compute_fully_parsed_json_sha3_256_hash(input_json):
     return sha3_hash, concatenated_data
 
 async def store_generic_ticket_data_in_blockchain(ticket_input_data_json: str, ticket_type_identifier: str):
-    global rpc_connection
     try:    
         if not isinstance(ticket_input_data_json, str):
             error_message = "Ticket data must be a valid string!"
@@ -1963,7 +1947,6 @@ async def store_generic_ticket_data_in_blockchain(ticket_input_data_json: str, t
         return None
 
 async def retrieve_generic_ticket_data_from_blockchain(ticket_txid: str):
-    global rpc_connection
     try:    
         ticket_get_command_response = await rpc_connection.tickets('get', ticket_txid , 1)
         retrieved_ticket_data = ticket_get_command_response['ticket']['contract_ticket']
@@ -1994,7 +1977,6 @@ async def get_list_of_credit_pack_ticket_txids_already_in_db():
             return []
 
 async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them(ticket_type_identifier: str = "INFERENCE_API_CREDIT_PACK_TICKET",  starting_block_height: int = 0, force_revalidate_all_tickets: int = 0):
-    global rpc_connection
     try:
         if not isinstance(ticket_type_identifier, str):
             error_message = "Ticket type identifier data must be a valid string!"
