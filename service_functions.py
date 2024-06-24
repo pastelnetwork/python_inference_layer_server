@@ -2499,8 +2499,8 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             response_validation_errors = await validate_credit_pack_ticket_message_data_func(current_price_agreement_response)
             if not response_validation_errors:
                 valid_price_agreement_request_responses.append(current_price_agreement_response)
-        supernode_price_agreement_response_percentage_achieved = len(valid_price_agreement_request_responses) / (len(potentially_agreeing_supernodes) + total_number_of_blacklisted_sns)
-        logger.info(f"Received {len(valid_price_agreement_request_responses)} valid price agreement responses from potentially agreeing supernodes out of {len(potentially_agreeing_supernodes)} asked (on top of {total_number_of_blacklisted_sns} blacklisted supernodes), for a quorum percentage of {supernode_price_agreement_response_percentage_achieved:.2%} (Required minimum quorum percentage is {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.2%})")              
+        supernode_price_agreement_response_percentage_achieved = len(valid_price_agreement_request_responses) / len(potentially_agreeing_supernodes)
+        logger.info(f"Received {len(valid_price_agreement_request_responses)} valid price agreement responses from potentially agreeing supernodes out of {len(potentially_agreeing_supernodes)} asked (excluding {total_number_of_blacklisted_sns} blacklisted supernodes), for a quorum percentage of {supernode_price_agreement_response_percentage_achieved:.2%} (Required minimum quorum percentage is {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.2%})")              
         # Check if enough supernodes responded with valid responses
         if supernode_price_agreement_response_percentage_achieved <= SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:
             logger.warning(f"Not enough supernodes responded with valid price agreement responses; only {supernode_price_agreement_response_percentage_achieved:.2%} of the supernodes responded, less than the required quorum percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.2%}")
@@ -3150,7 +3150,8 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         # Validate the agreeing supernodes
         num_potentially_agreeing_supernodes = len(list_of_potentially_agreeing_supernodes)
         num_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
-        quorum_percentage = num_potentially_agreeing_supernodes / active_supernodes_count_at_the_time
+        number_of_blacklisted_supernodes_at_the_time = len(list_of_blacklisted_supernode_pastelids)
+        quorum_percentage = num_potentially_agreeing_supernodes / (active_supernodes_count_at_the_time - number_of_blacklisted_supernodes_at_the_time)
         agreeing_percentage = num_agreeing_supernodes / num_potentially_agreeing_supernodes
         is_quorum_valid = quorum_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE
         is_agreeing_percentage_valid = agreeing_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE
