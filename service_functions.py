@@ -1925,7 +1925,10 @@ async def store_generic_ticket_data_in_blockchain(ticket_input_data_json: str, t
         ticket_json = json.dumps(ticket_dict, ensure_ascii=False)
         ticket_json_b64 = base64.b64encode(ticket_json.encode('utf-8')).decode('utf-8')
         ticket_txid = ""
+        logger.info("Now attempting to write data to blockchain using 'tickets register contract' command...")
         ticket_register_command_response = await rpc_connection.tickets('register', 'contract', ticket_json_b64, ticket_type_identifier, ticket_input_data_fully_parsed_sha3_256_hash)
+        logger.info("Done with 'tickets register contract' command!")
+        asyncio.sleep(2)
         if len(ticket_register_command_response) > 0:
             if 'txid' in ticket_register_command_response.keys():
                 ticket_txid = ticket_register_command_response['txid']
