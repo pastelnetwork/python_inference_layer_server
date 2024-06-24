@@ -711,7 +711,7 @@ async def check_masternode_top_func():
     masternode_top_command_output = await rpc_connection.masternode('top')
     return masternode_top_command_output
 
-async def generate_supernode_inference_ip_blacklist(max_response_time_in_milliseconds=800):
+async def generate_supernode_inference_ip_blacklist(max_response_time_in_milliseconds=1500):
     blacklist_path = Path('supernode_inference_ip_blacklist.txt')
     logger.info("Now compiling Supernode IP blacklist based on Supernode responses to pings and port checks...")
     if not blacklist_path.exists():
@@ -2217,6 +2217,7 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
                 blacklisted_ips = {line.strip() for line in blacklist_file if line.strip()}
         else:
             logger.info("Blacklist file not found. Proceeding without blacklist filtering.")
+        total_number_of_blacklisted_sns = len(blacklisted_ips)
         best_block_hash, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func() # Get the best block hash and merkle root
         supernode_list_df, _ = await check_supernode_list_func() # Get the list of all supernodes
         number_of_supernodes_found = len(supernode_list_df) - 1
@@ -2226,10 +2227,13 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
             return all_other_supernode_pastelids
         # Compute the XOR distance between each supernode's hash(pastelid) and the best block's merkle root
         xor_distances = []
+        list_of_blacklisted_supernode_pastelids = []
         for _, row in supernode_list_df.iterrows():
             ip_address_port = row['ipaddress:port']
             ip_address = ip_address_port.split(":")[0]
             if ip_address in blacklisted_ips:
+                current_supernode_pastelid = row['extKey']
+                list_of_blacklisted_supernode_pastelids.append(current_supernode_pastelid)
                 continue
             supernode_pastelid = row['extKey']
             supernode_pastelid_hash = get_sha256_hash_of_input_data_func(supernode_pastelid)
@@ -2241,7 +2245,7 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
         sorted_supernodes = sorted(xor_distances, key=lambda x: x[1])
         # Select the supernodes with the closest XOR distances
         potentially_agreeing_supernodes = [supernode[0] for supernode in sorted_supernodes if supernode[0] != MY_PASTELID]
-        return potentially_agreeing_supernodes
+        return potentially_agreeing_supernodes, total_number_of_blacklisted_sns, list_of_blacklisted_supernode_pastelids
     except Exception as e:
         logger.error(f"Error selecting potentially agreeing supernodes: {str(e)}")
         traceback.print_exc()
@@ -2272,7 +2276,7 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             blacklisted_ips = {line.strip() for line in blacklist_file if line.strip()}
     else:
         logger.info("Blacklist file not found. Proceeding without blacklist filtering.")
-    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS/5.0)) as client:
+    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS/.0)) as client:
         supernode_list_df, _ = await check_supernode_list_func()
         tasks = []
         for supernode_pastelid in supernodes:
@@ -2449,7 +2453,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             raise ValueError(f"Invalid preliminary price quote response: {', '.join(response_validation_errors)}")
         # Select the potentially agreeing supernodes
         logger.info("Now selecting potentially agreeing supernodes to sign off on the proposed credit pricing for the credit pack purchase request...")
-        potentially_agreeing_supernodes = await select_potentially_agreeing_supernodes()
+        potentially_agreeing_supernodes, total_number_of_blacklisted_sns, list_of_blacklisted_supernode_pastelids = await select_potentially_agreeing_supernodes()
         logger.info(f"Selected {len(potentially_agreeing_supernodes)} potentially agreeing supernodes: {potentially_agreeing_supernodes}")
         # Create the price agreement request without the hash and signature fields
         price_agreement_request = db_code.CreditPackPurchasePriceAgreementRequest(
@@ -2495,8 +2499,8 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             response_validation_errors = await validate_credit_pack_ticket_message_data_func(current_price_agreement_response)
             if not response_validation_errors:
                 valid_price_agreement_request_responses.append(current_price_agreement_response)
-        supernode_price_agreement_response_percentage_achieved = len(valid_price_agreement_request_responses) / len(potentially_agreeing_supernodes)
-        logger.info(f"Received {len(valid_price_agreement_request_responses)} valid price agreement responses from potentially agreeing supernodes out of {len(potentially_agreeing_supernodes)} asked, a quorum percentage of {supernode_price_agreement_response_percentage_achieved:.2%} (Required minimum quorum percentage is {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.2%})")              
+        supernode_price_agreement_response_percentage_achieved = len(valid_price_agreement_request_responses) / (len(potentially_agreeing_supernodes) + total_number_of_blacklisted_sns)
+        logger.info(f"Received {len(valid_price_agreement_request_responses)} valid price agreement responses from potentially agreeing supernodes out of {len(potentially_agreeing_supernodes)} asked (on top of {total_number_of_blacklisted_sns} blacklisted supernodes), for a quorum percentage of {supernode_price_agreement_response_percentage_achieved:.2%} (Required minimum quorum percentage is {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.2%})")              
         # Check if enough supernodes responded with valid responses
         if supernode_price_agreement_response_percentage_achieved <= SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:
             logger.warning(f"Not enough supernodes responded with valid price agreement responses; only {supernode_price_agreement_response_percentage_achieved:.2%} of the supernodes responded, less than the required quorum percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.2%}")
@@ -2577,6 +2581,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             request_response_pastel_block_height=await get_current_pastel_block_height_func(),
             credit_purchase_request_response_message_version_string="1.0",
             responding_supernode_pastelid=MY_PASTELID,
+            list_of_blacklisted_supernode_pastelids=list_of_blacklisted_supernode_pastelids,
             list_of_potentially_agreeing_supernodes=potentially_agreeing_supernodes,
             list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms=list_of_agreeing_supernodes,
             agreeing_supernodes_signatures_dict=agreeing_supernodes_signatures_dict,
@@ -3077,6 +3082,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             validation_results["validation_failure_reasons_list"].append(f"Invalid burn transaction for credit pack ticket with TXID: {credit_pack_ticket_txid}")
         active_supernodes_count_at_the_time, active_supernodes_at_the_time = await fetch_active_supernodes_count_and_details(credit_pack_purchase_request_response.request_response_pastel_block_height)
         list_of_active_supernode_pastelids_at_the_time = [x["pastel_id"] for x in active_supernodes_at_the_time]
+        list_of_blacklisted_supernode_pastelids = credit_pack_purchase_request_response.list_of_blacklisted_supernode_pastelids
         list_of_potentially_agreeing_supernodes = credit_pack_purchase_request_response.list_of_potentially_agreeing_supernodes
         list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms
         agreeing_supernodes_signatures_dict = credit_pack_purchase_request_response.agreeing_supernodes_signatures_dict
