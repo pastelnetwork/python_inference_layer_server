@@ -2276,7 +2276,7 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             blacklisted_ips = {line.strip() for line in blacklist_file if line.strip()}
     else:
         logger.info("Blacklist file not found. Proceeding without blacklist filtering.")
-    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS/.0)) as client:
+    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS/6.0)) as client:
         supernode_list_df, _ = await check_supernode_list_func()
         tasks = []
         for supernode_pastelid in supernodes:
