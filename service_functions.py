@@ -21,7 +21,6 @@ import html
 import tempfile
 import warnings
 import pytz
-import ping3
 from pathlib import Path
 from collections.abc import Iterable
 from urllib.parse import quote_plus, unquote_plus
@@ -29,7 +28,7 @@ from datetime import datetime, timedelta, date
 import datetime as dt
 import pandas as pd
 import httpx
-from httpx import AsyncClient, Limits, Timeout
+from httpx import Timeout
 from urllib.parse import urlparse
 from logger_config import logger
 import zstandard as zstd
@@ -713,21 +712,18 @@ async def check_masternode_top_func():
 
 async def generate_supernode_inference_ip_blacklist(max_response_time_in_milliseconds=1500):
     blacklist_path = Path('supernode_inference_ip_blacklist.txt')
-    logger.info("Now compiling Supernode IP blacklist based on Supernode responses to pings and port checks...")
+    logger.info("Now compiling Supernode IP blacklist based on Supernode responses to port checks...")
+    
     if not blacklist_path.exists():
         blacklist_path.touch()
     full_supernode_list_df, _ = await check_supernode_list_func()
-    ping_failures = 0
     port_7123_failures = 0
-    async def ping_and_check_ports(supernode):
-        nonlocal ping_failures, port_7123_failures
+    async def check_port(supernode):
+        nonlocal port_7123_failures
         ip_address_port = supernode.get('ipaddress:port')
         if not ip_address_port or ip_address_port.startswith(local_ip):
             return None
         ip_address = ip_address_port.split(":")[0]
-        if not ping3.ping(ip_address, timeout=max_response_time_in_milliseconds / 1000):
-            ping_failures += 1
-            return None
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(f'http://{ip_address}:7123/liveness_ping', timeout=max_response_time_in_milliseconds / 1000)
@@ -738,11 +734,10 @@ async def generate_supernode_inference_ip_blacklist(max_response_time_in_millise
         except httpx.RequestError:
             port_7123_failures += 1
             return None
-    ping_results = await asyncio.gather(*(ping_and_check_ports(supernode) for supernode in full_supernode_list_df.to_dict(orient='records')))
-    filtered_supernodes = [supernode['extKey'] for supernode in ping_results if supernode is not None]
-    successful_nodes = {supernode['extKey'] for supernode in ping_results if supernode is not None}
+    check_results = await asyncio.gather(*(check_port(supernode) for supernode in full_supernode_list_df.to_dict(orient='records')))
+    filtered_supernodes = [supernode['extKey'] for supernode in check_results if supernode is not None]
+    successful_nodes = {supernode['extKey'] for supernode in check_results if supernode is not None}
     failed_nodes = {supernode['ipaddress:port'] for supernode in full_supernode_list_df.to_dict(orient='records') if supernode['extKey'] not in successful_nodes}
-    logger.info(f"Ping failures: {ping_failures}")
     logger.info(f"Port 7123 failures: {port_7123_failures}")
     logger.info(f"There were {len(failed_nodes)} failed Supernodes out of {len(full_supernode_list_df)} total Supernodes, a failure rate of {len(failed_nodes) / len(full_supernode_list_df) * 100:.2f}%")
     with blacklist_path.open('w') as blacklist_file:
@@ -2279,7 +2274,7 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             blacklisted_ips = {line.strip() for line in blacklist_file if line.strip()}
     else:
         logger.info("Blacklist file not found. Proceeding without blacklist filtering.")
-    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS/6.0)) as client:
+    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS/5.0)) as client:
         supernode_list_df, _ = await check_supernode_list_func()
         tasks = []
         for supernode_pastelid in supernodes:
