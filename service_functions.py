@@ -3176,26 +3176,27 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             validation_results["credit_pack_ticket_is_valid"] = False
             validation_results["validation_failure_reasons_list"].append("Hash of credit pack request confirmation object stored in blockchain does not match the hash included in the object.")
         # Validate the signatures
-        for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
-            signatures = selected_agreeing_supernodes_signatures_dict[agreeing_supernode_pastelid]
-            if use_verbose_validation:
-                logger.info(f"Verifying signature for selected agreeing supernode {agreeing_supernode_pastelid}")
-                logger.info(f"Message to verify (decoded from b64): {credit_pack_purchase_request.model_dump()}")
-                logger.info(f"Signature: {signatures['credit_pack_purchase_request_fields_json_b64_signature']}")
-            is_fields_json_b64_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, 
-                                                                                        credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64,
-                                                                                        signatures['credit_pack_purchase_request_fields_json_b64_signature'])
-            if not is_fields_json_b64_signature_valid:
-                logger.warning(f"Warning! Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
-            if use_verbose_validation:
-                logger.info(f"Signature validation result: {is_fields_json_b64_signature_valid}")
-            validation_results["validation_checks"].append({
-                "check_name": f"Signature validation for selected agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request fields json",
-                "is_valid": is_fields_json_b64_signature_valid
-            })
-            if not is_fields_json_b64_signature_valid:
-                validation_results["credit_pack_ticket_is_valid"] = False
-                validation_results["validation_failure_reasons_list"].append(f"Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
+        if len(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion) > 0:
+            for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
+                signatures = selected_agreeing_supernodes_signatures_dict[agreeing_supernode_pastelid]
+                if use_verbose_validation:
+                    logger.info(f"Verifying signature for selected agreeing supernode {agreeing_supernode_pastelid}")
+                    logger.info(f"Message to verify (decoded from b64): {credit_pack_purchase_request.model_dump()}")
+                    logger.info(f"Signature: {signatures['credit_pack_purchase_request_fields_json_b64_signature']}")
+                is_fields_json_b64_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, 
+                                                                                            credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64,
+                                                                                            signatures['credit_pack_purchase_request_fields_json_b64_signature'])
+                if not is_fields_json_b64_signature_valid:
+                    logger.warning(f"Warning! Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
+                if use_verbose_validation:
+                    logger.info(f"Signature validation result: {is_fields_json_b64_signature_valid}")
+                validation_results["validation_checks"].append({
+                    "check_name": f"Signature validation for selected agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request fields json",
+                    "is_valid": is_fields_json_b64_signature_valid
+                })
+                if not is_fields_json_b64_signature_valid:
+                    validation_results["credit_pack_ticket_is_valid"] = False
+                    validation_results["validation_failure_reasons_list"].append(f"Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
         # Validate the selected agreeing supernodes
         selected_agreeing_supernodes = await select_top_n_closest_supernodes_to_best_block_merkle_root(
             list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms,
