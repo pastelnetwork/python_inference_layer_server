@@ -3176,7 +3176,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             validation_results["credit_pack_ticket_is_valid"] = False
             validation_results["validation_failure_reasons_list"].append("Hash of credit pack request confirmation object stored in blockchain does not match the hash included in the object.")
         # Validate the signatures
-        if len(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion) > 0:
+        if list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
             for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
                 signatures = selected_agreeing_supernodes_signatures_dict[agreeing_supernode_pastelid]
                 if use_verbose_validation:
