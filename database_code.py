@@ -517,6 +517,7 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     request_response_timestamp_utc_iso_string: str
     request_response_pastel_block_height: int
     best_block_merkle_root: str
+    best_block_height: int
     credit_purchase_request_response_message_version_string: str
     responding_supernode_pastelid: str = Field(index=True)
     list_of_blacklisted_supernode_pastelids: str = Field(sa_column=Column(JSON))
@@ -538,6 +539,7 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
                 "request_response_timestamp_utc_iso_string": "2023-06-01T12:15:00Z",
                 "request_response_pastel_block_height": 123457,
                 "best_block_merkle_root": "0x5678...",
+                "best_block_height": 123456,
                 "credit_purchase_request_response_message_version_string": "1.0",
                 "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "list_of_blacklisted_supernode_pastelids": ["jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP"],

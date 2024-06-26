@@ -2580,7 +2580,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             return termination_message
         logger.info(f"Enough supernodes agreed to the proposed pricing; {len(list_of_agreeing_supernodes)} supernodes agreed to the proposed pricing, achieving a voting percentage of {supernode_price_agreement_voting_percentage:.2%}, more than the required minimum percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:.2%}")
         # Select top N closest supernodes to the best block merkle root for inclusion in the response
-        best_block_merkle_root = await get_best_block_hash_and_merkle_root_func()
+        _, best_block_merkle_root, best_block_height = await get_best_block_hash_and_merkle_root_func()
         list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = await select_top_n_closest_supernodes_to_best_block_merkle_root(list_of_agreeing_supernodes, n=10, best_block_merkle_root=best_block_merkle_root)
         # Aggregate the signatures from the selected agreeing supernodes
         selected_agreeing_supernodes_signatures_dict = {}
@@ -2603,6 +2603,8 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             credit_usage_tracking_psl_address=preliminary_price_quote_response.credit_usage_tracking_psl_address,
             request_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
             request_response_pastel_block_height=await get_current_pastel_block_height_func(),
+            best_block_merkle_root=best_block_merkle_root,
+            best_block_height=best_block_height,
             credit_purchase_request_response_message_version_string="1.0",
             responding_supernode_pastelid=MY_PASTELID,
             list_of_blacklisted_supernode_pastelids=list_of_blacklisted_supernode_pastelids,
@@ -3078,21 +3080,14 @@ async def check_if_credit_pack_ticket_txid_in_list_of_known_bad_txids_in_db(cred
         known_bad_txid = result.scalar_one_or_none()
         # Return True if the TXID is found in the known bad list, False otherwise
         return known_bad_txid is not None
-
-async def check_if_merkle_root_occurred_in_block_range(merkle_root_to_check: str, block_height: int, block_height_offset: int = 15) -> bool:
-    try:
-        start_block_height = max(0, block_height - block_height_offset)  # Ensure start block height is not negative
-        end_block_height = block_height + block_height_offset
-        for height in range(start_block_height, end_block_height + 1):
-            block_hash = await rpc_connection.getblockhash(height)
-            block_details = await rpc_connection.getblock(block_hash)
-            if block_details['merkleroot'] == merkle_root_to_check:
-                return True
-        return False
-    except Exception as e:
-        logger.error(f"Error checking if merkle root occurred in block range: {str(e)}")
-        traceback.print_exc()
-        return False
+    
+async def validate_merkle_root_at_block_height(merkle_root_to_check: str, block_height: int) -> bool:
+    block_hash = await rpc_connection.getblockhash(block_height)
+    block_details = await rpc_connection.getblock(block_hash)
+    if block_details['merkleroot'] == merkle_root_to_check:
+        return True
+    else:
+        return False    
 
 async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> dict:
     try:
@@ -3130,6 +3125,8 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion
             selected_agreeing_supernodes_signatures_dict = credit_pack_purchase_request_response.selected_agreeing_supernodes_signatures_dict
             best_block_merkle_root = credit_pack_purchase_request_response.best_block_merkle_root
+            best_block_height = credit_pack_purchase_request_response.best_block_height
+            assert(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion is not None)
         except AttributeError as e:
             logger.error(f"Required field missing in credit pack purchase request response: {str(e)}")
             validation_results["credit_pack_ticket_is_valid"] = False
@@ -3176,39 +3173,41 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             validation_results["credit_pack_ticket_is_valid"] = False
             validation_results["validation_failure_reasons_list"].append("Hash of credit pack request confirmation object stored in blockchain does not match the hash included in the object.")
         # Validate the signatures
-        if list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
-            for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
-                signatures = selected_agreeing_supernodes_signatures_dict[agreeing_supernode_pastelid]
-                if use_verbose_validation:
-                    logger.info(f"Verifying signature for selected agreeing supernode {agreeing_supernode_pastelid}")
-                    logger.info(f"Message to verify (decoded from b64): {credit_pack_purchase_request.model_dump()}")
-                    logger.info(f"Signature: {signatures['credit_pack_purchase_request_fields_json_b64_signature']}")
-                is_fields_json_b64_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, 
-                                                                                            credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64,
-                                                                                            signatures['credit_pack_purchase_request_fields_json_b64_signature'])
-                if not is_fields_json_b64_signature_valid:
-                    logger.warning(f"Warning! Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
-                if use_verbose_validation:
-                    logger.info(f"Signature validation result: {is_fields_json_b64_signature_valid}")
-                validation_results["validation_checks"].append({
-                    "check_name": f"Signature validation for selected agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request fields json",
-                    "is_valid": is_fields_json_b64_signature_valid
-                })
-                if not is_fields_json_b64_signature_valid:
-                    validation_results["credit_pack_ticket_is_valid"] = False
-                    validation_results["validation_failure_reasons_list"].append(f"Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
+        for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
+            signatures = selected_agreeing_supernodes_signatures_dict[agreeing_supernode_pastelid]
+            if use_verbose_validation:
+                logger.info(f"Verifying signature for selected agreeing supernode {agreeing_supernode_pastelid}")
+                logger.info(f"Message to verify (decoded from b64): {credit_pack_purchase_request.model_dump()}")
+                logger.info(f"Signature: {signatures['credit_pack_purchase_request_fields_json_b64_signature']}")
+            is_fields_json_b64_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, 
+                                                                                        credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64,
+                                                                                        signatures['credit_pack_purchase_request_fields_json_b64_signature'])
+            if not is_fields_json_b64_signature_valid:
+                logger.warning(f"Warning! Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
+            if use_verbose_validation:
+                logger.info(f"Signature validation result: {is_fields_json_b64_signature_valid}")
+            validation_results["validation_checks"].append({
+                "check_name": f"Signature validation for selected agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request fields json",
+                "is_valid": is_fields_json_b64_signature_valid
+            })
+            if not is_fields_json_b64_signature_valid:
+                validation_results["credit_pack_ticket_is_valid"] = False
+                validation_results["validation_failure_reasons_list"].append(f"Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
         # Validate the selected agreeing supernodes
         selected_agreeing_supernodes = await select_top_n_closest_supernodes_to_best_block_merkle_root(
             list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms,
             n=10,
             best_block_merkle_root=best_block_merkle_root
         )
-        merkle_root_to_check = best_block_merkle_root
-        block_height_to_check_around = credit_pack_purchase_request_response.request_response_pastel_block_height
-        best_block_merkle_root_is_plausible = await check_if_merkle_root_occurred_in_block_range(merkle_root_to_check, block_height_to_check_around)
-        if not best_block_merkle_root_is_plausible:
+        best_block_merkle_root_matches = await validate_merkle_root_at_block_height(best_block_merkle_root, best_block_height)
+        if not best_block_merkle_root_matches:
             validation_results["credit_pack_ticket_is_valid"] = False
-            validation_results["validation_failure_reasons_list"].append(f"Best block merkle root {best_block_merkle_root} is not plausible for credit pack with txid {credit_pack_ticket_txid} as of block height {block_height_to_check_around}")
+            validation_results["validation_failure_reasons_list"].append(f"Best block merkle root {best_block_merkle_root} does not match actaul merkle root as of block height {best_block_height} for credit pack with txid {credit_pack_ticket_txid}")
+        max_block_height_difference_between_best_block_height_and_request_response_pastel_block_height = 10
+        actual_block_height_difference_between_best_block_height_and_request_response_pastel_block_height = abs(credit_pack_purchase_request_response.request_response_pastel_block_height - best_block_height)
+        if actual_block_height_difference_between_best_block_height_and_request_response_pastel_block_height > max_block_height_difference_between_best_block_height_and_request_response_pastel_block_height:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Block height difference between specified best block height {best_block_height} and request response pastel block height {credit_pack_purchase_request_response.request_response_pastel_block_height} exceeds the maximum allowed difference of {max_block_height_difference_between_best_block_height_and_request_response_pastel_block_height} for credit pack with txid {credit_pack_ticket_txid}")
         selected_agreeing_supernodes_set = set(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion)
         computed_selected_agreeing_supernodes_set = set(selected_agreeing_supernodes)
         is_selected_agreeing_supernodes_valid = selected_agreeing_supernodes_set == computed_selected_agreeing_supernodes_set
