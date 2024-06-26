@@ -2253,13 +2253,14 @@ async def select_top_n_closest_supernodes_to_best_block_merkle_root(supernode_pa
     try:
         if best_block_merkle_root is None:
             _, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()  # Get the best block hash and merkle root if not supplied
-        merkle_root_int = int(best_block_merkle_root, 16)
+        best_block_merkle_root_hash = get_sha256_hash_of_input_data_func(best_block_merkle_root)
+        merkle_root_hash_int = int(best_block_merkle_root_hash, 16)
         # Compute the XOR distance between each supernode's hash(pastelid) and the best block's merkle root
         xor_distances = []
         for pastelid in supernode_pastelids:
             supernode_pastelid_hash = get_sha256_hash_of_input_data_func(pastelid)
             supernode_pastelid_int = int(supernode_pastelid_hash, 16)
-            xor_distance = supernode_pastelid_int ^ merkle_root_int
+            xor_distance = supernode_pastelid_int ^ merkle_root_hash_int
             xor_distances.append((pastelid, xor_distance))
         # Sort the supernodes based on their XOR distances in ascending order
         sorted_supernodes = sorted(xor_distances, key=lambda x: x[1])
@@ -2580,7 +2581,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
         logger.info(f"Enough supernodes agreed to the proposed pricing; {len(list_of_agreeing_supernodes)} supernodes agreed to the proposed pricing, achieving a voting percentage of {supernode_price_agreement_voting_percentage:.2%}, more than the required minimum percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:.2%}")
         # Select top N closest supernodes to the best block merkle root for inclusion in the response
         best_block_merkle_root = await get_best_block_hash_and_merkle_root_func()
-        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = await select_top_n_closest_supernodes_to_best_block_merkle_root(list_of_agreeing_supernodes, n=20, best_block_merkle_root=best_block_merkle_root)
+        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = await select_top_n_closest_supernodes_to_best_block_merkle_root(list_of_agreeing_supernodes, n=10, best_block_merkle_root=best_block_merkle_root)
         # Aggregate the signatures from the selected agreeing supernodes
         selected_agreeing_supernodes_signatures_dict = {}
         for response in valid_price_agreement_request_responses:
@@ -3078,6 +3079,21 @@ async def check_if_credit_pack_ticket_txid_in_list_of_known_bad_txids_in_db(cred
         # Return True if the TXID is found in the known bad list, False otherwise
         return known_bad_txid is not None
 
+async def check_if_merkle_root_occurred_in_block_range(merkle_root_to_check: str, block_height: int, block_height_offset: int = 15) -> bool:
+    try:
+        start_block_height = max(0, block_height - block_height_offset)  # Ensure start block height is not negative
+        end_block_height = block_height + block_height_offset
+        for height in range(start_block_height, end_block_height + 1):
+            block_hash = await rpc_connection.getblockhash(height)
+            block_details = await rpc_connection.getblock(block_hash)
+            if block_details['merkleroot'] == merkle_root_to_check:
+                return True
+        return False
+    except Exception as e:
+        logger.error(f"Error checking if merkle root occurred in block range: {str(e)}")
+        traceback.print_exc()
+        return False
+
 async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> dict:
     try:
         use_verbose_validation = 0
@@ -3186,6 +3202,12 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             n=10,
             best_block_merkle_root=best_block_merkle_root
         )
+        merkle_root_to_check = best_block_merkle_root
+        block_height_to_check_around = credit_pack_purchase_request_response.request_response_pastel_block_height
+        best_block_merkle_root_is_plausible = await check_if_merkle_root_occurred_in_block_range(merkle_root_to_check, block_height_to_check_around)
+        if not best_block_merkle_root_is_plausible:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Best block merkle root {best_block_merkle_root} is not plausible for credit pack with txid {credit_pack_ticket_txid} as of block height {block_height_to_check_around}")
         selected_agreeing_supernodes_set = set(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion)
         computed_selected_agreeing_supernodes_set = set(selected_agreeing_supernodes)
         is_selected_agreeing_supernodes_valid = selected_agreeing_supernodes_set == computed_selected_agreeing_supernodes_set
