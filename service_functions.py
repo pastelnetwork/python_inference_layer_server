@@ -2249,6 +2249,28 @@ async def select_potentially_agreeing_supernodes() -> List[str]:
         traceback.print_exc()
         raise    
 
+async def select_top_n_closest_supernodes_to_best_block_merkle_root(supernode_pastelids: List[str], n: int = 10, best_block_merkle_root: Optional[str] = None) -> List[str]:
+    try:
+        if best_block_merkle_root is None:
+            _, best_block_merkle_root, _ = await get_best_block_hash_and_merkle_root_func()  # Get the best block hash and merkle root if not supplied
+        merkle_root_int = int(best_block_merkle_root, 16)
+        # Compute the XOR distance between each supernode's hash(pastelid) and the best block's merkle root
+        xor_distances = []
+        for pastelid in supernode_pastelids:
+            supernode_pastelid_hash = get_sha256_hash_of_input_data_func(pastelid)
+            supernode_pastelid_int = int(supernode_pastelid_hash, 16)
+            xor_distance = supernode_pastelid_int ^ merkle_root_int
+            xor_distances.append((pastelid, xor_distance))
+        # Sort the supernodes based on their XOR distances in ascending order
+        sorted_supernodes = sorted(xor_distances, key=lambda x: x[1])
+        # Select the top N supernodes with the closest XOR distances
+        top_n_supernodes = [supernode[0] for supernode in sorted_supernodes[:n]]
+        return top_n_supernodes
+    except Exception as e:
+        logger.error(f"Error selecting top N closest supernodes to best block merkle root: {str(e)}")
+        traceback.print_exc()
+        raise
+
 async def check_liveness(supernode_base_url: str) -> bool:
     try:
         async with httpx.AsyncClient() as client:
@@ -2556,11 +2578,14 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
                 raise ValueError(f"Invalid credit purchase request termination message: {', '.join(termination_validation_errors)}")            
             return termination_message
         logger.info(f"Enough supernodes agreed to the proposed pricing; {len(list_of_agreeing_supernodes)} supernodes agreed to the proposed pricing, achieving a voting percentage of {supernode_price_agreement_voting_percentage:.2%}, more than the required minimum percentage of {SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:.2%}")
-        # Aggregate the signatures from the agreeing supernodes:
-        agreeing_supernodes_signatures_dict = {}
+        # Select top N closest supernodes to the best block merkle root for inclusion in the response
+        best_block_merkle_root = await get_best_block_hash_and_merkle_root_func()
+        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = await select_top_n_closest_supernodes_to_best_block_merkle_root(list_of_agreeing_supernodes, n=20, best_block_merkle_root=best_block_merkle_root)
+        # Aggregate the signatures from the selected agreeing supernodes
+        selected_agreeing_supernodes_signatures_dict = {}
         for response in valid_price_agreement_request_responses:
-            if response.agree_with_proposed_price:
-                agreeing_supernodes_signatures_dict[response.responding_supernode_pastelid] = {
+            if response.responding_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
+                selected_agreeing_supernodes_signatures_dict[response.responding_supernode_pastelid] = {
                     "price_agreement_request_response_hash_signature": response.responding_supernode_signature_on_price_agreement_request_response_hash,
                     "credit_pack_purchase_request_fields_json_b64_signature": response.responding_supernode_signature_on_credit_pack_purchase_request_fields_json_b64
                 }
@@ -2582,11 +2607,12 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             list_of_blacklisted_supernode_pastelids=list_of_blacklisted_supernode_pastelids,
             list_of_potentially_agreeing_supernodes=potentially_agreeing_supernodes,
             list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms=list_of_agreeing_supernodes,
-            agreeing_supernodes_signatures_dict=agreeing_supernodes_signatures_dict,
+            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion=list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion,
+            selected_agreeing_supernodes_signatures_dict=selected_agreeing_supernodes_signatures_dict,
             sha3_256_hash_of_credit_pack_purchase_request_response_fields="",
             responding_supernode_signature_on_credit_pack_purchase_request_response_hash=""
         )
-        logger.info(f"Now generating the final credit pack purchase request response and assembling the {len(list_of_agreeing_supernodes)} agreeing supernode signatures...")
+        logger.info(f"Now generating the final credit pack purchase request response and assembling the {len(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion)} selected agreeing supernode signatures...")
         # Generate the hash and signature fields
         response_fields_that_are_hashed = await extract_response_fields_from_credit_pack_ticket_message_data_as_json_func(credit_pack_purchase_request_response)  # noqa: F841
         credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields = await compute_sha3_256_hash_of_sqlmodel_response_fields(credit_pack_purchase_request_response)
@@ -2602,8 +2628,8 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             raise ValueError(f"Invalid credit pack purchase request response: {', '.join(request_response_validation_errors)}")          
         await save_credit_pack_purchase_request_response(credit_pack_purchase_request_response)
         # Send the final credit pack purchase request response to the agreeing supernodes
-        logger.info(f"Now sending the final credit pack purchase request response to the list of {len(list_of_agreeing_supernodes)} agreeing supernodes: {list_of_agreeing_supernodes}")
-        announcement_responses = await send_credit_pack_purchase_request_final_response_to_supernodes(credit_pack_purchase_request_response, list_of_agreeing_supernodes)
+        logger.info(f"Now sending the final credit pack purchase request response to the list of {len(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion)} selected agreeing supernodes: {list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion}")
+        announcement_responses = await send_credit_pack_purchase_request_final_response_to_supernodes(credit_pack_purchase_request_response, list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion)
         logger.info(f"Received {len(announcement_responses)} responses to the final credit pack purchase request response announcement, of which {len([response for response in announcement_responses if response.status_code == 200])} were successful")
         return credit_pack_purchase_request_response
     except Exception as e:
@@ -3051,7 +3077,7 @@ async def check_if_credit_pack_ticket_txid_in_list_of_known_bad_txids_in_db(cred
         known_bad_txid = result.scalar_one_or_none()
         # Return True if the TXID is found in the known bad list, False otherwise
         return known_bad_txid is not None
-        
+
 async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> dict:
     try:
         use_verbose_validation = 0
@@ -3083,7 +3109,9 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         list_of_blacklisted_supernode_pastelids = credit_pack_purchase_request_response.list_of_blacklisted_supernode_pastelids
         list_of_potentially_agreeing_supernodes = credit_pack_purchase_request_response.list_of_potentially_agreeing_supernodes
         list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms
-        agreeing_supernodes_signatures_dict = credit_pack_purchase_request_response.agreeing_supernodes_signatures_dict
+        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion
+        selected_agreeing_supernodes_signatures_dict = credit_pack_purchase_request_response.selected_agreeing_supernodes_signatures_dict
+        best_block_merkle_root = credit_pack_purchase_request_response.best_block_merkle_root
         # First check if all included pastelids were valid supernodes at the time:
         for potentially_agreeing_supernode_pastelid in list_of_potentially_agreeing_supernodes:
             potentially_agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height = potentially_agreeing_supernode_pastelid in list_of_active_supernode_pastelids_at_the_time
@@ -3103,7 +3131,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             if not agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height:
                 validation_results["credit_pack_ticket_is_valid"] = False
                 validation_results["validation_failure_reasons_list"].append(f"Agreeing supernode with pastelid {agreeing_supernode_pastelid} was NOT in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}")            
-        #Validate the ticket response hashes:
+        # Validate the ticket response hashes:
         credit_pack_purchase_request_response_transformed = parse_sqlmodel_strings_into_lists_and_dicts_func(credit_pack_purchase_request_response)
         credit_pack_purchase_request_confirmation_transformed = parse_sqlmodel_strings_into_lists_and_dicts_func(credit_pack_purchase_request_confirmation)
         validation_errors_in_credit_pack_purchase_request_response = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_response_transformed)
@@ -3125,10 +3153,10 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             validation_results["credit_pack_ticket_is_valid"] = False
             validation_results["validation_failure_reasons_list"].append("Hash of credit pack request confirmation object stored in blockchain does not match the hash included in the object.")
         # Validate the signatures
-        for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
-            signatures = agreeing_supernodes_signatures_dict[agreeing_supernode_pastelid]
+        for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
+            signatures = selected_agreeing_supernodes_signatures_dict[agreeing_supernode_pastelid]
             if use_verbose_validation:
-                logger.info(f"Verifying signature for agreeing supernode {agreeing_supernode_pastelid}")
+                logger.info(f"Verifying signature for selected agreeing supernode {agreeing_supernode_pastelid}")
                 logger.info(f"Message to verify (decoded from b64): {credit_pack_purchase_request.model_dump()}")
                 logger.info(f"Signature: {signatures['credit_pack_purchase_request_fields_json_b64_signature']}")
             is_fields_json_b64_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid, 
@@ -3139,12 +3167,30 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             if use_verbose_validation:
                 logger.info(f"Signature validation result: {is_fields_json_b64_signature_valid}")
             validation_results["validation_checks"].append({
-                "check_name": f"Signature validation for agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request fields json",
+                "check_name": f"Signature validation for selected agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request fields json",
                 "is_valid": is_fields_json_b64_signature_valid
             })
             if not is_fields_json_b64_signature_valid:
                 validation_results["credit_pack_ticket_is_valid"] = False
                 validation_results["validation_failure_reasons_list"].append(f"Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
+        # Validate the selected agreeing supernodes
+        selected_agreeing_supernodes = await select_top_n_closest_supernodes_to_best_block_merkle_root(
+            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms,
+            n=10,
+            best_block_merkle_root=best_block_merkle_root
+        )
+        selected_agreeing_supernodes_set = set(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion)
+        computed_selected_agreeing_supernodes_set = set(selected_agreeing_supernodes)
+        is_selected_agreeing_supernodes_valid = selected_agreeing_supernodes_set == computed_selected_agreeing_supernodes_set
+        validation_results["validation_checks"].append({
+            "check_name": "Validation of selected agreeing supernodes for signature inclusion",
+            "is_valid": is_selected_agreeing_supernodes_valid,
+            "expected_selected_agreeing_supernodes": list(computed_selected_agreeing_supernodes_set),
+            "actual_selected_agreeing_supernodes": list(selected_agreeing_supernodes_set)
+        })
+        if not is_selected_agreeing_supernodes_valid:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append("Selected agreeing supernodes for signature inclusion do not match the expected set based on XOR distance to the best block merkle root.")
         # Validate the agreeing supernodes
         num_potentially_agreeing_supernodes = len(list_of_potentially_agreeing_supernodes)
         num_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
@@ -3156,8 +3202,8 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         validation_results["validation_checks"].append({
             "check_name": "Agreeing supernodes percentage validation",
             "is_valid": is_agreeing_percentage_valid and is_quorum_valid,
-            "quorum_percentage": round(quorum_percentage,5),
-            "agreeing_percentage": round(agreeing_percentage,5)
+            "quorum_percentage": round(quorum_percentage, 5),
+            "agreeing_percentage": round(agreeing_percentage, 5)
         })
         if not is_agreeing_percentage_valid or not is_quorum_valid:
             validation_results["credit_pack_ticket_is_valid"] = False
@@ -3174,7 +3220,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
     except Exception as e:
         logger.error(f"Error validating credit pack ticket with TXID {credit_pack_ticket_txid}: {str(e)}")
         traceback.print_exc()
-        raise    
+        raise
     
 async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
     try:
