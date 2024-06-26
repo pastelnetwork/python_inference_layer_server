@@ -3108,10 +3108,17 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         list_of_active_supernode_pastelids_at_the_time = [x["pastel_id"] for x in active_supernodes_at_the_time]
         list_of_blacklisted_supernode_pastelids = credit_pack_purchase_request_response.list_of_blacklisted_supernode_pastelids
         list_of_potentially_agreeing_supernodes = credit_pack_purchase_request_response.list_of_potentially_agreeing_supernodes
-        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms
-        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion
-        selected_agreeing_supernodes_signatures_dict = credit_pack_purchase_request_response.selected_agreeing_supernodes_signatures_dict
-        best_block_merkle_root = credit_pack_purchase_request_response.best_block_merkle_root
+        # Check for new fields
+        try:
+            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms
+            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion
+            selected_agreeing_supernodes_signatures_dict = credit_pack_purchase_request_response.selected_agreeing_supernodes_signatures_dict
+            best_block_merkle_root = credit_pack_purchase_request_response.best_block_merkle_root
+        except AttributeError as e:
+            logger.error(f"Required field missing in credit pack purchase request response: {str(e)}")
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Required field missing in credit pack purchase request response: {str(e)}")
+            return validation_results
         # First check if all included pastelids were valid supernodes at the time:
         for potentially_agreeing_supernode_pastelid in list_of_potentially_agreeing_supernodes:
             potentially_agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height = potentially_agreeing_supernode_pastelid in list_of_active_supernode_pastelids_at_the_time
