@@ -3126,7 +3126,10 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             selected_agreeing_supernodes_signatures_dict = credit_pack_purchase_request_response.selected_agreeing_supernodes_signatures_dict
             best_block_merkle_root = credit_pack_purchase_request_response.best_block_merkle_root
             best_block_height = credit_pack_purchase_request_response.best_block_height
-            assert(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion is not None)
+            if list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion is None:
+                validation_results["credit_pack_ticket_is_valid"] = False
+                validation_results["validation_failure_reasons_list"].append("Required field 'list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion' is missing in credit pack purchase request response")
+                return validation_results                
         except AttributeError as e:
             logger.error(f"Required field missing in credit pack purchase request response: {str(e)}")
             validation_results["credit_pack_ticket_is_valid"] = False
