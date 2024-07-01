@@ -92,9 +92,9 @@ async def startup():
         logger.info(f"Database initialization complete: {db_init_complete}")
         encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
         decrypt_sensitive_fields() # Now decrypt sensitive fields        
-        # asyncio.create_task(monitor_new_messages())  # Create a background task
-        # asyncio.create_task(detect_chain_reorg_and_rescan())
-        # asyncio.create_task(full_rescan_burn_transactions())
+        asyncio.create_task(monitor_new_messages())  # Create a background task
+        asyncio.create_task(detect_chain_reorg_and_rescan())
+        asyncio.create_task(full_rescan_burn_transactions())
         asyncio.create_task(fetch_all_mnid_tickets_details())
         asyncio.create_task(update_pending_transactions())
         asyncio.create_task(list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them())

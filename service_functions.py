@@ -5352,7 +5352,7 @@ async def full_rescan_burn_transactions_old():
         logger.info("No block hash records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
         logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        await fetch_and_insert_block_hashes(0, current_block_height, 20000)
+        await fetch_and_insert_block_hashes(0, current_block_height, 500)
         logger.info("Block hashes updated successfully.")
     else:
         logger.info("Existing records found. Skipping full rescan.")
@@ -5377,7 +5377,7 @@ async def full_rescan_burn_transactions():
         logger.info("No block hash records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
         logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        chunk_size = 5000 
+        chunk_size = 500 
         await fetch_and_insert_block_hashes(0, current_block_height, chunk_size)
         logger.info("Block hashes updated successfully.")
     else:
@@ -5417,32 +5417,47 @@ async def fetch_all_mnid_tickets_details():
                     
 async def fetch_active_supernodes_count_and_details(block_height: int):
     async with db_code.Session() as session:
-        async with session.begin(): # Fetch all mnid tickets created up to the specified block height
+        async with session.begin():  # Fetch all mnid tickets created up to the specified block height
             result = await session.execute(
                 select(db_code.MNIDTicketDetails)
                 .where(db_code.MNIDTicketDetails.block_height <= block_height)
             )
             mnid_tickets = result.scalars().all()
             active_supernodes = []
-            for ticket in mnid_tickets: 
+            for ticket in mnid_tickets:
                 try:
-                    tx_info = await rpc_connection.getrawtransaction(ticket.outpoint.split('-')[0], 1)
-                    vout = int(ticket.outpoint.split('-')[1])
-                    # Check if the outpoint is still unspent and meets collateral requirements
-                    if tx_info['vout'][vout]['n'] == vout and tx_info['vout'][vout]['value'] >= masternode_collateral_amount:
-                        supernode_details = {
-                            "txid": ticket.txid,
-                            "pastel_id": ticket.pastel_id,
-                            "address": ticket.address,
-                            "pq_key": ticket.pq_key,
-                            "outpoint": ticket.outpoint,
-                            "block_height": ticket.block_height,
-                            # Convert datetime to timestamp
-                            "timestamp": datetime.utcfromtimestamp(ticket.timestamp.timestamp() if isinstance(ticket.timestamp, datetime) else int(ticket.timestamp))
-                        }
-                        active_supernodes.append(supernode_details)
-                except Exception as e:
-                    print(f"Error processing transaction for txid {ticket.txid}: {e}")
+                    # Check if outpoint is valid
+                    if ticket.outpoint and isinstance(ticket.outpoint, str) and '-' in ticket.outpoint:
+                        txid, vout_str = ticket.outpoint.split('-')
+                        # Check if vout is a valid integer
+                        if not vout_str.isdigit():
+                            continue
+                        vout = int(vout_str)
+                        tx_info = await rpc_connection.getrawtransaction(txid, 1)
+                        # Ensure tx_info is a dictionary and contains 'vout'
+                        if tx_info and isinstance(tx_info, dict) and 'vout' in tx_info:
+                            # Ensure vout is within the valid range of tx_info['vout']
+                            if vout >= 0 and vout < len(tx_info['vout']):
+                                vout_data = tx_info['vout'][vout]
+                                # Ensure vout_data is a dictionary and contains necessary keys
+                                if vout_data and isinstance(vout_data, dict) and 'n' in vout_data and 'value' in vout_data:
+                                    # Check if the outpoint is still unspent and meets collateral requirements
+                                    if vout_data['n'] == vout and vout_data['value'] >= masternode_collateral_amount:
+                                        # Ensure timestamp is valid
+                                        if isinstance(ticket.timestamp, (datetime, int)):
+                                            timestamp = datetime.utcfromtimestamp(ticket.timestamp.timestamp() if isinstance(ticket.timestamp, datetime) else int(ticket.timestamp))
+                                            supernode_details = {
+                                                "txid": ticket.txid,
+                                                "pastel_id": ticket.pastel_id,
+                                                "address": ticket.address,
+                                                "pq_key": ticket.pq_key,
+                                                "outpoint": ticket.outpoint,
+                                                "block_height": ticket.block_height,
+                                                "timestamp": timestamp
+                                            }
+                                            active_supernodes.append(supernode_details)
+                except (KeyError, ValueError, TypeError) as e:  # noqa: F841
+                    pass
     active_supernodes_count = len(active_supernodes)
     return active_supernodes_count, active_supernodes
 
