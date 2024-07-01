@@ -5352,7 +5352,7 @@ async def full_rescan_burn_transactions_old():
         logger.info("No block hash records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
         logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        await fetch_and_insert_block_hashes(0, current_block_height, 500)
+        await fetch_and_insert_block_hashes(0, current_block_height, 5000)
         logger.info("Block hashes updated successfully.")
     else:
         logger.info("Existing records found. Skipping full rescan.")
@@ -5368,7 +5368,7 @@ async def full_rescan_burn_transactions():
         logger.info("No burn transaction records found in database, proceeding with full rescan...")
         logger.info("Please wait, retrieving ALL burn transactions from ANY address starting with the genesis block (may take a while and cause high CPU usage...)")
         burn_transactions = await rpc_connection.scanburntransactions("*")
-        chunk_size = 500  # Adjust the chunk size as needed
+        chunk_size = 5000  # Adjust the chunk size as needed
         ignore_unconfirmed_transactions = 1
         if burn_transactions:
             decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, ignore_unconfirmed_transactions)
@@ -5377,7 +5377,7 @@ async def full_rescan_burn_transactions():
         logger.info("No block hash records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
         logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        chunk_size = 500 
+        chunk_size = 5000
         await fetch_and_insert_block_hashes(0, current_block_height, chunk_size)
         logger.info("Block hashes updated successfully.")
     else:
