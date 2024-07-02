@@ -1031,7 +1031,6 @@ def is_model_supported(model_menu, desired_model_canonical_string, desired_model
     return False
         
 async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_pastelid, message_body, message_type):
-    # Load blacklist
     blacklist_path = Path('supernode_inference_ip_blacklist.txt')
     blacklisted_ips = set()
     if blacklist_path.exists():
@@ -1050,12 +1049,13 @@ async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_past
     async def is_model_supported_async(supernode_ip_and_port, model_canonical_string, model_inference_type_string, model_parameters_json):
         supernode_ip = supernode_ip_and_port.split(':')[0]
         supernode_url = f"http://{supernode_ip}:7123"
+        if supernode_ip in blacklisted_ips:
+            return False
         model_menu = await get_supernode_model_menu(supernode_url)
         return is_model_supported(model_menu, model_canonical_string, model_inference_type_string, model_parameters_json)
     supported_supernodes_coroutines = [
         is_model_supported_async(row['ipaddress:port'], desired_model_canonical_string, desired_model_inference_type_string, desired_model_parameters_json)
         for _, row in supernode_list_df.iterrows()
-        if row['ipaddress:port'].split(':')[0] not in blacklisted_ips
     ]
     supported_supernodes_mask = await asyncio.gather(*supported_supernodes_coroutines)
     supported_supernodes = supernode_list_df[supported_supernodes_mask]
