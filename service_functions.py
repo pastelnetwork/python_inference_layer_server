@@ -184,9 +184,12 @@ MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED = config.get
 MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION = config.get("MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION", default=3, cast=int)
 MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES = config.get("MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES", default=10, cast=int)
 MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS = config.get("MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS", default=30, cast=int)
+INDIVIDUAL_SUPERNODE_PRICE_AGREEMENT_REQUEST_TIMEOUT_PERIOD_IN_SECONDS = config.get("INDIVIDUAL_SUPERNODE_PRICE_AGREEMENT_REQUEST_TIMEOUT_PERIOD_IN_SECONDS", default=25, cast=int)
+INDIVIDUAL_SUPERNODE_MODEL_MENU_REQUEST_TIMEOUT_PERIOD_IN_SECONDS = config.get("INDIVIDUAL_SUPERNODE_MODEL_MENU_REQUEST_TIMEOUT_PERIOD_IN_SECONDS", default=5, cast=int)
 BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS = config.get("BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS", default=3, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE", default=0.51, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE", default=0.65, cast=float)
+MAXIMUM_CREDITS_PER_CREDIT_PACK = config.get("MAXIMUM_CREDITS_PER_CREDIT_PACK", default=1000000, cast=int)
 SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK = 1
 UVICORN_PORT = config.get("UVICORN_PORT", default=7123, cast=int)
 COIN = 100000 # patoshis in 1 PSL
@@ -986,7 +989,7 @@ async def broadcast_message_to_all_sns_using_pastelid_func(message_to_send, mess
 
 async def get_supernode_model_menu(supernode_url):
     try:
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+        async with httpx.AsyncClient(timeout=Timeout(INDIVIDUAL_SUPERNODE_MODEL_MENU_REQUEST_TIMEOUT_PERIOD_IN_SECONDS)) as client:
             response = await client.get(f"{supernode_url}/get_inference_model_menu")
             response.raise_for_status()
             model_menu = response.json()
@@ -1028,20 +1031,32 @@ def is_model_supported(model_menu, desired_model_canonical_string, desired_model
     return False
         
 async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_pastelid, message_body, message_type):
+    # Load blacklist
+    blacklist_path = Path('supernode_inference_ip_blacklist.txt')
+    blacklisted_ips = set()
+    if blacklist_path.exists():
+        with blacklist_path.open('r') as blacklist_file:
+            blacklisted_ips = {line.strip() for line in blacklist_file if line.strip()}
+    else:
+        logger.info("Blacklist file not found. Proceeding without blacklist filtering.")
     supernode_list_df, _ = await check_supernode_list_func()
     n = 4
     local_machine_supernode_data, _, _, _ = await get_local_machine_supernode_data_func()
     local_sn_pastelid = local_machine_supernode_data['extKey'].values.tolist()[0]
-    message_body_dict = json.loads(message_body) # Extract the desired model information from the message_body
+    message_body_dict = json.loads(message_body)
     desired_model_canonical_string = message_body_dict.get('requested_model_canonical_string')
     desired_model_inference_type_string = message_body_dict.get('model_inference_type_string')
-    desired_model_parameters_json = base64.b64decode(message_body_dict.get('model_parameters_json_b64')).decode('utf-8') 
-    async def is_model_supported_async(supernode_ip_and_port, model_canonical_string, model_inference_type_string, model_parameters_json): # Filter supernodes based on model support
+    desired_model_parameters_json = base64.b64decode(message_body_dict.get('model_parameters_json_b64')).decode('utf-8')
+    async def is_model_supported_async(supernode_ip_and_port, model_canonical_string, model_inference_type_string, model_parameters_json):
         supernode_ip = supernode_ip_and_port.split(':')[0]
         supernode_url = f"http://{supernode_ip}:7123"
         model_menu = await get_supernode_model_menu(supernode_url)
         return is_model_supported(model_menu, model_canonical_string, model_inference_type_string, model_parameters_json)
-    supported_supernodes_coroutines = [is_model_supported_async(row['ipaddress:port'], desired_model_canonical_string, desired_model_inference_type_string, desired_model_parameters_json) for _, row in supernode_list_df.iterrows()]
+    supported_supernodes_coroutines = [
+        is_model_supported_async(row['ipaddress:port'], desired_model_canonical_string, desired_model_inference_type_string, desired_model_parameters_json)
+        for _, row in supernode_list_df.iterrows()
+        if row['ipaddress:port'].split(':')[0] not in blacklisted_ips
+    ]
     supported_supernodes_mask = await asyncio.gather(*supported_supernodes_coroutines)
     supported_supernodes = supernode_list_df[supported_supernodes_mask]
     supported_supernodes_minus_this_supernode = supported_supernodes[supported_supernodes['extKey'] != local_sn_pastelid]
@@ -1049,7 +1064,6 @@ async def broadcast_message_to_n_closest_supernodes_to_given_pastelid(input_past
         logger.error(f"No other supported supernodes found for the desired model: {desired_model_canonical_string} with inference type: {desired_model_inference_type_string} and parameters: {desired_model_parameters_json}")
         supported_supernodes_minus_this_supernode = supernode_list_df[supernode_list_df['extKey'] != local_sn_pastelid]
         logger.info("We had to choose audit supernodes which cannot process the request themselves if needed!")
-    # Get the closest supernodes from the supported supernodes
     closest_supernodes = await get_n_closest_supernodes_to_pastelid_urls(n, input_pastelid, supported_supernodes_minus_this_supernode)
     list_of_supernode_pastelids = [x[1] for x in closest_supernodes]
     list_of_supernode_urls = [x[0] for x in closest_supernodes]
@@ -2135,6 +2149,10 @@ async def process_credit_purchase_initial_request(credit_pack_purchase_request: 
             rejection_message = await generate_credit_pack_request_rejection_message(credit_pack_purchase_request, request_validation_errors)
             logger.error(f"Invalid credit purchase request: {', '.join(request_validation_errors)}")
             return rejection_message
+        if credit_pack_purchase_request.requested_initial_credits_in_credit_pack > MAXIMUM_CREDITS_PER_CREDIT_PACK:
+            rejection_message = f"Requested initial credits in credit pack exceeds the maximum of {MAXIMUM_CREDITS_PER_CREDIT_PACK} credits allowed in a single credit pack!"
+            logger.error(rejection_message)
+            return rejection_message
         # Check if credit_usage_tracking_psl_address has already been used for an existing credit pack at any time:
         credit_tracking_address_already_used, credit_pack_purchase_request_response = await check_if_credit_usage_tracking_psl_address_has_already_been_used_for_a_credit_pack(credit_pack_purchase_request.credit_usage_tracking_psl_address)
         if credit_tracking_address_already_used:
@@ -2296,18 +2314,23 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             blacklisted_ips = {line.strip() for line in blacklist_file if line.strip()}
     else:
         logger.info("Blacklist file not found. Proceeding without blacklist filtering.")
-    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS/5.0)) as client:
+    async with httpx.AsyncClient(timeout=Timeout(None)) as client:
         supernode_list_df, _ = await check_supernode_list_func()
-        tasks = []
-        for supernode_pastelid in supernodes:
-            task = asyncio.create_task(get_supernode_url_and_check_liveness(supernode_pastelid, supernode_list_df, client))
-            tasks.append(task)
-        supernode_urls_and_statuses = await asyncio.gather(*tasks)
+        # Prepare tasks for supernode liveness check
+        supernode_liveness_tasks = [
+            asyncio.create_task(get_supernode_url_and_check_liveness(supernode_pastelid, supernode_list_df, client))
+            for supernode_pastelid in supernodes
+        ]
+        supernode_urls_and_statuses = await asyncio.gather(*supernode_liveness_tasks)
         price_agreement_semaphore = asyncio.Semaphore(MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS)
-        async def send_request(supernode_base_url, payload):
+        async def send_request(supernode_base_url, payload, timeout):
             async with price_agreement_semaphore:
-                response = await client.post(supernode_base_url, json=payload)
-                return response
+                try:
+                    response = await client.post(supernode_base_url, json=payload, timeout=timeout)
+                    return response
+                except httpx.RequestError as e:
+                    logger.error(f"Error sending request to {supernode_base_url}: {str(e)}")
+                    return None
         async def process_supernode(supernode_base_url, is_alive):
             if is_alive:
                 async with price_agreement_semaphore:
@@ -2324,31 +2347,27 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
                     "challenge_signature": challenge_signature
                 }
                 url = f"{supernode_base_url}/credit_pack_price_agreement_request"
-                return await send_request(url, payload)
+                timeout = Timeout(INDIVIDUAL_SUPERNODE_PRICE_AGREEMENT_REQUEST_TIMEOUT_PERIOD_IN_SECONDS)  # Timeout for individual supernode request
+                return await send_request(url, payload, timeout)
             else:
                 logger.warning(f"Supernode {supernode_base_url} is not responding on port 7123")
                 return None
-        request_tasks = []
-        for supernode_base_url, is_alive in supernode_urls_and_statuses:
-            ip_address = supernode_base_url.split(":")[1].replace("//", "").split("/")[0]  # Extract the IP address
-            if ip_address not in blacklisted_ips:
-                request_tasks.append(process_supernode(supernode_base_url, is_alive))
+        request_tasks = [
+            process_supernode(supernode_base_url, is_alive)
+            for supernode_base_url, is_alive in supernode_urls_and_statuses
+            if supernode_base_url.split(":")[1].replace("//", "").split("/")[0] not in blacklisted_ips
+        ]
         logger.info(f"Now sending out {len(request_tasks):,} price agreement requests to potentially agreeing supernodes...")
-        datetime_start = datetime.now() 
+        datetime_start = datetime.now()
         responses = await asyncio.gather(*request_tasks, return_exceptions=True)
         datetime_end = datetime.now()
         duration = datetime_end - datetime_start
         logger.info(f"Finished sending price agreement requests to supernodes in {duration.total_seconds():.2f} seconds!")
-        price_agreement_request_responses = []
-        for response in responses:
-            if isinstance(response, httpx.Response):
-                if response.status_code == 200:
-                    price_agreement_request_response = db_code.CreditPackPurchasePriceAgreementRequestResponse(**response.json())
-                    price_agreement_request_responses.append(price_agreement_request_response)
-                else:
-                    logger.warning(f"Error sending price agreement request to supernode {response.url}: {response.text}")
-            elif response is not None:
-                logger.error(f"Error sending price agreement request to supernode: {str(response)}")
+        price_agreement_request_responses = [
+            db_code.CreditPackPurchasePriceAgreementRequestResponse(**response.json())
+            for response in responses
+            if isinstance(response, httpx.Response) and response.status_code == 200
+        ]
         logger.info(f"Received a total of {len(price_agreement_request_responses):,} valid price agreement responses from supernodes out of {len(request_tasks):,} total requests sent, a success rate of {len(price_agreement_request_responses)/len(request_tasks):.2%}")
         return price_agreement_request_responses
 
@@ -3229,7 +3248,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         best_block_merkle_root_matches = await validate_merkle_root_at_block_height(best_block_merkle_root, best_block_height)
         if not best_block_merkle_root_matches:
             validation_results["credit_pack_ticket_is_valid"] = False
-            validation_results["validation_failure_reasons_list"].append(f"Best block merkle root {best_block_merkle_root} does not match actaul merkle root as of block height {best_block_height} for credit pack with txid {credit_pack_ticket_txid}")
+            validation_results["validation_failure_reasons_list"].append(f"Best block merkle root {best_block_merkle_root} does not match actual merkle root as of block height {best_block_height} for credit pack with txid {credit_pack_ticket_txid}")
         max_block_height_difference_between_best_block_height_and_request_response_pastel_block_height = 10
         actual_block_height_difference_between_best_block_height_and_request_response_pastel_block_height = abs(credit_pack_purchase_request_response.request_response_pastel_block_height - best_block_height)
         if actual_block_height_difference_between_best_block_height_and_request_response_pastel_block_height > max_block_height_difference_between_best_block_height_and_request_response_pastel_block_height:
@@ -3277,8 +3296,67 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         logger.error(f"Error validating credit pack ticket with TXID {credit_pack_ticket_txid}: {str(e)}")
         traceback.print_exc()
         raise
-    
+
 async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
+    async def process_request_confirmation(request_confirmation):
+        hash_of_request_fields = request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
+        async with db_code.Session() as db_session:
+            txid_mapping = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestResponseTxidMapping)
+                .where(db_code.CreditPackPurchaseRequestResponseTxidMapping.sha3_256_hash_of_credit_pack_purchase_request_fields == hash_of_request_fields)
+            )
+            txid_mapping = txid_mapping.one_or_none()
+        if txid_mapping:
+            txid = txid_mapping.pastel_api_credit_pack_ticket_registration_txid
+            async with db_code.Session() as db_session:
+                existing_data_result = await db_session.exec(
+                    select(db_code.CreditPackCompleteTicketWithBalance)
+                    .where(db_code.CreditPackCompleteTicketWithBalance.credit_pack_ticket_registration_txid == txid)
+                )
+                existing_data = existing_data_result.one_or_none()
+            if existing_data:
+                complete_ticket = json.loads(existing_data.complete_credit_pack_data_json)
+                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(txid)
+                complete_ticket['credit_pack_current_credit_balance'] = current_credit_balance
+                complete_ticket['balance_as_of_datetime'] = datetime.now(dt.UTC).isoformat()
+                complete_ticket_json = json.dumps(complete_ticket)
+                async with db_code.Session() as db_session:
+                    existing_data.complete_credit_pack_data_json = complete_ticket_json
+                    existing_data.datetime_last_updated = datetime.now(dt.UTC)
+                    db_session.add(existing_data)
+                    await db_session.commit()
+            else:
+                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(txid)
+                _, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
+                if all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
+                    credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
+                    credit_pack_purchase_request = json.loads(credit_pack_purchase_request_fields_json)
+                    complete_ticket = {
+                        "credit_pack_purchase_request": credit_pack_purchase_request,
+                        "credit_pack_purchase_request_response": credit_pack_purchase_request_response.model_dump(),
+                        "credit_pack_purchase_request_confirmation": credit_pack_purchase_request_confirmation.model_dump(),
+                        "credit_pack_registration_txid": txid,
+                        "credit_pack_current_credit_balance": current_credit_balance,
+                        "balance_as_of_datetime": datetime.now(dt.UTC).isoformat()
+                    }
+                    complete_ticket = convert_uuids_to_strings(complete_ticket)
+                    complete_ticket = normalize_data(complete_ticket)
+                    complete_ticket_json = json.dumps(complete_ticket)
+                    async with db_code.Session() as db_session:
+                        if existing_data:
+                            existing_data.complete_credit_pack_data_json = complete_ticket_json
+                            existing_data.datetime_last_updated = datetime.now(dt.UTC)
+                            db_session.add(existing_data)
+                        else:
+                            new_complete_ticket = db_code.CreditPackCompleteTicketWithBalance(
+                                credit_pack_ticket_registration_txid=txid,
+                                complete_credit_pack_data_json=complete_ticket_json,
+                                datetime_last_updated=datetime.now(dt.UTC)
+                            )
+                            db_session.add(new_complete_ticket)
+                        await db_session.commit()
+            return complete_ticket
+        return None
     try:
         async with db_code.Session() as db_session:
             credit_pack_request_confirmations_results = await db_session.exec(
@@ -3286,65 +3364,10 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                 .where(db_code.CreditPackPurchaseRequestConfirmation.requesting_end_user_pastelid == pastelid)
             )
             credit_pack_request_confirmations = credit_pack_request_confirmations_results.all()
-        complete_tickets = []
-        for request_confirmation in credit_pack_request_confirmations:
-            hash_of_request_fields = request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
-            async with db_code.Session() as db_session:
-                txid_mapping = await db_session.exec(
-                    select(db_code.CreditPackPurchaseRequestResponseTxidMapping)
-                    .where(db_code.CreditPackPurchaseRequestResponseTxidMapping.sha3_256_hash_of_credit_pack_purchase_request_fields == hash_of_request_fields)
-                )
-                txid_mapping = txid_mapping.one_or_none()
-            if txid_mapping:
-                txid = txid_mapping.pastel_api_credit_pack_ticket_registration_txid
-                async with db_code.Session() as db_session:
-                    existing_data_result = await db_session.exec(
-                        select(db_code.CreditPackCompleteTicketWithBalance)
-                        .where(db_code.CreditPackCompleteTicketWithBalance.credit_pack_ticket_registration_txid == txid)
-                    )
-                    existing_data = existing_data_result.one_or_none()
-                if existing_data:
-                    complete_ticket = json.loads(existing_data.complete_credit_pack_data_json)
-                    current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
-                    complete_ticket['credit_pack_current_credit_balance'] = current_credit_balance
-                    complete_ticket['balance_as_of_datetime'] = datetime.now(dt.UTC).isoformat()
-                    complete_ticket_json = json.dumps(complete_ticket)
-                    async with db_code.Session() as db_session:
-                        existing_data.complete_credit_pack_data_json = complete_ticket_json
-                        existing_data.datetime_last_updated = datetime.now(dt.UTC)
-                        db_session.add(existing_data)
-                        await db_session.commit()
-                else:
-                    current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
-                    _, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
-                    if all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
-                        credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
-                        credit_pack_purchase_request = json.loads(credit_pack_purchase_request_fields_json)
-                        complete_ticket = {
-                            "credit_pack_purchase_request": credit_pack_purchase_request,
-                            "credit_pack_purchase_request_response": credit_pack_purchase_request_response.model_dump(),
-                            "credit_pack_purchase_request_confirmation": credit_pack_purchase_request_confirmation.model_dump(),
-                            "credit_pack_registration_txid": txid,
-                            "credit_pack_current_credit_balance": current_credit_balance,
-                            "balance_as_of_datetime": datetime.now(dt.UTC).isoformat()
-                        }
-                        complete_ticket = convert_uuids_to_strings(complete_ticket)
-                        complete_ticket = normalize_data(complete_ticket)
-                        complete_ticket_json = json.dumps(complete_ticket)
-                        async with db_code.Session() as db_session:
-                            if existing_data:
-                                existing_data.complete_credit_pack_data_json = complete_ticket_json
-                                existing_data.datetime_last_updated = datetime.now(dt.UTC)
-                                db_session.add(existing_data)
-                            else:
-                                new_complete_ticket = db_code.CreditPackCompleteTicketWithBalance(
-                                    credit_pack_ticket_registration_txid=txid,
-                                    complete_credit_pack_data_json=complete_ticket_json,
-                                    datetime_last_updated=datetime.now(dt.UTC)
-                                )
-                                db_session.add(new_complete_ticket)
-                            await db_session.commit()
-                complete_tickets.append(complete_ticket)
+        tasks = [process_request_confirmation(request_confirmation) for request_confirmation in credit_pack_request_confirmations]
+        complete_tickets = await asyncio.gather(*tasks)
+        # Filter out None values (if any)
+        complete_tickets = [ticket for ticket in complete_tickets if ticket]
         return complete_tickets
     except Exception as e:
         logger.error(f"Error retrieving credit pack tickets for PastelID {pastelid}: {str(e)}")
@@ -4167,7 +4190,7 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
             return False, 0, 0
         else:
             logger.info(f"Credit pack ticket with txid {credit_pack_ticket_pastel_txid} passed all validation checks: {abbreviated_pretty_json_func(validation_results['validation_checks'])}")
-        current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_pastel_txid)
+        current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(credit_pack_ticket_pastel_txid)
         if proposed_cost_in_credits >= current_credit_balance:
             logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits:,}, Available: {current_credit_balance:,}")
             return False, proposed_cost_in_credits, current_credit_balance
@@ -4347,7 +4370,7 @@ async def process_inference_confirmation(inference_request_id: str, inference_co
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(inference_response.credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, confirmation_transaction_txid, inference_response.max_block_height_to_include_confirmation_transaction)
         if matching_transaction_found:
             logger.info(f"Found correct inference request confirmation tracking transaction in burn address (with {num_confirmations} confirmation blocks so far)! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};")
-            computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(inference_request.credit_pack_ticket_pastel_txid)
+            computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(inference_request.credit_pack_ticket_pastel_txid)
             logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance:,.1f} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} tracking transactions from tracking address to burn address.")       
             # Update the inference request status to "confirmed"
             inference_request.status = "confirmed"
@@ -5242,12 +5265,14 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
 
 async def process_transactions_in_chunks_old(transactions, chunk_size):
     decoded_tx_data_list = []
+    total_chunk_count = math.ceil(len(transactions) / chunk_size)
     chunk_count = 0
     if transactions:
         for i in range(0, len(transactions), chunk_size):
             chunk = transactions[i:i + chunk_size]
             chunk_count += 1
-            logger.info(f"Processing burn transactions chunk {chunk_count} of {math.ceil(len(transactions) / chunk_size)} (total transaction count of {len(transactions):,})...")
+            if total_chunk_count > 1:
+                logger.info(f"Processing burn transactions chunk {chunk_count} of {total_chunk_count} (total transaction count of {len(transactions):,})...")
             # Create tasks for each transaction that needs processing
             tasks = [create_transaction_task(transaction) for transaction in chunk if transaction['category'] == 'receive' and transaction['amount'] > 0]
             transactions_to_insert = await asyncio.gather(*tasks)
@@ -5266,12 +5291,14 @@ async def process_transactions_in_chunks_old(transactions, chunk_size):
 
 async def process_transactions_in_chunks(transactions, chunk_size, ignore_unconfirmed_transactions=0):
     decoded_tx_data_list = []
+    total_chunk_count = math.ceil(len(transactions) / chunk_size)
     chunk_count = 0
     all_seen_txids = set()  # Track all txids processed in this session
     for i in range(0, len(transactions), chunk_size):
         chunk = transactions[i:i + chunk_size]
         chunk_count += 1
-        logger.info(f"Processing burn transactions chunk {chunk_count} of {math.ceil(len(transactions) / chunk_size)} (total transaction count of {len(transactions):,})...")
+        if total_chunk_count > 1:       
+            logger.info(f"Processing burn transactions chunk {chunk_count} of {total_chunk_count} (total transaction count of {len(transactions):,})...")
         if ignore_unconfirmed_transactions:
             tasks = [create_transaction_task(transaction) for transaction in chunk if transaction['amount'] > 0]
         else:
@@ -5692,12 +5719,13 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions_n
             existing_transactions_query = select(db_code.BurnAddressTransaction)
             existing_transactions_result = await db.execute(existing_transactions_query)
             existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
-        new_burn_transactions = await rpc_connection.scanburntransactions("*", latest_db_block_height)     
+        new_burn_transactions = await rpc_connection.scanburntransactions(credit_usage_tracking_psl_address, latest_db_block_height)     
         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
         chunk_size = 1000
         ignore_unconfirmed_transactions = 0
         new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
-        logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
+        if len(new_decoded_tx_data_list) > 0:
+            logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
         async with db_code.Session() as db:
             new_tracking_transactions_results = await db.exec(
                 select(db_code.BurnAddressTransaction)
