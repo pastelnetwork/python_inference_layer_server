@@ -175,7 +175,6 @@ TARGET_VALUE_PER_CREDIT_IN_USD = config.get("TARGET_VALUE_PER_CREDIT_IN_USD", de
 TARGET_PROFIT_MARGIN = config.get("TARGET_PROFIT_MARGIN", default=0.1, cast=float)
 MINIMUM_COST_IN_CREDITS = config.get("MINIMUM_COST_IN_CREDITS", default=0.1, cast=float)
 MINUTES_BETWEEN_REFRESHING_SUPERNODE_PING_AND_PORT_RESPONSE_DATA = config.get("MINUTES_BETWEEN_REFRESHING_SUPERNODE_PING_AND_PORT_RESPONSE_DATA", default=3, cast=int)
-PROBABILITY_OF_PORT_CHECK = config.get("PROBABILITY_OF_PORT_CHECK", default=0.03, cast=float)
 CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER = config.get("CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER", default=10, cast=int) # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis     
 MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET = config.get("MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET", default=50, cast=int)
 MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
@@ -6089,8 +6088,8 @@ async def validate_credit_pack_blockchain_ticket_data_field_hashes(model_instanc
     if last_hash_field_name:
         actual_hash = getattr(model_instance, last_hash_field_name)
         if actual_hash != expected_hash:
-            print('Skipping hash validation check for now...') # TODO: Fix this!
-            # validation_errors.append(f"SHA3-256 hash in field {last_hash_field_name} does not match the computed hash of the response fields")    
+            # print('Skipping hash validation check for now...') # TODO: Fix this!
+            validation_errors.append(f"SHA3-256 hash in field {last_hash_field_name} does not match the computed hash of the response fields")    
     return validation_errors
 
 async def validate_credit_pack_ticket_message_data_func(model_instance: SQLModel):
