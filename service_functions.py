@@ -3702,8 +3702,8 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
     pricing_data = {
         "claude-2.1": {"input_cost": 0.008, "output_cost": 0.024, "per_call_cost": 0.0128},
         "claude3-haiku": {"input_cost": 0.00025, "output_cost": 0.00125, "per_call_cost": 0.0006},
-        "claude3.5-sonnet": {"input_cost": 3.0, "output_cost": 15.0, "per_call_cost": 0.0},
-        "claude3-opus": {"input_cost": 15.0, "output_cost": 75.0, "per_call_cost": 0.0},
+        "claude3.5-sonnet": {"input_cost": 0.0003, "output_cost": 0.0015, "per_call_cost": 0.0},
+        "claude3-opus": {"input_cost": 0.0015, "output_cost": 0.0075, "per_call_cost": 0.0},
         "mistralapi-mistral-small-latest": {"input_cost": 0.002, "output_cost": 0.006, "per_call_cost": 0.0032},
         "mistralapi-mistral-medium-latest": {"input_cost": 0.0027, "output_cost": 0.0081, "per_call_cost": 0},
         "mistralapi-mistral-large-latest": {"input_cost": 0.008, "output_cost": 0.024, "per_call_cost": 0.0128},
