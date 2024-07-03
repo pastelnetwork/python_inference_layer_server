@@ -872,14 +872,30 @@ class InferenceConfirmation(SQLModel):
 
 #_____________________________________________________________________________
 
-engine = create_async_engine(DATABASE_URL, echo=False, future=True, connect_args={"check_same_thread": False}, execution_options={"isolation_level": "SERIALIZABLE"})    
+# Increase the pool size and set a reasonable timeout
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    future=True,
+    pool_size=20,
+    max_overflow=0,
+    pool_timeout=30,
+    pool_recycle=1800,
+    pool_pre_ping=True,
+)
+
+async_session_factory = sessionmaker(
+    engine, class_=AsyncSession, expire_on_commit=False
+)
 
 @asynccontextmanager
-async def Session() -> SQLModelSession:
-    async_session = sessionmaker(engine, class_=SQLModelSession, expire_on_commit=False)
-    async with async_session() as session:
-        yield session
-        
+async def Session() -> AsyncSession:
+    async with async_session_factory() as session:
+        try:
+            yield session
+        finally:
+            await session.close()
+            
 async def initialize_db():
     list_of_sqlite_pragma_strings = [
         "PRAGMA journal_mode=WAL;",

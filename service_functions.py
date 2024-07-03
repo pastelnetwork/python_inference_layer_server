@@ -1145,7 +1145,7 @@ async def process_broadcast_messages(message, db_session):
     except Exception as e: # noqa: F841
         traceback.print_exc()
         
-async def monitor_new_messages():
+async def monitor_new_messages_old():
     last_processed_timestamp = None
     while True:
         try:
@@ -1284,6 +1284,157 @@ async def monitor_new_messages():
             logger.error(f"Error while monitoring new messages: {str(e)}")
             traceback.print_exc()
             await asyncio.sleep(5)
+        finally:
+            await asyncio.sleep(5)            
+            
+async def monitor_new_messages():
+    last_processed_timestamp = None
+    while True:
+        try:
+            async with db_code.Session() as db:
+                if last_processed_timestamp is None:
+                    query = await db.execute(select(db_code.Message.timestamp).order_by(db_code.Message.timestamp.desc()).limit(1))
+                    last_processed_timestamp_raw = query.scalar_one_or_none()
+                    last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw) if last_processed_timestamp_raw else pd.Timestamp.min
+                new_messages_df = await list_sn_messages_func()
+                if new_messages_df is not None and not new_messages_df.empty:
+                    new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
+                    if not new_messages_df.empty:
+                        # Fetch existing messages in bulk
+                        existing_messages = await db.execute(
+                            select(db_code.Message).where(
+                                db_code.Message.sending_sn_pastelid.in_(new_messages_df['sending_sn_pastelid'].tolist()),
+                                db_code.Message.receiving_sn_pastelid.in_(new_messages_df['receiving_sn_pastelid'].tolist()),
+                                db_code.Message.timestamp.in_(new_messages_df['timestamp'].tolist())
+                            )
+                        )
+                        existing_messages = existing_messages.all()
+                        existing_messages_set = {(m.sending_sn_pastelid, m.receiving_sn_pastelid, m.timestamp) for m in existing_messages}
+                        new_messages = []
+                        metadata_updates = {
+                            'sender': {},
+                            'receiver': {},
+                            'sender_receiver': {}
+                        }
+                        for _, message in new_messages_df.iterrows():
+                            message_key = (message['sending_sn_pastelid'], message['receiving_sn_pastelid'], message['timestamp'])
+                            if message_key in existing_messages_set:
+                                continue
+                            log_action_with_payload("received new", "message", message)
+                            last_processed_timestamp = message['timestamp']
+                            sending_sn_pastelid = message['sending_sn_pastelid']
+                            receiving_sn_pastelid = message['receiving_sn_pastelid']
+                            message_size_bytes = len(message['message_body'].encode('utf-8'))
+                            # Prepare metadata updates
+                            if sending_sn_pastelid not in metadata_updates['sender']:
+                                metadata_updates['sender'][sending_sn_pastelid] = {
+                                    'total_messages_sent': 1,
+                                    'total_data_sent_bytes': message_size_bytes,
+                                    'sending_sn_txid_vout': message['sending_sn_txid_vout'],
+                                    'sending_sn_pubkey': message['signature']
+                                }
+                            else:
+                                metadata_updates['sender'][sending_sn_pastelid]['total_messages_sent'] += 1
+                                metadata_updates['sender'][sending_sn_pastelid]['total_data_sent_bytes'] += message_size_bytes
+                            if receiving_sn_pastelid not in metadata_updates['receiver']:
+                                metadata_updates['receiver'][receiving_sn_pastelid] = {
+                                    'total_messages_received': 1,
+                                    'total_data_received_bytes': message_size_bytes,
+                                    'receiving_sn_txid_vout': message['receiving_sn_txid_vout']
+                                }
+                            else:
+                                metadata_updates['receiver'][receiving_sn_pastelid]['total_messages_received'] += 1
+                                metadata_updates['receiver'][receiving_sn_pastelid]['total_data_received_bytes'] += message_size_bytes
+                            sender_receiver_key = (sending_sn_pastelid, receiving_sn_pastelid)
+                            if sender_receiver_key not in metadata_updates['sender_receiver']:
+                                metadata_updates['sender_receiver'][sender_receiver_key] = {
+                                    'total_messages': 1,
+                                    'total_data_bytes': message_size_bytes
+                                }
+                            else:
+                                metadata_updates['sender_receiver'][sender_receiver_key]['total_messages'] += 1
+                                metadata_updates['sender_receiver'][sender_receiver_key]['total_data_bytes'] += message_size_bytes
+                            new_messages.append(
+                                db_code.Message(
+                                    sending_sn_pastelid=sending_sn_pastelid,
+                                    receiving_sn_pastelid=receiving_sn_pastelid,
+                                    message_type=message['message_type'],
+                                    message_body=message['message_body'],
+                                    signature=message['signature'],
+                                    timestamp=message['timestamp'],
+                                    sending_sn_txid_vout=message['sending_sn_txid_vout'],
+                                    receiving_sn_txid_vout=message['receiving_sn_txid_vout']
+                                )
+                            )
+                        # Bulk insert new messages
+                        if new_messages:
+                            await retry_on_database_locked(db.add_all, new_messages)
+                        # Bulk update metadata
+                        for metadata_type, updates in metadata_updates.items():
+                            if metadata_type == 'sender':
+                                for pastelid, data in updates.items():
+                                    await db.execute(
+                                        update(db_code.MessageSenderMetadata)
+                                        .where(db_code.MessageSenderMetadata.sending_sn_pastelid == pastelid)
+                                        .values(
+                                            total_messages_sent=db_code.MessageSenderMetadata.total_messages_sent + data['total_messages_sent'],
+                                            total_data_sent_bytes=db_code.MessageSenderMetadata.total_data_sent_bytes + data['total_data_sent_bytes'],
+                                            sending_sn_txid_vout=data['sending_sn_txid_vout'],
+                                            sending_sn_pubkey=data['sending_sn_pubkey']
+                                        )
+                                    )
+                            elif metadata_type == 'receiver':
+                                for pastelid, data in updates.items():
+                                    await db.execute(
+                                        update(db_code.MessageReceiverMetadata)
+                                        .where(db_code.MessageReceiverMetadata.receiving_sn_pastelid == pastelid)
+                                        .values(
+                                            total_messages_received=db_code.MessageReceiverMetadata.total_messages_received + data['total_messages_received'],
+                                            total_data_received_bytes=db_code.MessageReceiverMetadata.total_data_received_bytes + data['total_data_received_bytes'],
+                                            receiving_sn_txid_vout=data['receiving_sn_txid_vout']
+                                        )
+                                    )
+                            elif metadata_type == 'sender_receiver':
+                                for (sending_pastelid, receiving_pastelid), data in updates.items():
+                                    await db.execute(
+                                        update(db_code.MessageSenderReceiverMetadata)
+                                        .where(
+                                            db_code.MessageSenderReceiverMetadata.sending_sn_pastelid == sending_pastelid,
+                                            db_code.MessageSenderReceiverMetadata.receiving_sn_pastelid == receiving_pastelid
+                                        )
+                                        .values(
+                                            total_messages=db_code.MessageSenderReceiverMetadata.total_messages + data['total_messages'],
+                                            total_data_bytes=db_code.MessageSenderReceiverMetadata.total_data_bytes + data['total_data_bytes']
+                                        )
+                                    )
+                        # Update overall MessageMetadata
+                        total_messages, total_senders, total_receivers = await db.execute(
+                            select(
+                                func.count(db_code.Message.id),
+                                func.count(func.distinct(db_code.Message.sending_sn_pastelid)),
+                                func.count(func.distinct(db_code.Message.receiving_sn_pastelid))
+                            )
+                        ).first()
+                        await db.execute(
+                            update(db_code.MessageMetadata)
+                            .values(
+                                total_messages=total_messages,
+                                total_senders=total_senders,
+                                total_receivers=total_receivers,
+                                timestamp=datetime.now(dt.UTC)
+                            )
+                        )
+                        await retry_on_database_locked(db.commit)
+                        # Process broadcast messages concurrently
+                        processing_tasks = [
+                            process_broadcast_messages(message, db)
+                            for message in new_messages
+                        ]
+                        await asyncio.gather(*processing_tasks)
+                await asyncio.sleep(5)
+        except Exception as e:
+            logger.error(f"Error while monitoring new messages: {str(e)}")
+            traceback.print_exc()
         finally:
             await asyncio.sleep(5)            
             
@@ -3131,7 +3282,7 @@ async def validate_merkle_root_at_block_height(merkle_root_to_check: str, block_
     else:
         return False    
 
-async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> dict:
+async def validate_existing_credit_pack_ticket_old(credit_pack_ticket_txid: str) -> dict:
     try:
         use_verbose_validation = 0
         logger.info(f"Validating credit pack ticket with TXID: {credit_pack_ticket_txid}")
@@ -3295,8 +3446,195 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         logger.error(f"Error validating credit pack ticket with TXID {credit_pack_ticket_txid}: {str(e)}")
         traceback.print_exc()
         raise
+    
+async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> dict:
+    try:
+        use_verbose_validation = 0
+        logger.info(f"Validating credit pack ticket with TXID: {credit_pack_ticket_txid}")
+        async with Session() as db:
+            # Retrieve the credit pack ticket data from the database
+            query = select(
+                db_code.CreditPackPurchaseRequest,
+                db_code.CreditPackPurchaseRequestResponse,
+                db_code.CreditPackPurchaseRequestConfirmation
+            ).join(
+                db_code.CreditPackPurchaseRequestResponseTxidMapping,
+                db_code.CreditPackPurchaseRequestResponseTxidMapping.sha3_256_hash_of_credit_pack_purchase_request_fields == db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_fields
+            ).where(
+                db_code.CreditPackPurchaseRequestResponseTxidMapping.pastel_api_credit_pack_ticket_registration_txid == credit_pack_ticket_txid
+            )
+            result = await db.execute(query)
+            credit_pack_data = result.first()
+            if not credit_pack_data:
+                # If not found in the database, retrieve from the blockchain
+                credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(credit_pack_ticket_txid)
+            else:
+                credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = credit_pack_data
+        logger.info(f"Credit pack ticket data for credit pack with TXID {credit_pack_ticket_txid}:\n\nTicket Request Response:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_response.model_dump())} \n\nTicket Request Confirmation:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_confirmation.model_dump())}")
+        validation_results = {
+            "credit_pack_ticket_is_valid": True,
+            "validation_checks": [],
+            "validation_failure_reasons_list": []
+        }
+        # Validate the payment
+        matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_transaction(
+            credit_pack_purchase_request_confirmation.txid_of_credit_purchase_burn_transaction,
+            credit_pack_purchase_request_response.credit_usage_tracking_psl_address,
+            credit_pack_purchase_request_response.proposed_total_cost_of_credit_pack_in_psl,
+            credit_pack_purchase_request_response.request_response_pastel_block_height
+        )
+        validation_results["validation_checks"].append({
+            "check_name": f"Ticket Payment Burn Transaction validation (Burn payment TXID: {credit_pack_purchase_request_confirmation.txid_of_credit_purchase_burn_transaction} sent with {amount_received_at_burn_address} PSL",
+            "is_valid": matching_transaction_found or exceeding_transaction_found
+        })
+        if not (matching_transaction_found or exceeding_transaction_found):
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Invalid burn transaction for credit pack ticket with TXID: {credit_pack_ticket_txid}")
+        # Fetch active supernodes data
+        active_supernodes_count_at_the_time, active_supernodes_at_the_time = await fetch_active_supernodes_count_and_details(credit_pack_purchase_request_response.request_response_pastel_block_height)
+        list_of_active_supernode_pastelids_at_the_time = [x["pastel_id"] for x in active_supernodes_at_the_time]
+        list_of_blacklisted_supernode_pastelids = credit_pack_purchase_request_response.list_of_blacklisted_supernode_pastelids
+        list_of_potentially_agreeing_supernodes = credit_pack_purchase_request_response.list_of_potentially_agreeing_supernodes
+        # Check for new fields
+        try:
+            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms
+            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion
+            selected_agreeing_supernodes_signatures_dict = credit_pack_purchase_request_response.selected_agreeing_supernodes_signatures_dict
+            best_block_merkle_root = credit_pack_purchase_request_response.best_block_merkle_root
+            best_block_height = credit_pack_purchase_request_response.best_block_height
+            if list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion is None:
+                validation_results["credit_pack_ticket_is_valid"] = False
+                validation_results["validation_failure_reasons_list"].append("Required field 'list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion' is missing in credit pack purchase request response")
+                return validation_results
+        except AttributeError as e:
+            logger.error(f"Required field missing in credit pack purchase request response: {str(e)}")
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Required field missing in credit pack purchase request response: {str(e)}")
+            return validation_results
+        # Validate potentially agreeing supernodes
+        for potentially_agreeing_supernode_pastelid in list_of_potentially_agreeing_supernodes:
+            potentially_agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height = potentially_agreeing_supernode_pastelid in list_of_active_supernode_pastelids_at_the_time
+            validation_results["validation_checks"].append({
+                "check_name": f"Potentially agreeing supernode with pastelid {potentially_agreeing_supernode_pastelid} was in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}",
+                "is_valid": potentially_agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height
+            })    
+            if not potentially_agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height:
+                validation_results["credit_pack_ticket_is_valid"] = False
+                validation_results["validation_failure_reasons_list"].append(f"Potentially agreeing supernode with pastelid {potentially_agreeing_supernode_pastelid} was NOT in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}")
+        # Validate agreeing supernodes
+        for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
+            agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height = agreeing_supernode_pastelid in list_of_active_supernode_pastelids_at_the_time
+            validation_results["validation_checks"].append({
+                "check_name": f"Agreeing supernode with pastelid {agreeing_supernode_pastelid} was in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}",
+                "is_valid": agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height
+            })
+            if not agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height:
+                validation_results["credit_pack_ticket_is_valid"] = False
+                validation_results["validation_failure_reasons_list"].append(f"Agreeing supernode with pastelid {agreeing_supernode_pastelid} was NOT in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}")            
+        # Validate the ticket response hashes
+        credit_pack_purchase_request_response_transformed = parse_sqlmodel_strings_into_lists_and_dicts_func(credit_pack_purchase_request_response)
+        credit_pack_purchase_request_confirmation_transformed = parse_sqlmodel_strings_into_lists_and_dicts_func(credit_pack_purchase_request_confirmation)
+        validation_errors_in_credit_pack_purchase_request_response = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_response_transformed)
+        validation_errors_in_credit_pack_purchase_request_confirmation = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_confirmation_transformed) 
+        if validation_errors_in_credit_pack_purchase_request_response:
+            logger.warning(f"Warning! Computed hash does not match for ticket request response object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_response}")
+            validation_results["validation_checks"].append({
+                "check_name": f"Computed hash does not match for ticket request response object for credit pack ticket with txid: {validation_errors_in_credit_pack_purchase_request_response}",
+                "is_valid": False
+            })            
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append("Hash of credit pack request response object stored in blockchain does not match the hash included in the object.")
+        if validation_errors_in_credit_pack_purchase_request_confirmation:
+            logger.warning(f"Warning! Computed hash does not match for ticket request confirmation object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_confirmation}")
+            validation_results["validation_checks"].append({
+                "check_name": f"Computed hash does not match for ticket request confirmation object for credit pack ticket with txid: {validation_errors_in_credit_pack_purchase_request_confirmation}",
+                "is_valid": False
+            })            
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append("Hash of credit pack request confirmation object stored in blockchain does not match the hash included in the object.")
+        # Validate the signatures
+        for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
+            signatures = selected_agreeing_supernodes_signatures_dict[agreeing_supernode_pastelid]
+            if use_verbose_validation:
+                logger.info(f"Verifying signature for selected agreeing supernode {agreeing_supernode_pastelid}")
+                logger.info(f"Message to verify (decoded from b64): {credit_pack_purchase_request.model_dump()}")
+                logger.info(f"Signature: {signatures['credit_pack_purchase_request_fields_json_b64_signature']}")
+            is_fields_json_b64_signature_valid = await verify_message_with_pastelid_func(
+                agreeing_supernode_pastelid, 
+                credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64,
+                signatures['credit_pack_purchase_request_fields_json_b64_signature']
+            )
+            if not is_fields_json_b64_signature_valid:
+                logger.warning(f"Warning! Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
+            if use_verbose_validation:
+                logger.info(f"Signature validation result: {is_fields_json_b64_signature_valid}")
+            validation_results["validation_checks"].append({
+                "check_name": f"Signature validation for selected agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request fields json",
+                "is_valid": is_fields_json_b64_signature_valid
+            })
+            if not is_fields_json_b64_signature_valid:
+                validation_results["credit_pack_ticket_is_valid"] = False
+                validation_results["validation_failure_reasons_list"].append(f"Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
+        # Validate the selected agreeing supernodes
+        selected_agreeing_supernodes = await select_top_n_closest_supernodes_to_best_block_merkle_root(
+            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms,
+            n=10,
+            best_block_merkle_root=best_block_merkle_root
+        )
+        best_block_merkle_root_matches = await validate_merkle_root_at_block_height(best_block_merkle_root, best_block_height)
+        if not best_block_merkle_root_matches:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Best block merkle root {best_block_merkle_root} does not match actual merkle root as of block height {best_block_height} for credit pack with txid {credit_pack_ticket_txid}")
+        max_block_height_difference_between_best_block_height_and_request_response_pastel_block_height = 10
+        actual_block_height_difference_between_best_block_height_and_request_response_pastel_block_height = abs(credit_pack_purchase_request_response.request_response_pastel_block_height - best_block_height)
+        if actual_block_height_difference_between_best_block_height_and_request_response_pastel_block_height > max_block_height_difference_between_best_block_height_and_request_response_pastel_block_height:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Block height difference between specified best block height {best_block_height} and request response pastel block height {credit_pack_purchase_request_response.request_response_pastel_block_height} exceeds the maximum allowed difference of {max_block_height_difference_between_best_block_height_and_request_response_pastel_block_height} for credit pack with txid {credit_pack_ticket_txid}")
+        selected_agreeing_supernodes_set = set(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion)
+        computed_selected_agreeing_supernodes_set = set(selected_agreeing_supernodes)
+        is_selected_agreeing_supernodes_valid = selected_agreeing_supernodes_set == computed_selected_agreeing_supernodes_set
+validation_results["validation_checks"].append({
+            "check_name": "Validation of selected agreeing supernodes for signature inclusion",
+            "is_valid": is_selected_agreeing_supernodes_valid,
+            "expected_selected_agreeing_supernodes": list(computed_selected_agreeing_supernodes_set),
+            "actual_selected_agreeing_supernodes": list(selected_agreeing_supernodes_set)
+        })
+        if not is_selected_agreeing_supernodes_valid:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append("Selected agreeing supernodes for signature inclusion do not match the expected set based on XOR distance to the best block merkle root.")
+        # Validate the agreeing supernodes
+        num_potentially_agreeing_supernodes = len(list_of_potentially_agreeing_supernodes)
+        num_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
+        number_of_blacklisted_supernodes_at_the_time = len(list_of_blacklisted_supernode_pastelids)
+        quorum_percentage = num_potentially_agreeing_supernodes / (active_supernodes_count_at_the_time - number_of_blacklisted_supernodes_at_the_time)
+        agreeing_percentage = num_agreeing_supernodes / num_potentially_agreeing_supernodes
+        is_quorum_valid = quorum_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE
+        is_agreeing_percentage_valid = agreeing_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE
+        validation_results["validation_checks"].append({
+            "check_name": "Agreeing supernodes percentage validation",
+            "is_valid": is_agreeing_percentage_valid and is_quorum_valid,
+            "quorum_percentage": round(quorum_percentage, 5),
+            "agreeing_percentage": round(agreeing_percentage, 5)
+        })
+        if not is_agreeing_percentage_valid or not is_quorum_valid:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Agreeing supernodes percentage validation failed for credit pack with txid {credit_pack_ticket_txid}")
+        if validation_results["validation_failure_reasons_list"]:
+            logger.info(f"Validation failures for credit pack ticket with TXID {credit_pack_ticket_txid}: {validation_results['validation_failure_reasons_list']}")
+            list_of_reasons_it_is_known_bad = json.dumps(validation_results['validation_failure_reasons_list'])
+            async with Session() as db:
+                known_bad_txid_object = await insert_credit_pack_ticket_txid_into_known_bad_table_in_db(db, credit_pack_ticket_txid, list_of_reasons_it_is_known_bad)
+                if known_bad_txid_object:
+                    logger.info(f"Added invalid credit pack ticket TXID {credit_pack_ticket_txid} to known bad list in database!")
+        else:
+            logger.info(f"All validation checks passed for credit pack ticket with TXID {credit_pack_ticket_txid}")
+        return validation_results
+    except Exception as e:
+        logger.error(f"Error validating credit pack ticket with TXID {credit_pack_ticket_txid}: {str(e)}")
+        traceback.print_exc()
+        raise    
 
-async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
+async def get_valid_credit_pack_tickets_for_pastelid_old(pastelid: str) -> List[dict]:
     async def process_request_confirmation(request_confirmation):
         hash_of_request_fields = request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
         async with db_code.Session() as db_session:
@@ -3373,6 +3711,78 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
         traceback.print_exc()
         raise
 
+async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
+    async def process_request_confirmation(request_confirmation):
+        hash_of_request_fields = request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
+        async with db_code.Session() as db_session:
+            txid_mapping = await db_session.execute(
+                select(db_code.CreditPackPurchaseRequestResponseTxidMapping)
+                .where(db_code.CreditPackPurchaseRequestResponseTxidMapping.sha3_256_hash_of_credit_pack_purchase_request_fields == hash_of_request_fields)
+            )
+            txid_mapping = txid_mapping.scalar_one_or_none()
+        if txid_mapping:
+            txid = txid_mapping.pastel_api_credit_pack_ticket_registration_txid
+            async with db_code.Session() as db_session:
+                existing_data_result = await db_session.execute(
+                    select(db_code.CreditPackCompleteTicketWithBalance)
+                    .where(db_code.CreditPackCompleteTicketWithBalance.credit_pack_ticket_registration_txid == txid)
+                )
+                existing_data = existing_data_result.scalar_one_or_none()
+            if existing_data:
+                complete_ticket = json.loads(existing_data.complete_credit_pack_data_json)
+                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(txid)
+                complete_ticket['credit_pack_current_credit_balance'] = current_credit_balance
+                complete_ticket['balance_as_of_datetime'] = datetime.now(dt.UTC).isoformat()
+                complete_ticket_json = json.dumps(complete_ticket)
+                async with db_code.Session() as db_session:
+                    existing_data.complete_credit_pack_data_json = complete_ticket_json
+                    existing_data.datetime_last_updated = datetime.now(dt.UTC)
+                    db_session.add(existing_data)
+                    await db_session.commit()
+            else:
+                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(txid)
+                _, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
+                if all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
+                    credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
+                    credit_pack_purchase_request = json.loads(credit_pack_purchase_request_fields_json)
+                    complete_ticket = {
+                        "credit_pack_purchase_request": credit_pack_purchase_request,
+                        "credit_pack_purchase_request_response": credit_pack_purchase_request_response.model_dump(),
+                        "credit_pack_purchase_request_confirmation": credit_pack_purchase_request_confirmation.model_dump(),
+                        "credit_pack_registration_txid": txid,
+                        "credit_pack_current_credit_balance": current_credit_balance,
+                        "balance_as_of_datetime": datetime.now(dt.UTC).isoformat()
+                    }
+                    complete_ticket = convert_uuids_to_strings(complete_ticket)
+                    complete_ticket = normalize_data(complete_ticket)
+                    complete_ticket_json = json.dumps(complete_ticket)
+
+                    async with db_code.Session() as db_session:
+                        new_complete_ticket = db_code.CreditPackCompleteTicketWithBalance(
+                            credit_pack_ticket_registration_txid=txid,
+                            complete_credit_pack_data_json=complete_ticket_json,
+                            datetime_last_updated=datetime.now(dt.UTC)
+                        )
+                        db_session.add(new_complete_ticket)
+                        await db_session.commit()
+            return complete_ticket
+        return None
+    try:
+        async with db_code.Session() as db_session:
+            credit_pack_request_confirmations_results = await db_session.execute(
+                select(db_code.CreditPackPurchaseRequestConfirmation)
+                .where(db_code.CreditPackPurchaseRequestConfirmation.requesting_end_user_pastelid == pastelid)
+            )
+            credit_pack_request_confirmations = credit_pack_request_confirmations_results.scalars().all()
+        tasks = [process_request_confirmation(request_confirmation) for request_confirmation in credit_pack_request_confirmations]
+        complete_tickets = await asyncio.gather(*tasks)
+        # Filter out None values (if any)
+        complete_tickets = [ticket for ticket in complete_tickets if ticket]
+        return complete_tickets
+    except Exception as e:
+        logger.error(f"Error retrieving credit pack tickets for PastelID {pastelid}: {str(e)}")
+        traceback.print_exc()
+        raise
         
 #________________________________________________________________________________________________________________            
                 
@@ -5279,7 +5689,7 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
             raise ValueError("Unauthorized access to inference output results")
         return inference_output_result
 
-async def process_transactions_in_chunks_old(transactions, chunk_size):
+async def process_transactions_in_chunks_old_old(transactions, chunk_size):
     decoded_tx_data_list = []
     total_chunk_count = math.ceil(len(transactions) / chunk_size)
     chunk_count = 0
@@ -5305,7 +5715,7 @@ async def process_transactions_in_chunks_old(transactions, chunk_size):
     else:
         return []
 
-async def process_transactions_in_chunks(transactions, chunk_size, ignore_unconfirmed_transactions=0):
+async def process_transactions_in_chunks_old(transactions, chunk_size, ignore_unconfirmed_transactions=0):
     decoded_tx_data_list = []
     total_chunk_count = math.ceil(len(transactions) / chunk_size)
     chunk_count = 0
@@ -5343,6 +5753,51 @@ async def process_transactions_in_chunks(transactions, chunk_size, ignore_unconf
                             await db.rollback()  # Skip the transaction if it still fails
         await db_code.consolidate_wal_data()  # Consolidate WAL after processing each chunk
         decoded_tx_data_list.extend(transactions_to_insert)  # Optional: Keep track of processed chunks
+    return decoded_tx_data_list
+    
+async def process_transactions_in_chunks(transactions, chunk_size, ignore_unconfirmed_transactions=0):
+    decoded_tx_data_list = []
+    total_chunk_count = math.ceil(len(transactions) / chunk_size)
+    chunk_count = 0
+    all_seen_txids = set()  # Track all txids processed in this session
+    async with db_code.Session() as db:
+        # Fetch all existing txids in one query
+        existing_txids_query = await db.execute(select(db_code.BurnAddressTransaction.txid))
+        existing_txids = set(result[0] for result in existing_txids_query)
+        for i in range(0, len(transactions), chunk_size):
+            chunk = transactions[i:i + chunk_size]
+            chunk_count += 1
+            if total_chunk_count > 1:       
+                logger.info(f"Processing burn transactions chunk {chunk_count} of {total_chunk_count} (total transaction count of {len(transactions):,})...")
+            if ignore_unconfirmed_transactions:
+                tasks = [create_transaction_task(transaction) for transaction in chunk if transaction['amount'] > 0]
+            else:
+                tasks = [create_transaction_task_old(transaction) for transaction in chunk if transaction['amount'] > 0]
+            transactions_to_insert = await asyncio.gather(*tasks)
+            transactions_to_insert = [txn for txn in transactions_to_insert if txn]
+            # Filter out duplicates and already existing transactions
+            filtered_transactions = [
+                txn for txn in transactions_to_insert 
+                if txn.txid not in all_seen_txids and txn.txid not in existing_txids
+            ]
+            all_seen_txids.update(txn.txid for txn in filtered_transactions)
+            if filtered_transactions:
+                try:
+                    await db.execute(insert(db_code.BurnAddressTransaction), [txn.__dict__ for txn in filtered_transactions])
+                    await db.commit()
+                    logger.info(f"Added {len(filtered_transactions):,} new burn transactions to the database successfully.")
+                except IntegrityError:
+                    await db.rollback()
+                    logger.warning("IntegrityError occurred. Some transactions may already exist in the database.")
+                    for txn in filtered_transactions:
+                        try:
+                            await db.merge(txn)
+                            await db.commit()
+                        except IntegrityError:
+                            await db.rollback()
+                            logger.warning(f"Failed to insert transaction {txn.txid}")
+            decoded_tx_data_list.extend(filtered_transactions)
+        await db_code.consolidate_wal_data()  # Consolidate WAL after processing all chunks
     return decoded_tx_data_list
     
 async def create_transaction_task(transaction):
@@ -5399,7 +5854,7 @@ async def fetch_input_address(vin):
     prev_output = prev_tx_details['vout'][vin['vout']]
     return prev_output['scriptPubKey'].get('addresses', []) if 'scriptPubKey' in prev_output and 'addresses' in prev_output['scriptPubKey'] else []
 
-async def full_rescan_burn_transactions_old():
+async def full_rescan_burn_transactions_old_old():
     async with db_code.Session() as db: # Check if there are any records in BurnAddressTransaction or BlockHash tables
         burn_address_query_results = await db.execute(select(db_code.BurnAddressTransaction).limit(1))
         burn_tx_exists = burn_address_query_results.first()
@@ -5424,7 +5879,7 @@ async def full_rescan_burn_transactions_old():
     else:
         logger.info("Existing records found. Skipping full rescan.")
 
-async def full_rescan_burn_transactions():
+async def full_rescan_burn_transactions_old():
     global burn_address
     async with db_code.Session() as db:  # Check if there are any records in BurnAddressTransaction or BlockHash tables
         burn_address_query_results = await db.execute(select(db_code.BurnAddressTransaction).limit(1))
@@ -5440,6 +5895,57 @@ async def full_rescan_burn_transactions():
         if burn_transactions:
             decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, ignore_unconfirmed_transactions)
             logger.info(f"Decoded {len(decoded_tx_data_list):,} new burn transactions in total!")
+    if not block_hash_exists:
+        logger.info("No block hash records found in database, proceeding with full rescan...")
+        current_block_height = await get_current_pastel_block_height_func()
+        logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
+        chunk_size = 5000
+        await fetch_and_insert_block_hashes(0, current_block_height, chunk_size)
+        logger.info("Block hashes updated successfully.")
+    else:
+        logger.info("Existing records found. Skipping full rescan.")
+
+async def full_rescan_burn_transactions():
+    global burn_address
+    async with db_code.Session() as db:
+        burn_tx_exists = await db.execute(select(func.count()).select_from(db_code.BurnAddressTransaction)).scalar() > 0
+        block_hash_exists = await db.execute(select(func.count()).select_from(db_code.BlockHash)).scalar() > 0
+    if not burn_tx_exists:
+        logger.info("No burn transaction records found in database, proceeding with full rescan...")
+        logger.info("Please wait, retrieving ALL burn transactions from ANY address starting with the genesis block (may take a while and cause high CPU usage...)")
+        burn_transactions = await rpc_connection.scanburntransactions("*")
+        chunk_size = 5000  # Adjust the chunk size as needed
+        ignore_unconfirmed_transactions = 1
+        if burn_transactions:
+            async with db_code.Session() as db:
+                total_inserted = 0
+                for i in range(0, len(burn_transactions), chunk_size):
+                    chunk = burn_transactions[i:i + chunk_size]
+                    transactions_to_insert = []
+                    for tx in chunk:
+                        if tx['amount'] > 0:
+                            tx_data = await create_transaction_task(tx) if ignore_unconfirmed_transactions else await create_transaction_task_old(tx)
+                            if tx_data:
+                                transactions_to_insert.append(tx_data)
+                    if transactions_to_insert:
+                        try:
+                            await db.execute(insert(db_code.BurnAddressTransaction).values([tx.__dict__ for tx in transactions_to_insert]))
+                            await db.commit()
+                            total_inserted += len(transactions_to_insert)
+                            logger.info(f"Inserted {len(transactions_to_insert):,} burn transactions. Total so far: {total_inserted:,}")
+                        except IntegrityError:
+                            await db.rollback()
+                            logger.warning("IntegrityError occurred. Attempting individual inserts.")
+                            for tx in transactions_to_insert:
+                                try:
+                                    await db.merge(tx)
+                                    await db.commit()
+                                    total_inserted += 1
+                                except IntegrityError:
+                                    await db.rollback()
+                                    logger.warning(f"Failed to insert transaction {tx.txid}")
+                await db_code.consolidate_wal_data()
+            logger.info(f"Decoded and inserted {total_inserted:,} new burn transactions in total!")
     if not block_hash_exists:
         logger.info("No block hash records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
@@ -5546,7 +6052,7 @@ async def detect_chain_reorg_and_rescan():
                 await full_rescan_burn_transactions()
         await asyncio.sleep(6000)  # Check for chain reorg every 6000 seconds
                 
-async def fetch_and_insert_block_hashes_old(start_height, end_height, batch_size=300):
+async def fetch_and_insert_block_hashes_old_old(start_height, end_height, batch_size=300):
     current_height = max(start_height - 1, 0)
     total_inserted = 0
     batch_counter = 0
@@ -5585,7 +6091,7 @@ async def fetch_and_insert_block_hashes_old(start_height, end_height, batch_size
         # Move to the next range, skipping ahead to optimize RPC calls
         current_height += batch_size * 3
 
-async def fetch_and_insert_block_hashes(start_height, end_height, batch_size=300):
+async def fetch_and_insert_block_hashes_old(start_height, end_height, batch_size=300):
     current_height = max(start_height - 1, 0)
     total_inserted = 0
     batch_counter = 0
@@ -5628,6 +6134,47 @@ async def fetch_and_insert_block_hashes(start_height, end_height, batch_size=300
             batch_counter = 0
         # Move to the next range, accounting for the batch size
         current_height += num_hashes
+
+async def fetch_and_insert_block_hashes(start_height, end_height, batch_size=300):
+    current_height = max(start_height - 1, 0)
+    total_inserted = 0
+    batch_counter = 0
+    async with db_code.Session() as db:
+        while current_height <= end_height:
+            # Calculate the number of hashes to fetch in this batch
+            num_hashes = min((end_height + 1) - current_height, batch_size)
+            result = await rpc_connection.getblockhash(current_height, num_hashes)
+            blocks_to_insert = []
+            for block in result:
+                block_height = block['height']
+                block_hash = block['hash']
+                blocks_to_insert.append({'block_height': block_height, 'block_hash': block_hash})
+            # Bulk insert new blocks
+            if blocks_to_insert:
+                try:
+                    await db.execute(insert(db_code.BlockHash).values(blocks_to_insert).on_conflict_do_nothing())
+                    await db.commit()
+                    inserted_count = len(blocks_to_insert)
+                    total_inserted += inserted_count
+                    batch_counter += inserted_count
+                except IntegrityError:
+                    await db.rollback()
+                    logger.warning("IntegrityError occurred. Some block hashes may already exist in the database.")
+                    for block in blocks_to_insert:
+                        try:
+                            await db.merge(db_code.BlockHash(**block))
+                            await db.commit()
+                        except IntegrityError:
+                            await db.rollback()
+                            logger.warning(f"Failed to insert block hash for height {block['block_height']}")
+            # Log progress for every 500 inserts or as needed
+            if batch_counter >= 500:
+                blocks_left = end_height - current_height + 1
+                logger.info(f"Fetched and inserted {batch_counter:,} block hashes; {total_inserted:,} total block hashes in total, {blocks_left:,} blocks left to process...")
+                batch_counter = 0
+            # Move to the next range, accounting for the batch size
+            current_height += num_hashes
+        await db_code.consolidate_wal_data()  # Consolidate WAL after processing all batches
 
 async def bulk_insert_block_hashes(block_hashes):
     async with db_code.Session() as db:
@@ -5710,7 +6257,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
 
-async def determine_current_credit_pack_balance_based_on_tracking_transactions_new(credit_pack_ticket_txid: str):
+async def determine_current_credit_pack_balance_based_on_tracking_transactions_new_old(credit_pack_ticket_txid: str):
     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
     _, credit_pack_purchase_request_response, _ = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
     credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
@@ -5767,6 +6314,49 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions_n
             logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
     current_credit_balance = initial_credit_balance - total_credits_consumed
     number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
+    logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
+    return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
+
+async def determine_current_credit_pack_balance_based_on_tracking_transactions_new(credit_pack_ticket_txid: str):
+    logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
+    _, credit_pack_purchase_request_response, _ = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
+    credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
+    credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_fields_json)
+    initial_credit_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
+    credit_usage_tracking_psl_address = credit_pack_purchase_request_response.credit_usage_tracking_psl_address
+    logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,.1f}, Tracking address: {credit_usage_tracking_psl_address}")
+    async with db_code.Session() as db:
+        # Fetch all relevant transactions in a single query
+        query = select(db_code.BurnAddressTransaction).where(
+            db_code.BurnAddressTransaction.burn_address == burn_address,
+            db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address
+        )
+        result = await db.execute(query)
+        db_transactions = result.all()
+        # Calculate total credits consumed
+        total_credits_consumed = sum(COIN * tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
+        # Get the latest block height in the database
+        latest_db_block_height_query = select(func.max(db_code.BlockHash.block_height))
+        latest_db_block_height = await db.execute(latest_db_block_height_query)
+        latest_db_block_height = latest_db_block_height.scalar_one_or_none() or 0
+    current_block_height = await get_current_pastel_block_height_func()
+    if current_block_height > latest_db_block_height:
+        latest_db_block_hash = await rpc_connection.getblockhash(latest_db_block_height)
+        new_burn_transactions = await rpc_connection.scanburntransactions(credit_usage_tracking_psl_address, latest_db_block_height)
+        existing_txids = set(tx.txid for tx in db_transactions)
+        filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
+        if filtered_new_burn_transactions:
+            chunk_size = 1000
+            ignore_unconfirmed_transactions = 0
+            new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
+            logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
+            # Calculate additional credits consumed from new transactions
+            total_credits_consumed += sum(COIN * tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_decoded_tx_data_list)
+        # Update block hashes if necessary
+        if current_block_height > latest_db_block_height:
+            await fetch_and_insert_block_hashes(latest_db_block_height + 1, current_block_height)
+    current_credit_balance = initial_credit_balance - total_credits_consumed
+    number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(filtered_new_burn_transactions) if 'filtered_new_burn_transactions' in locals() else len(db_transactions)
     logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
 
