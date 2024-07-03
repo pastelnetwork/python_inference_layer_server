@@ -13,7 +13,8 @@ def setup_logger():
     if not os.path.exists(old_logs_dir):
         os.makedirs(old_logs_dir)
     logger.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    # Custom formatter for correct date-time formatting
+    formatter = logging.Formatter(fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S,%f')
     log_file_path = 'pastel_supernode_inference_layer.log'
     log_queue = queue.Queue(-1)  # Create a queue for the handlers
     fh = RotatingFileHandler(log_file_path, maxBytes=10*1024*1024, backupCount=5)
