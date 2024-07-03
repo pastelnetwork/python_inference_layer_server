@@ -184,8 +184,8 @@ MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED = config.get
 MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION = config.get("MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION", default=3, cast=int)
 MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES = config.get("MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES", default=10, cast=int)
 MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS = config.get("MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS", default=30, cast=int)
-INDIVIDUAL_SUPERNODE_PRICE_AGREEMENT_REQUEST_TIMEOUT_PERIOD_IN_SECONDS = config.get("INDIVIDUAL_SUPERNODE_PRICE_AGREEMENT_REQUEST_TIMEOUT_PERIOD_IN_SECONDS", default=25, cast=int)
-INDIVIDUAL_SUPERNODE_MODEL_MENU_REQUEST_TIMEOUT_PERIOD_IN_SECONDS = config.get("INDIVIDUAL_SUPERNODE_MODEL_MENU_REQUEST_TIMEOUT_PERIOD_IN_SECONDS", default=5, cast=int)
+INDIVIDUAL_SUPERNODE_PRICE_AGREEMENT_REQUEST_TIMEOUT_PERIOD_IN_SECONDS = config.get("INDIVIDUAL_SUPERNODE_PRICE_AGREEMENT_REQUEST_TIMEOUT_PERIOD_IN_SECONDS", default=12, cast=int)
+INDIVIDUAL_SUPERNODE_MODEL_MENU_REQUEST_TIMEOUT_PERIOD_IN_SECONDS = config.get("INDIVIDUAL_SUPERNODE_MODEL_MENU_REQUEST_TIMEOUT_PERIOD_IN_SECONDS", default=3, cast=int)
 BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS = config.get("BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS", default=3, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE", default=0.51, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE", default=0.65, cast=float)
@@ -540,7 +540,7 @@ def EncodeDecimal(o):
     
 class AsyncAuthServiceProxy:
     _semaphore = asyncio.BoundedSemaphore(MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS)
-    def __init__(self, service_url, service_name=None, reconnect_timeout=15, reconnect_amount=2, request_timeout=90):
+    def __init__(self, service_url, service_name=None, reconnect_timeout=5, reconnect_amount=2, request_timeout=20):
         self.service_url = service_url
         self.service_name = service_name
         self.url = urlparse(service_url)
@@ -712,10 +712,9 @@ async def check_masternode_top_func():
     masternode_top_command_output = await rpc_connection.masternode('top')
     return masternode_top_command_output
 
-async def generate_supernode_inference_ip_blacklist(max_response_time_in_milliseconds=1500):
+async def generate_supernode_inference_ip_blacklist(max_response_time_in_milliseconds=1200):
     blacklist_path = Path('supernode_inference_ip_blacklist.txt')
     logger.info("Now compiling Supernode IP blacklist based on Supernode responses to port checks...")
-    
     if not blacklist_path.exists():
         blacklist_path.touch()
     full_supernode_list_df, _ = await check_supernode_list_func()
@@ -2292,7 +2291,7 @@ async def select_top_n_closest_supernodes_to_best_block_merkle_root(supernode_pa
 async def check_liveness(supernode_base_url: str) -> bool:
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{supernode_base_url}/liveness_ping", timeout=5)
+            response = await client.get(f"{supernode_base_url}/liveness_ping", timeout=2)
             return response.status_code == 200
     except httpx.RequestError:
         return False
@@ -2372,7 +2371,7 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
         return price_agreement_request_responses
 
 async def request_and_sign_challenge(supernode_url: str) -> Dict[str, str]:
-    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS/5)) as client:
         response = await client.get(f"{supernode_url}/request_challenge/{MY_PASTELID}")
         response.raise_for_status()
         result = response.json()
