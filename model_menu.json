@@ -799,9 +799,9 @@
       }
     },
     {
-      "model_name": "claude3-sonnet",
+      "model_name": "claude3.5-sonnet",
       "model_url": "",
-      "description": "The Claude3 Sonnet model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
+      "description": "The Claude3.5 Sonnet model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
       "supported_inference_type_strings": [
         "text_completion",
         "embedding"

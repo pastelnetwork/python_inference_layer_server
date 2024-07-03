@@ -3624,6 +3624,9 @@ async def save_inference_api_usage_request(inference_request_model: db_code.Infe
         await db_session.refresh(inference_request_model)
     return inference_request_model
 
+def get_fallback_tokenizer():
+    return "gpt2"  # Default to "gpt2" tokenizer as a fallback
+
 def get_tokenizer(model_name: str):
     model_name = model_name.replace('swiss_army_llama-', '')
     model_to_tokenizer_mapping = {
@@ -3654,31 +3657,45 @@ def get_tokenizer(model_name: str):
         "openrouter/tiiuae/falcon-7b-instruct": "tiiuae/falcon-7b-instruct"
     }
     best_match = process.extractOne(model_name.lower(), model_to_tokenizer_mapping.keys())
-    return model_to_tokenizer_mapping.get(best_match[0], "gpt2")  # Default to "gpt2" if no match found
+    return model_to_tokenizer_mapping.get(best_match[0], get_fallback_tokenizer())  # Default to fallback tokenizer if no match found
 
 def count_tokens(model_name: str, input_data: str) -> int:
     tokenizer_name = get_tokenizer(model_name)
     logger.info(f"Selected tokenizer {tokenizer_name} for model {model_name}")
-    if 'claude' in model_name.lower():
-        tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_name)
-    elif 'whisper' in model_name.lower():
-        tokenizer = WhisperTokenizer.from_pretrained(tokenizer_name)
-    elif 'clip-interrogator' in model_name.lower() or 'stability' in model_name.lower():
-        # CLIP and Stability models don't require tokenization for input data
-        return 0
-    elif 'videocap-transformer' in model_name.lower():
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    elif 'openai' in model_name.lower():
-        encoding = tiktoken.get_encoding(tokenizer_name)
-        input_tokens = encoding.encode(input_data)
+    try:
+        if 'claude' in model_name.lower():
+            tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_name)
+        elif 'whisper' in model_name.lower():
+            tokenizer = WhisperTokenizer.from_pretrained(tokenizer_name)
+        elif 'clip-interrogator' in model_name.lower() or 'stability' in model_name.lower():
+            return 0
+        elif 'videocap-transformer' in model_name.lower():
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        elif 'openai' in model_name.lower():
+            encoding = tiktoken.get_encoding(tokenizer_name)
+            input_tokens = encoding.encode(input_data)
+            return len(input_tokens)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        if hasattr(tokenizer, "encode"):
+            input_tokens = tokenizer.encode(input_data)
+        else:
+            input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
         return len(input_tokens)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-    if hasattr(tokenizer, "encode"):  # For tokenizers with an "encode" method (e.g., GPT-2, GPT-Neo)
-        input_tokens = tokenizer.encode(input_data)
-    else:  # For tokenizers without an "encode" method (e.g., BERT, RoBERTa)
-        input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
-    return len(input_tokens)
+    except Exception as e:
+        logger.error(f"Failed to load tokenizer {tokenizer_name} for model {model_name}: {e}")
+        fallback_tokenizer_name = get_fallback_tokenizer()
+        logger.info(f"Falling back to tokenizer {fallback_tokenizer_name}")
+        if 'openai' in fallback_tokenizer_name.lower():
+            encoding = tiktoken.get_encoding(fallback_tokenizer_name)
+            input_tokens = encoding.encode(input_data)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_name)
+            if hasattr(tokenizer, "encode"):
+                input_tokens = tokenizer.encode(input_data)
+            else:
+                input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
+        return len(input_tokens)
 
 def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict) -> float:
     # Define the pricing data for each API service and model
@@ -3686,8 +3703,8 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
     pricing_data = {
         "claude-2.1": {"input_cost": 0.008, "output_cost": 0.024, "per_call_cost": 0.0128},
         "claude3-haiku": {"input_cost": 0.00025, "output_cost": 0.00125, "per_call_cost": 0.0006},
-        "claude3-sonnet": {"input_cost": 0.003, "output_cost": 0.015, "per_call_cost": 0.0078},
-        "claude3-opus": {"input_cost": 0.015, "output_cost": 0.075, "per_call_cost": 0.0390},
+        "claude3.5-sonnet": {"input_cost": 3.0, "output_cost": 15.0, "per_call_cost": 0.0},
+        "claude3-opus": {"input_cost": 15.0, "output_cost": 75.0, "per_call_cost": 0.0},
         "mistralapi-mistral-small-latest": {"input_cost": 0.002, "output_cost": 0.006, "per_call_cost": 0.0032},
         "mistralapi-mistral-medium-latest": {"input_cost": 0.0027, "output_cost": 0.0081, "per_call_cost": 0},
         "mistralapi-mistral-large-latest": {"input_cost": 0.008, "output_cost": 0.024, "per_call_cost": 0.0128},
@@ -4423,7 +4440,7 @@ def get_claude3_model_name(model_name: str) -> str:
     model_mapping = {
         "claude3-haiku": "claude-3-haiku-20240307",
         "claude3-opus": "claude-3-opus-20240229",
-        "claude3-sonnet": "claude-3-sonnet-20240229"
+        "claude3.5-sonnet": "claude-3-5-sonnet-20240620"
     }
     return model_mapping.get(model_name, "")
 
