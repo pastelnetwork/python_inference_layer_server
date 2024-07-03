@@ -1,8 +1,8 @@
-import logging
+import picologging as logging
 import os
 import shutil
 import queue
-from logging.handlers import RotatingFileHandler, QueueHandler, QueueListener
+from picologging.handlers import RotatingFileHandler, QueueHandler, QueueListener
 
 logger = logging.getLogger("pastel_supernode_inference_layer")
 

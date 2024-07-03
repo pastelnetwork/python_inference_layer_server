@@ -10,6 +10,7 @@ magika
 mistralai
 mutagen
 pandas
+picologging
 pillow
 plyvel
 psutil
