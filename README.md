@@ -211,15 +211,19 @@ and in the case of a termination, the `responding_supernode` responds with this 
         credit_usage_tracking_psl_address: str = Field(index=True)
         request_response_timestamp_utc_iso_string: str
         request_response_pastel_block_height: int
+        best_block_merkle_root: str
+        best_block_height: int
         credit_purchase_request_response_message_version_string: str
         responding_supernode_pastelid: str = Field(index=True)
+        list_of_blacklisted_supernode_pastelids: str = Field(sa_column=Column(JSON))
         list_of_potentially_agreeing_supernodes: str = Field(sa_column=Column(JSON))
         list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms: str = Field(sa_column=Column(JSON))
-        agreeing_supernodes_signatures_dict: str = Field(sa_column=Column(JSON))
+        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion: str = Field(sa_column=Column(JSON))
+        selected_agreeing_supernodes_signatures_dict: str = Field(sa_column=Column(JSON))
         sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(unique=True, index=True)
         responding_supernode_signature_on_credit_pack_purchase_request_response_hash: str
 ```
-, and the `responding_supernode` will also call the `/credit_pack_purchase_request_final_response_accouncement` endpoint on each of the `agreeing_supernodes` and will also POST the same `CreditPackPurchaseRequestResponse` message so that all of the `agreeing_supernodes` know all the details of the ticket.
+, and the `responding_supernode` will also call the `/credit_pack_purchase_request_final_response_announcement` endpoint on each of the `agreeing_supernodes` and will also POST the same `CreditPackPurchaseRequestResponse` message so that all of the `agreeing_supernodes` know all the details of the ticket.
 
 9) At this point, the deal is agreed to in all particulars, and all that is left is for the end user to actually burn `proposed_total_cost_of_credit_pack_in_psl` PSL coins by sending exactly this many coins to the burn address from the end user's `credit_usage_tracking_psl_address` within 50 blocks of `request_response_pastel_block_height`. Once the end user does this, the transaction's UTXO is then communicated to the responding_supernode by the end user calling the responding_supernode's `/confirm_credit_purchase_request` endpoint by POSTing a message of the form:
 

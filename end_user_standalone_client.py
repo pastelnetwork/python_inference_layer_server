@@ -584,8 +584,10 @@ def transform_credit_pack_purchase_request_response(result: dict) -> dict:
     transformed_result = result.copy()
     fields_to_convert = [
         "list_of_potentially_agreeing_supernodes",
+        "list_of_blacklisted_supernode_pastelids",
         "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms",
-        "agreeing_supernodes_signatures_dict",
+        "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion",
+        "selected_agreeing_supernodes_signatures_dict",
     ]
     for field in fields_to_convert:
         if field in transformed_result:
@@ -1095,11 +1097,15 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
     credit_usage_tracking_psl_address: str = Field(index=True)
     request_response_timestamp_utc_iso_string: str
     request_response_pastel_block_height: int
+    best_block_merkle_root: str
+    best_block_height: int
     credit_purchase_request_response_message_version_string: str
     responding_supernode_pastelid: str = Field(index=True)
+    list_of_blacklisted_supernode_pastelids: str = Field(sa_column=Column(JSON))
     list_of_potentially_agreeing_supernodes: str = Field(sa_column=Column(JSON))
     list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms: str = Field(sa_column=Column(JSON))
-    agreeing_supernodes_signatures_dict: str = Field(sa_column=Column(JSON))
+    list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion: str = Field(sa_column=Column(JSON))
+    selected_agreeing_supernodes_signatures_dict: str = Field(sa_column=Column(JSON))
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(unique=True, index=True)
     responding_supernode_signature_on_credit_pack_purchase_request_response_hash: str
     class Config:
@@ -1113,11 +1119,15 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
                 "credit_usage_tracking_psl_address": "tPj2wX5mjQErTju6nueVRkxGMCPuMkLn8CWdViJ38m9Wf6PBK5jV",
                 "request_response_timestamp_utc_iso_string": "2023-06-01T12:15:00Z",
                 "request_response_pastel_block_height": 123457,
+                "best_block_merkle_root": "0x5678...",
+                "best_block_height": 123456,
                 "credit_purchase_request_response_message_version_string": "1.0",
                 "responding_supernode_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
+                "list_of_blacklisted_supernode_pastelids": ["jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP"],
                 "list_of_potentially_agreeing_supernodes": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP"],
                 "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk", "jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP"],
-                "agreeing_supernodes_signatures_dict": "['jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_b64_signature': '0x5678...'}, 'jXa1s9mKDr4m6P8s7bKK1rYFgL7hkfGMLX1NozVSX4yTnfh9EjuP': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_signature': '0x5678...'}]",
+                "list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion": ["jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk"],
+                "selected_agreeing_supernodes_signatures_dict": "['jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk': {'price_agreement_request_response_hash_signature': '0x1234...', 'credit_pack_purchase_request_fields_json_b64_signature': '0x5678...'}]",
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x9abc...",
                 "responding_supernode_signature_on_credit_pack_purchase_request_response_hash": "0xdef0..."
             }
