@@ -6341,13 +6341,13 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions_n
             db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address
         )
         result = await db.execute(query)
-        db_transactions = result.all()
+        db_transactions = result.scalars().all()
         # Calculate total credits consumed
         total_credits_consumed = sum(COIN * tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
         # Get the latest block height in the database
         latest_db_block_height_query = select(func.max(db_code.BlockHash.block_height))
-        latest_db_block_height = await db.execute(latest_db_block_height_query)
-        latest_db_block_height = latest_db_block_height.scalar_one_or_none() or 0
+        latest_db_block_height_result = await db.execute(latest_db_block_height_query)
+        latest_db_block_height = latest_db_block_height_result.scalar_one_or_none() or 0
     current_block_height = await get_current_pastel_block_height_func()
     if current_block_height > latest_db_block_height:
         latest_db_block_hash = await rpc_connection.getblockhash(latest_db_block_height)
@@ -6360,7 +6360,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions_n
             new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
             logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
             # Calculate additional credits consumed from new transactions
-            total_credits_consumed += sum(COIN * tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_decoded_tx_data_list)
+            total_credits_consumed += sum(COIN * tx['amount'] / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_decoded_tx_data_list)
         # Update block hashes if necessary
         if current_block_height > latest_db_block_height:
             await fetch_and_insert_block_hashes(latest_db_block_height + 1, current_block_height)
