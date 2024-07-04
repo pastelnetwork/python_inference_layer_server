@@ -5766,36 +5766,31 @@ async def process_transactions_in_chunks(transactions, chunk_size, ignore_unconf
     decoded_tx_data_list = []
     total_chunk_count = math.ceil(len(transactions) / chunk_size)
     chunk_count = 0
-    all_seen_txids = set()  # Track all txids processed in this session
-    async with db_code.Session() as db:
-        # Fetch all existing txids in one query
-        existing_txids_query = await db.execute(select(db_code.BurnAddressTransaction.txid))
-        existing_txids = set(result[0] for result in existing_txids_query)
-        for i in range(0, len(transactions), chunk_size):
-            chunk = transactions[i:i + chunk_size]
-            chunk_count += 1
-            if total_chunk_count > 1:       
-                logger.info(f"Processing burn transactions chunk {chunk_count} of {total_chunk_count} (total transaction count of {len(transactions):,})...")
-            if ignore_unconfirmed_transactions:
-                tasks = [create_transaction_task(transaction) for transaction in chunk if transaction['amount'] > 0]
-            else:
-                tasks = [create_transaction_task_old(transaction) for transaction in chunk if transaction['amount'] > 0]
-            transactions_to_insert = await asyncio.gather(*tasks)
-            transactions_to_insert = [txn for txn in transactions_to_insert if txn]
-            # Filter out duplicates and already existing transactions
-            filtered_transactions = [
-                txn for txn in transactions_to_insert 
-                if txn.txid not in all_seen_txids and txn.txid not in existing_txids
-            ]
-            all_seen_txids.update(txn.txid for txn in filtered_transactions)
-            if filtered_transactions:
+    all_seen_txids = set()
+    for i in range(0, len(transactions), chunk_size):
+        chunk = transactions[i:i + chunk_size]
+        chunk_count += 1
+        if total_chunk_count > 1:       
+            logger.info(f"Processing burn transactions chunk {chunk_count} of {total_chunk_count} (total transaction count of {len(transactions):,})...")
+        if ignore_unconfirmed_transactions:
+            tasks = [create_transaction_task(transaction) for transaction in chunk if transaction['amount'] > 0]
+        else:
+            tasks = [create_transaction_task_old(transaction) for transaction in chunk if transaction['amount'] > 0]
+        transactions_to_insert = await asyncio.gather(*tasks)
+        transactions_to_insert = [txn for txn in transactions_to_insert if txn]
+        filtered_transactions = []
+        for txn in transactions_to_insert:
+            if txn.txid not in all_seen_txids:
+                filtered_transactions.append(txn)
+                all_seen_txids.add(txn.txid)
+        if filtered_transactions:
+            async with db_code.Session() as db:
                 try:
-                    await db.execute(insert(db_code.BurnAddressTransaction), [txn.__dict__ for txn in filtered_transactions])
+                    db.add_all(filtered_transactions)
                     await db.commit()
                     logger.info(f"Added {len(filtered_transactions):,} new burn transactions to the database successfully.")
                 except IntegrityError:
                     await db.rollback()
-                    logger.warning("IntegrityError occurred. Some transactions may already exist in the database.")
                     for txn in filtered_transactions:
                         try:
                             await db.merge(txn)
@@ -5803,8 +5798,8 @@ async def process_transactions_in_chunks(transactions, chunk_size, ignore_unconf
                         except IntegrityError:
                             await db.rollback()
                             logger.warning(f"Failed to insert transaction {txn.txid}")
-            decoded_tx_data_list.extend(filtered_transactions)
-        await db_code.consolidate_wal_data()  # Consolidate WAL after processing all chunks
+        await db_code.consolidate_wal_data()
+        decoded_tx_data_list.extend(transactions_to_insert)
     return decoded_tx_data_list
     
 async def create_transaction_task(transaction):
@@ -6148,42 +6143,36 @@ async def fetch_and_insert_block_hashes(start_height, end_height, batch_size=300
     current_height = max(start_height - 1, 0)
     total_inserted = 0
     batch_counter = 0
-    async with db_code.Session() as db:
-        while current_height <= end_height:
-            # Calculate the number of hashes to fetch in this batch
-            num_hashes = min((end_height + 1) - current_height, batch_size)
-            result = await rpc_connection.getblockhash(current_height, num_hashes)
-            blocks_to_insert = []
-            for block in result:
-                block_height = block['height']
-                block_hash = block['hash']
-                blocks_to_insert.append({'block_height': block_height, 'block_hash': block_hash})
-            # Bulk insert new blocks
-            if blocks_to_insert:
-                try:
-                    await db.execute(insert(db_code.BlockHash).values(blocks_to_insert).on_conflict_do_nothing())
-                    await db.commit()
-                    inserted_count = len(blocks_to_insert)
-                    total_inserted += inserted_count
-                    batch_counter += inserted_count
-                except IntegrityError:
-                    await db.rollback()
-                    logger.warning("IntegrityError occurred. Some block hashes may already exist in the database.")
-                    for block in blocks_to_insert:
-                        try:
-                            await db.merge(db_code.BlockHash(**block))
-                            await db.commit()
-                        except IntegrityError:
-                            await db.rollback()
-                            logger.warning(f"Failed to insert block hash for height {block['block_height']}")
-            # Log progress for every 500 inserts or as needed
-            if batch_counter >= 500:
-                blocks_left = end_height - current_height + 1
-                logger.info(f"Fetched and inserted {batch_counter:,} block hashes; {total_inserted:,} total block hashes in total, {blocks_left:,} blocks left to process...")
-                batch_counter = 0
-            # Move to the next range, accounting for the batch size
-            current_height += num_hashes
-        await db_code.consolidate_wal_data()  # Consolidate WAL after processing all batches
+    while current_height <= end_height:
+        num_hashes = min((end_height + 1) - current_height, batch_size)
+        result = await rpc_connection.getblockhash(current_height, num_hashes)
+        blocks_to_insert = []
+        previous_height = None
+        previous_hash = None
+        for block in result:
+            block_height = block['height']
+            block_hash = block['hash']
+            if previous_height is not None and previous_height >= start_height:
+                blocks_to_insert.append((previous_height, previous_hash))
+            blocks_to_insert.append((block_height, block_hash))
+            previous_height = block_height + 1
+            previous_hash = block_hash
+        unique_blocks = {block[0]: block for block in blocks_to_insert}.values()
+        unique_heights = {height for height, _ in unique_blocks}
+        async with db_code.Session() as db:
+            existing_query = await db.execute(select(db_code.BlockHash.block_height).where(db_code.BlockHash.block_height.in_(unique_heights)))
+            existing_heights = set(existing_query.scalars().all())
+        final_blocks_to_insert = [block for block in unique_blocks if block[0] not in existing_heights]
+        if final_blocks_to_insert:
+            await bulk_insert_block_hashes(final_blocks_to_insert)
+            inserted_count = len(final_blocks_to_insert)
+            total_inserted += inserted_count
+            batch_counter += inserted_count
+        if batch_counter >= 500:
+            blocks_left = end_height - current_height + 1
+            logger.info(f"Fetched and inserted {batch_counter:,} block hashes; {total_inserted:,} total block hashes in total, {blocks_left:,} blocks left to process...")
+            batch_counter = 0
+        current_height += num_hashes
 
 async def bulk_insert_block_hashes(block_hashes):
     async with db_code.Session() as db:
