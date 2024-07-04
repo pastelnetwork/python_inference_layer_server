@@ -5909,7 +5909,7 @@ async def full_rescan_burn_transactions():
     global burn_address
     async with db_code.Session() as db:
         result = await db.execute(select(func.count()).select_from(db_code.BurnAddressTransaction))
-        result_as_scalar = await result.scalar()
+        result_as_scalar = result.scalar()
         burn_tx_exists = result_as_scalar > 0
     if not burn_tx_exists:
         logger.info("No burn transaction records found in database, proceeding with full rescan...")
