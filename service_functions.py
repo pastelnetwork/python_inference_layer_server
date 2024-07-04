@@ -45,7 +45,7 @@ from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
 import database_code as db_code
-from sqlmodel import select, delete, update, insert, func, or_, SQLModel
+from sqlmodel import select, delete, update, insert, func, joinedload, or_, SQLModel
 from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
@@ -3637,7 +3637,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         traceback.print_exc()
         raise
     
-async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
+async def get_valid_credit_pack_tickets_for_pastelid_old(pastelid: str) -> List[dict]:
     async def process_request_confirmation(request_confirmation):
         hash_of_request_fields = request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
         async with db_code.Session() as db_session:
@@ -3714,7 +3714,7 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
         traceback.print_exc()
         raise
 
-async def get_valid_credit_pack_tickets_for_pastelid_broken(pastelid: str) -> List[dict]:
+async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
     async def process_request_confirmation(request_confirmation):
         hash_of_request_fields = request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
         async with db_code.Session() as db_session:
