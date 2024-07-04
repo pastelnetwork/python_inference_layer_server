@@ -5909,8 +5909,9 @@ async def full_rescan_burn_transactions():
     global burn_address
     async with db_code.Session() as db:
         result = await db.execute(select(func.count()).select_from(db_code.BurnAddressTransaction))
-        result_as_scalar = result.scalar()
-        burn_tx_exists = result_as_scalar > 0
+        burn_tx_exists = result.scalar() > 0
+        block_hash_result = await db.execute(select(func.count()).select_from(db_code.BlockHash))
+        block_hash_exists = block_hash_result.scalar() > 0
     if not burn_tx_exists:
         logger.info("No burn transaction records found in database, proceeding with full rescan...")
         logger.info("Please wait, retrieving ALL burn transactions from ANY address starting with the genesis block (may take a while and cause high CPU usage...)")
