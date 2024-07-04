@@ -3730,7 +3730,15 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                 existing_data = existing_data_result.scalar_one_or_none()
             if existing_data:
                 complete_ticket = json.loads(existing_data.complete_credit_pack_data_json)
+            else:
+                complete_ticket = None
+            try:
                 current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(txid)
+            except Exception as e:
+                logger.error(f"Error in determine_current_credit_pack_balance_based_on_tracking_transactions_new: {str(e)}")
+                current_credit_balance, number_of_confirmation_transactions = 0, 0
+
+            if complete_ticket:
                 complete_ticket['credit_pack_current_credit_balance'] = current_credit_balance
                 complete_ticket['balance_as_of_datetime'] = datetime.now(dt.UTC).isoformat()
                 complete_ticket_json = json.dumps(complete_ticket)
@@ -3740,7 +3748,6 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                     db_session.add(existing_data)
                     await db_session.commit()
             else:
-                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(txid)
                 _, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
                 if all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
                     credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
@@ -3756,7 +3763,6 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                     complete_ticket = convert_uuids_to_strings(complete_ticket)
                     complete_ticket = normalize_data(complete_ticket)
                     complete_ticket_json = json.dumps(complete_ticket)
-
                     async with db_code.Session() as db_session:
                         new_complete_ticket = db_code.CreditPackCompleteTicketWithBalance(
                             credit_pack_ticket_registration_txid=txid,
