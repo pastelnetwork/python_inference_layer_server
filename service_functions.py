@@ -45,7 +45,7 @@ from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
 import database_code as db_code
-from sqlmodel import select, delete, update, func, or_, SQLModel
+from sqlmodel import select, delete, update, insert, func, or_, SQLModel
 from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
@@ -3451,7 +3451,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
     try:
         use_verbose_validation = 0
         logger.info(f"Validating credit pack ticket with TXID: {credit_pack_ticket_txid}")
-        async with Session() as db:
+        async with db_code.Session() as db:
             # Retrieve the credit pack ticket data from the database
             query = select(
                 db_code.CreditPackPurchaseRequest,
@@ -3593,7 +3593,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         selected_agreeing_supernodes_set = set(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion)
         computed_selected_agreeing_supernodes_set = set(selected_agreeing_supernodes)
         is_selected_agreeing_supernodes_valid = selected_agreeing_supernodes_set == computed_selected_agreeing_supernodes_set
-validation_results["validation_checks"].append({
+        validation_results["validation_checks"].append({
             "check_name": "Validation of selected agreeing supernodes for signature inclusion",
             "is_valid": is_selected_agreeing_supernodes_valid,
             "expected_selected_agreeing_supernodes": list(computed_selected_agreeing_supernodes_set),
@@ -3602,6 +3602,7 @@ validation_results["validation_checks"].append({
         if not is_selected_agreeing_supernodes_valid:
             validation_results["credit_pack_ticket_is_valid"] = False
             validation_results["validation_failure_reasons_list"].append("Selected agreeing supernodes for signature inclusion do not match the expected set based on XOR distance to the best block merkle root.")
+
         # Validate the agreeing supernodes
         num_potentially_agreeing_supernodes = len(list_of_potentially_agreeing_supernodes)
         num_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
@@ -3610,6 +3611,7 @@ validation_results["validation_checks"].append({
         agreeing_percentage = num_agreeing_supernodes / num_potentially_agreeing_supernodes
         is_quorum_valid = quorum_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE
         is_agreeing_percentage_valid = agreeing_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE
+
         validation_results["validation_checks"].append({
             "check_name": "Agreeing supernodes percentage validation",
             "is_valid": is_agreeing_percentage_valid and is_quorum_valid,
@@ -3622,18 +3624,19 @@ validation_results["validation_checks"].append({
         if validation_results["validation_failure_reasons_list"]:
             logger.info(f"Validation failures for credit pack ticket with TXID {credit_pack_ticket_txid}: {validation_results['validation_failure_reasons_list']}")
             list_of_reasons_it_is_known_bad = json.dumps(validation_results['validation_failure_reasons_list'])
-            async with Session() as db:
+            async with db_code.Session() as db:
                 known_bad_txid_object = await insert_credit_pack_ticket_txid_into_known_bad_table_in_db(db, credit_pack_ticket_txid, list_of_reasons_it_is_known_bad)
                 if known_bad_txid_object:
                     logger.info(f"Added invalid credit pack ticket TXID {credit_pack_ticket_txid} to known bad list in database!")
         else:
             logger.info(f"All validation checks passed for credit pack ticket with TXID {credit_pack_ticket_txid}")
         return validation_results
+
     except Exception as e:
         logger.error(f"Error validating credit pack ticket with TXID {credit_pack_ticket_txid}: {str(e)}")
         traceback.print_exc()
-        raise    
-
+        raise
+    
 async def get_valid_credit_pack_tickets_for_pastelid_old(pastelid: str) -> List[dict]:
     async def process_request_confirmation(request_confirmation):
         hash_of_request_fields = request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields

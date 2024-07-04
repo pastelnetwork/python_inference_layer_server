@@ -885,11 +885,11 @@ engine = create_async_engine(
 )
 
 async_session_factory = sessionmaker(
-    engine, class_=AsyncSession, expire_on_commit=False
+    engine, class_=SQLModelSession, expire_on_commit=False
 )
 
 @asynccontextmanager
-async def Session() -> AsyncSession:
+async def Session() -> SQLModelSession:
     async with async_session_factory() as session:
         try:
             yield session
