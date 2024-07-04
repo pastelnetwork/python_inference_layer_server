@@ -45,9 +45,7 @@ from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
 import database_code as db_code
-from sqlalchemy import insert
-from sqlalchemy.orm import joinedload
-from sqlmodel import select, delete, update, func, or_, SQLModel 
+from sqlmodel import select, delete, update, insert, func, or_, SQLModel 
 from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
@@ -3464,14 +3462,14 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
                 db_code.CreditPackPurchaseRequestResponseTxidMapping.sha3_256_hash_of_credit_pack_purchase_request_fields == db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_fields
             ).where(
                 db_code.CreditPackPurchaseRequestResponseTxidMapping.pastel_api_credit_pack_ticket_registration_txid == credit_pack_ticket_txid
-            ).options(joinedload(db_code.CreditPackPurchaseRequestResponse.credit_pack_purchase_request))
+            )
             result = await db.execute(query)
             credit_pack_data = result.first()
-            if not credit_pack_data:
-                # If not found in the database, retrieve from the blockchain
-                credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(credit_pack_ticket_txid)
-            else:
-                credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = credit_pack_data
+        if not credit_pack_data:
+            # If not found in the database, retrieve from the blockchain
+            credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(credit_pack_ticket_txid)
+        else:
+            credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = credit_pack_data
         logger.info(f"Credit pack ticket data for credit pack with TXID {credit_pack_ticket_txid}:\n\nTicket Request Response:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_response.model_dump())} \n\nTicket Request Confirmation:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_confirmation.model_dump())}")
         validation_results = {
             "credit_pack_ticket_is_valid": True,
@@ -3604,7 +3602,6 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         if not is_selected_agreeing_supernodes_valid:
             validation_results["credit_pack_ticket_is_valid"] = False
             validation_results["validation_failure_reasons_list"].append("Selected agreeing supernodes for signature inclusion do not match the expected set based on XOR distance to the best block merkle root.")
-
         # Validate the agreeing supernodes
         num_potentially_agreeing_supernodes = len(list_of_potentially_agreeing_supernodes)
         num_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
@@ -3613,7 +3610,6 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         agreeing_percentage = num_agreeing_supernodes / num_potentially_agreeing_supernodes
         is_quorum_valid = quorum_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE
         is_agreeing_percentage_valid = agreeing_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE
-
         validation_results["validation_checks"].append({
             "check_name": "Agreeing supernodes percentage validation",
             "is_valid": is_agreeing_percentage_valid and is_quorum_valid,
@@ -3633,11 +3629,10 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         else:
             logger.info(f"All validation checks passed for credit pack ticket with TXID {credit_pack_ticket_txid}")
         return validation_results
-
     except Exception as e:
         logger.error(f"Error validating credit pack ticket with TXID {credit_pack_ticket_txid}: {str(e)}")
         traceback.print_exc()
-        raise
+        raise    
     
 async def get_valid_credit_pack_tickets_for_pastelid_old(pastelid: str) -> List[dict]:
     async def process_request_confirmation(request_confirmation):
@@ -5913,8 +5908,8 @@ async def full_rescan_burn_transactions_old():
 async def full_rescan_burn_transactions():
     global burn_address
     async with db_code.Session() as db:
-        burn_tx_exists = await db.execute(select(func.count()).select_from(db_code.BurnAddressTransaction)).scalar() > 0
-        block_hash_exists = await db.execute(select(func.count()).select_from(db_code.BlockHash)).scalar() > 0
+        result = await db.execute(select(func.count()).select_from(db_code.BurnAddressTransaction))
+        burn_tx_exists = (await result.scalar()) > 0
     if not burn_tx_exists:
         logger.info("No burn transaction records found in database, proceeding with full rescan...")
         logger.info("Please wait, retrieving ALL burn transactions from ANY address starting with the genesis block (may take a while and cause high CPU usage...)")
