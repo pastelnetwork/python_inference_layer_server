@@ -3462,7 +3462,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
                 db_code.CreditPackPurchaseRequestResponseTxidMapping.sha3_256_hash_of_credit_pack_purchase_request_fields == db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_fields
             ).where(
                 db_code.CreditPackPurchaseRequestResponseTxidMapping.pastel_api_credit_pack_ticket_registration_txid == credit_pack_ticket_txid
-            )
+            ).options(joinedload(db_code.CreditPackPurchaseRequestResponse.credit_pack_purchase_request))
             result = await db.execute(query)
             credit_pack_data = result.first()
             if not credit_pack_data:

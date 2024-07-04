@@ -10,6 +10,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 from decouple import Config as DecoupleConfig, RepositoryEnv
         
 config = DecoupleConfig(RepositoryEnv('.env'))
@@ -877,11 +878,8 @@ engine = create_async_engine(
     DATABASE_URL,
     echo=False,
     future=True,
-    pool_size=20,
-    max_overflow=0,
-    pool_timeout=30,
-    pool_recycle=1800,
-    pool_pre_ping=True,
+    poolclass=NullPool,  # Use NullPool for SQLite
+    connect_args={"check_same_thread": False},
 )
 
 async_session_factory = sessionmaker(
