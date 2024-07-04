@@ -1020,7 +1020,7 @@ async def update_inference_sn_reputation_score_endpoint(
 @router.get("/show_logs/{minutes}", response_class=HTMLResponse)
 async def show_logs(minutes: int = 5):
     # read the entire log file and generate HTML with logs up to `minutes` minutes from now
-    with open("opennode_fastapi_log.txt", "r") as f:
+    with open("pastel_supernode_inference_layer.log", "r") as f:
         lines = f.readlines()
     logs = []
     now = datetime.now(timezone('UTC'))  # get current time, make it timezone-aware
