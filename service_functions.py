@@ -752,31 +752,36 @@ async def check_supernode_list_func():
     masternode_list_rank_command_output = await rpc_connection.masternodelist('rank')
     masternode_list_pubkey_command_output = await rpc_connection.masternodelist('pubkey')
     masternode_list_extra_command_output = await rpc_connection.masternodelist('extra')
-    masternode_list_full_df = pd.DataFrame([masternode_list_full_command_output[x].split() for x in masternode_list_full_command_output])
-    masternode_list_full_df['txid_vout'] = [x for x in masternode_list_full_command_output]
-    masternode_list_full_df.columns = ['supernode_status', 'protocol_version', 'supernode_psl_address', 'lastseentime', 'activeseconds', 'lastpaidtime', 'lastpaidblock', 'ipaddress:port', 'txid_vout']
-    masternode_list_full_df.index = masternode_list_full_df['txid_vout']
-    masternode_list_full_df.drop(columns=['txid_vout'], inplace=True)
-    for txid_vout in masternode_list_full_df.index:
-        rank = masternode_list_rank_command_output.get(txid_vout)
-        pubkey = masternode_list_pubkey_command_output.get(txid_vout)
-        extra = masternode_list_extra_command_output.get(txid_vout, {})
-        masternode_list_full_df.at[txid_vout, 'rank'] = rank if rank is not None else 'Unknown'
-        masternode_list_full_df.at[txid_vout, 'pubkey'] = pubkey if pubkey is not None else 'Unknown'
-        masternode_list_full_df.at[txid_vout, 'extAddress'] = extra.get('extAddress', 'Unknown')
-        masternode_list_full_df.at[txid_vout, 'extP2P'] = extra.get('extP2P', 'Unknown')
-        masternode_list_full_df.at[txid_vout, 'extKey'] = extra.get('extKey', 'Unknown')
-    masternode_list_full_df['lastseentime'] = pd.to_numeric(masternode_list_full_df['lastseentime'], downcast='integer')
-    masternode_list_full_df['lastpaidtime'] = pd.to_numeric(masternode_list_full_df['lastpaidtime'], downcast='integer')
-    masternode_list_full_df['lastseentime'] = pd.to_datetime(masternode_list_full_df['lastseentime'], unit='s')
-    masternode_list_full_df['lastpaidtime'] = pd.to_datetime(masternode_list_full_df['lastpaidtime'], unit='s')
-    masternode_list_full_df['activeseconds'] = masternode_list_full_df['activeseconds'].astype(int)
-    masternode_list_full_df['lastpaidblock'] = masternode_list_full_df['lastpaidblock'].astype(int)
-    masternode_list_full_df['activedays'] = masternode_list_full_df['activeseconds'].apply(lambda x: float(x) / 86400.0)
-    masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int, errors='ignore')
-    masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['supernode_status'].isin(['ENABLED', 'PRE_ENABLED'])]
-    masternode_list_full_df__json = masternode_list_full_df.to_json(orient='index')
-    return masternode_list_full_df, masternode_list_full_df__json
+    if masternode_list_full_command_output:
+        masternode_list_full_df = pd.DataFrame([masternode_list_full_command_output[x].split() for x in masternode_list_full_command_output])
+        masternode_list_full_df['txid_vout'] = [x for x in masternode_list_full_command_output]
+        masternode_list_full_df.columns = ['supernode_status', 'protocol_version', 'supernode_psl_address', 'lastseentime', 'activeseconds', 'lastpaidtime', 'lastpaidblock', 'ipaddress:port', 'txid_vout']
+        masternode_list_full_df.index = masternode_list_full_df['txid_vout']
+        masternode_list_full_df.drop(columns=['txid_vout'], inplace=True)
+        for txid_vout in masternode_list_full_df.index:
+            rank = masternode_list_rank_command_output.get(txid_vout)
+            pubkey = masternode_list_pubkey_command_output.get(txid_vout)
+            extra = masternode_list_extra_command_output.get(txid_vout, {})
+            masternode_list_full_df.at[txid_vout, 'rank'] = rank if rank is not None else 'Unknown'
+            masternode_list_full_df.at[txid_vout, 'pubkey'] = pubkey if pubkey is not None else 'Unknown'
+            masternode_list_full_df.at[txid_vout, 'extAddress'] = extra.get('extAddress', 'Unknown')
+            masternode_list_full_df.at[txid_vout, 'extP2P'] = extra.get('extP2P', 'Unknown')
+            masternode_list_full_df.at[txid_vout, 'extKey'] = extra.get('extKey', 'Unknown')
+        masternode_list_full_df['lastseentime'] = pd.to_numeric(masternode_list_full_df['lastseentime'], downcast='integer')
+        masternode_list_full_df['lastpaidtime'] = pd.to_numeric(masternode_list_full_df['lastpaidtime'], downcast='integer')
+        masternode_list_full_df['lastseentime'] = pd.to_datetime(masternode_list_full_df['lastseentime'], unit='s')
+        masternode_list_full_df['lastpaidtime'] = pd.to_datetime(masternode_list_full_df['lastpaidtime'], unit='s')
+        masternode_list_full_df['activeseconds'] = masternode_list_full_df['activeseconds'].astype(int)
+        masternode_list_full_df['lastpaidblock'] = masternode_list_full_df['lastpaidblock'].astype(int)
+        masternode_list_full_df['activedays'] = masternode_list_full_df['activeseconds'].apply(lambda x: float(x) / 86400.0)
+        masternode_list_full_df['rank'] = masternode_list_full_df['rank'].astype(int, errors='ignore')
+        masternode_list_full_df = masternode_list_full_df[masternode_list_full_df['supernode_status'].isin(['ENABLED', 'PRE_ENABLED'])]
+        masternode_list_full_df__json = masternode_list_full_df.to_json(orient='index')
+        return masternode_list_full_df, masternode_list_full_df__json
+    else:
+        error_message = "Masternode list command returning nothing-- pasteld probably just started and hasn't yet finished the mnsync process!"
+        logger.error(error_message)
+        raise ValueError(error_message)
     
 async def get_local_machine_supernode_data_func():
     local_machine_ip = get_external_ip_func()
