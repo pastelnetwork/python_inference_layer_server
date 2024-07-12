@@ -3284,10 +3284,13 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
             "quorum_percentage": round(quorum_percentage, 5),
             "agreeing_percentage": round(agreeing_percentage, 5)
         })
-        if not is_agreeing_percentage_valid or not is_quorum_valid:
+        if not is_quorum_valid:
             validation_results["credit_pack_ticket_is_valid"] = False
-            validation_results["validation_failure_reasons_list"].append(f"Agreeing supernodes percentage validation failed for credit pack with txid {credit_pack_ticket_txid}")
-        if len(validation_results["validation_failure_reasons_list"]) > 0:
+            validation_results["validation_failure_reasons_list"].append(f"Agreeing supernodes quorum percentage validation failed for credit pack with txid {credit_pack_ticket_txid}; quorum % was only {quorum_percentage:.3f} (i.e., {num_potentially_agreeing_supernodes} out of {(active_supernodes_count_at_the_time - number_of_blacklisted_supernodes_at_the_time)}) and the minimum required % is {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.3f}")
+        if not is_agreeing_percentage_valid:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Agreeing supernodes agreement percentage validation failed for credit pack with txid {credit_pack_ticket_txid}; agreement % was only {agreeing_percentage:.3f} (i.e., {num_agreeing_supernodes} out of {num_potentially_agreeing_supernodes}) and the minimum required % is {SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:.3f}")
+        if len(validation_results["validation_failure_reasons_list"]) > 0: # Construct final validation results response taking all tests into account: 
             logger.info(f"Validation failures for credit pack ticket with TXID {credit_pack_ticket_txid}: {validation_results['validation_failure_reasons_list']}")
             list_of_reasons_it_is_known_bad = json.dumps(validation_results['validation_failure_reasons_list'])
             known_bad_txid_object = await insert_credit_pack_ticket_txid_into_known_bad_table_in_db(credit_pack_ticket_txid, list_of_reasons_it_is_known_bad)
@@ -3320,7 +3323,7 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                 existing_data = existing_data_result.one_or_none()
             if existing_data:
                 complete_ticket = json.loads(existing_data.complete_credit_pack_data_json)
-                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(txid)
+                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
                 complete_ticket['credit_pack_current_credit_balance'] = current_credit_balance
                 complete_ticket['balance_as_of_datetime'] = datetime.now(dt.UTC).isoformat()
                 complete_ticket_json = json.dumps(complete_ticket)
@@ -3330,7 +3333,7 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                     db_session.add(existing_data)
                     await db_session.commit()
             else:
-                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(txid)
+                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
                 _, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
                 if all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
                     credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
@@ -4211,7 +4214,7 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
             return False, 0, 0
         else:
             logger.info(f"Credit pack ticket with txid {credit_pack_ticket_pastel_txid} passed all validation checks: {abbreviated_pretty_json_func(validation_results['validation_checks'])}")
-        current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(credit_pack_ticket_pastel_txid)
+        current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_pastel_txid)
         if proposed_cost_in_credits >= current_credit_balance:
             logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits:,}, Available: {current_credit_balance:,}")
             return False, proposed_cost_in_credits, current_credit_balance
@@ -4391,7 +4394,7 @@ async def process_inference_confirmation(inference_request_id: str, inference_co
         matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_address_for_tracking_transaction(inference_response.credit_usage_tracking_psl_address, credit_usage_tracking_amount_in_psl, confirmation_transaction_txid, inference_response.max_block_height_to_include_confirmation_transaction)
         if matching_transaction_found:
             logger.info(f"Found correct inference request confirmation tracking transaction in burn address (with {num_confirmations} confirmation blocks so far)! TXID: {confirmation_transaction_txid}; Tracking Amount in PSL: {credit_usage_tracking_amount_in_psl};")
-            computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions_new(inference_request.credit_pack_ticket_pastel_txid)
+            computed_current_credit_pack_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(inference_request.credit_pack_ticket_pastel_txid)
             logger.info(f"Computed current credit pack balance: {computed_current_credit_pack_balance:,.1f} based on {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} tracking transactions from tracking address to burn address.")       
             # Update the inference request status to "confirmed"
             inference_request.status = "confirmed"
@@ -5683,7 +5686,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
             if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height) and abs(tx.get("amount")) < 1.0
         ]
         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
-        chunk_size = 100
+        chunk_size = 1000
         ignore_unconfirmed_transactions = 0
         new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
         logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
@@ -5715,7 +5718,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
 
-async def determine_current_credit_pack_balance_based_on_tracking_transactions_new(credit_pack_ticket_txid: str):
+async def determine_current_credit_pack_balance_based_on_tracking_transactions_broken(credit_pack_ticket_txid: str): # This is faster but does not work correctly in all cases-- it misses a lot of transactions for some reason. 
     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
     _, credit_pack_purchase_request_response, _ = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
     credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
@@ -5740,9 +5743,9 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions_n
             existing_transactions_query = select(db_code.BurnAddressTransaction)
             existing_transactions_result = await db.execute(existing_transactions_query)
             existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
-        new_burn_transactions = await rpc_connection.scanburntransactions(credit_usage_tracking_psl_address, latest_db_block_height)     
+        chunk_size = 5000
+        new_burn_transactions = await rpc_connection.scanburntransactions(credit_usage_tracking_psl_address, latest_db_block_height - chunk_size*3)  # second argument to this function was just "latest_db_block_height" but now trying to subtract an additional offset to make it work.
         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
-        chunk_size = 1000
         ignore_unconfirmed_transactions = 0
         new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
         if len(new_decoded_tx_data_list) > 0:
