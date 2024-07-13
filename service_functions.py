@@ -537,10 +537,11 @@ def EncodeDecimal(o):
     if isinstance(o, decimal.Decimal):
         return float(round(o, 8))
     raise TypeError(repr(o) + " is not JSON serializable")
-    
+
 class AsyncAuthServiceProxy:
     _semaphore = asyncio.BoundedSemaphore(MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS)
-    def __init__(self, service_url, service_name=None, reconnect_timeout=5, reconnect_amount=2, request_timeout=20):
+
+    def __init__(self, service_url, service_name=None, reconnect_timeout=2, reconnect_amount=3, request_timeout=20):
         self.service_url = service_url
         self.service_name = service_name
         self.url = urlparse(service_url)
@@ -562,20 +563,20 @@ class AsyncAuthServiceProxy:
         return AsyncAuthServiceProxy(self.service_url, name)
 
     async def __call__(self, *args):
-        async with self._semaphore:  # Acquire a semaphore
+        async with self._semaphore:
             self.id_count += 1
             postdata = json.dumps({
                 'version': '2.0',
                 'method': self.service_name,
                 'params': args,
                 'id': self.id_count
-            }, default=EncodeDecimal)
+            })
             headers = {
                 'Host': self.url.hostname,
                 'User-Agent': "AuthServiceProxy/0.1",
                 'Authorization': self.auth_header.decode(),
                 'Content-type': 'application/json',
-                'Connection': 'keep-alive'  # Crucial for maintaining keep-alive behavior
+                'Connection': 'keep-alive'
             }
             for i in range(self.reconnect_amount):
                 try:
@@ -592,23 +593,23 @@ class AsyncAuthServiceProxy:
                     response.raise_for_status()
                     response_json = response.json()
                     break
+                except httpx.HTTPStatusError as e:
+                    logger.error(f"HTTP error occurred in __call__: {e}")
+                except httpx.RequestError as e:
+                    logger.error(f"Request error occurred in __call__: {e}")
                 except Exception as e:
-                    logger.error(f"Error occurred in __call__: {e}")
-                    err_msg = f"Failed to connect to {self.url.hostname}:{self.url.port}"
-                    rtm = self.reconnect_timeout
-                    if rtm:
-                        err_msg += f". Waiting {rtm} seconds."
-                    logger.exception(err_msg)
+                    logger.error(f"Unexpected error occurred in __call__: {e}")
             else:
                 logger.error("Reconnect tries exceeded.")
                 return
-            if response_json['error'] is not None:
+            if 'error' in response_json and response_json['error'] is not None:
                 raise JSONRPCException(response_json['error'])
             elif 'result' not in response_json:
                 raise JSONRPCException({
                     'code': -343, 'message': 'missing JSON-RPC result'})
             else:
                 return response_json['result']
+
     async def close(self):
         await self.client.aclose()
                     
@@ -781,7 +782,7 @@ async def check_supernode_list_func():
     else:
         error_message = "Masternode list command returning nothing-- pasteld probably just started and hasn't yet finished the mnsync process!"
         logger.error(error_message)
-        raise ValueError(error_message)
+        raise ValueError(error_message) 
     
 async def get_local_machine_supernode_data_func():
     local_machine_ip = get_external_ip_func()
@@ -3270,11 +3271,14 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         if not is_selected_agreeing_supernodes_valid:
             validation_results["credit_pack_ticket_is_valid"] = False
             validation_results["validation_failure_reasons_list"].append("Selected agreeing supernodes for signature inclusion do not match the expected set based on XOR distance to the best block merkle root.")
-        # Validate the agreeing supernodes
         num_potentially_agreeing_supernodes = len(list_of_potentially_agreeing_supernodes)
         num_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
         number_of_blacklisted_supernodes_at_the_time = len(list_of_blacklisted_supernode_pastelids)
-        quorum_percentage = num_potentially_agreeing_supernodes / (active_supernodes_count_at_the_time - number_of_blacklisted_supernodes_at_the_time)
+        masternode_list_full_df, _ = await check_supernode_list_func()   
+        current_block_height = await get_current_pastel_block_height_func()        
+        active_supernodes_count_now, _ = await fetch_active_supernodes_count_and_details(current_block_height)
+        adjustment_number_of_supernodes = max([0, active_supernodes_count_now - len(masternode_list_full_df)])
+        quorum_percentage = num_potentially_agreeing_supernodes / (active_supernodes_count_at_the_time - number_of_blacklisted_supernodes_at_the_time - adjustment_number_of_supernodes)
         agreeing_percentage = num_agreeing_supernodes / num_potentially_agreeing_supernodes
         is_quorum_valid = quorum_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE
         is_agreeing_percentage_valid = agreeing_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE
@@ -5443,7 +5447,7 @@ async def full_rescan_burn_transactions():
         logger.info("No burn transaction records found in database, proceeding with full rescan...")
         logger.info("Please wait, retrieving ALL burn transactions from ANY address starting with the genesis block (may take a while and cause high CPU usage...)")
         burn_transactions = await rpc_connection.scanburntransactions("*")
-        chunk_size = 5000  # Adjust the chunk size as needed
+        chunk_size = 1000  # Adjust the chunk size as needed
         ignore_unconfirmed_transactions = 1
         if burn_transactions:
             decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, ignore_unconfirmed_transactions)
@@ -5452,7 +5456,7 @@ async def full_rescan_burn_transactions():
         logger.info("No block hash records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
         logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        chunk_size = 5000
+        chunk_size = 1000
         await fetch_and_insert_block_hashes(0, current_block_height, chunk_size)
         logger.info("Block hashes updated successfully.")
     else:
@@ -5686,7 +5690,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
             if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height) and abs(tx.get("amount")) < 1.0
         ]
         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
-        chunk_size = 1000
+        chunk_size = 500
         ignore_unconfirmed_transactions = 0
         new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
         logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
