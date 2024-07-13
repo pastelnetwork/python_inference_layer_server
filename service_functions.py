@@ -3137,7 +3137,7 @@ async def validate_merkle_root_at_block_height(merkle_root_to_check: str, block_
     else:
         return False    
 
-async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> dict:
+async def validate_existing_credit_pack_ticket_old(credit_pack_ticket_txid: str) -> dict:
     try:
         use_verbose_validation = 0
         logger.info(f"Validating credit pack ticket with TXID: {credit_pack_ticket_txid}")
@@ -3274,11 +3274,14 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         num_potentially_agreeing_supernodes = len(list_of_potentially_agreeing_supernodes)
         num_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
         number_of_blacklisted_supernodes_at_the_time = len(list_of_blacklisted_supernode_pastelids)
-        masternode_list_full_df, _ = await check_supernode_list_func()   
-        current_block_height = await get_current_pastel_block_height_func()        
-        active_supernodes_count_now, _ = await fetch_active_supernodes_count_and_details(current_block_height)
-        adjustment_number_of_supernodes = max([0, active_supernodes_count_now - len(masternode_list_full_df)])
-        quorum_percentage = num_potentially_agreeing_supernodes / (active_supernodes_count_at_the_time - number_of_blacklisted_supernodes_at_the_time - adjustment_number_of_supernodes)
+        if 0: # Attempting to independently size set of potentially agreeing supernodes
+            masternode_list_full_df, _ = await check_supernode_list_func()   
+            current_block_height = await get_current_pastel_block_height_func()        
+            active_supernodes_count_now, _ = await fetch_active_supernodes_count_and_details(current_block_height)
+            adjustment_number_of_supernodes = max([0, active_supernodes_count_now - len(masternode_list_full_df)])
+            quorum_percentage = num_potentially_agreeing_supernodes / (active_supernodes_count_at_the_time - number_of_blacklisted_supernodes_at_the_time - adjustment_number_of_supernodes)
+        else:
+            quorum_percentage = num_potentially_agreeing_supernodes / (num_potentially_agreeing_supernodes + number_of_blacklisted_supernodes_at_the_time)            
         agreeing_percentage = num_agreeing_supernodes / num_potentially_agreeing_supernodes
         is_quorum_valid = quorum_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE
         is_agreeing_percentage_valid = agreeing_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE
@@ -3290,7 +3293,7 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         })
         if not is_quorum_valid:
             validation_results["credit_pack_ticket_is_valid"] = False
-            validation_results["validation_failure_reasons_list"].append(f"Agreeing supernodes quorum percentage validation failed for credit pack with txid {credit_pack_ticket_txid}; quorum % was only {quorum_percentage:.3f} (i.e., {num_potentially_agreeing_supernodes} out of {(active_supernodes_count_at_the_time - number_of_blacklisted_supernodes_at_the_time)}) and the minimum required % is {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.3f}")
+            validation_results["validation_failure_reasons_list"].append(f"Agreeing supernodes quorum percentage validation failed for credit pack with txid {credit_pack_ticket_txid}; quorum % was only {quorum_percentage:.3f} (i.e., {num_potentially_agreeing_supernodes} out of {(num_potentially_agreeing_supernodes + number_of_blacklisted_supernodes_at_the_time)}) and the minimum required % is {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.3f}")
         if not is_agreeing_percentage_valid:
             validation_results["credit_pack_ticket_is_valid"] = False
             validation_results["validation_failure_reasons_list"].append(f"Agreeing supernodes agreement percentage validation failed for credit pack with txid {credit_pack_ticket_txid}; agreement % was only {agreeing_percentage:.3f} (i.e., {num_agreeing_supernodes} out of {num_potentially_agreeing_supernodes}) and the minimum required % is {SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:.3f}")
@@ -3307,6 +3310,200 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
         logger.error(f"Error validating credit pack ticket with TXID {credit_pack_ticket_txid}: {str(e)}")
         traceback.print_exc()
         raise
+
+async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> dict:
+    try:
+        use_verbose_validation = 0
+        logger.info(f"Validating credit pack ticket with TXID: {credit_pack_ticket_txid}")
+        # Retrieve the credit pack ticket data from the blockchain
+        credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(credit_pack_ticket_txid)
+        logger.info(f"Credit pack ticket data for credit pack with TXID {credit_pack_ticket_txid}:\n\nTicket Request Response:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_response.model_dump())} \n\nTicket Request Confirmation:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_confirmation.model_dump())}")
+        validation_results = {
+            "credit_pack_ticket_is_valid": True,
+            "validation_checks": [],
+            "validation_failure_reasons_list": []
+        }
+        # Define validation tasks
+        validation_tasks = [
+            validate_payment(credit_pack_ticket_txid, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, validation_results),
+            validate_supernode_lists(credit_pack_ticket_txid, credit_pack_purchase_request_response, validation_results),
+            validate_hashes(credit_pack_ticket_txid, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, validation_results),
+            validate_signatures(credit_pack_ticket_txid, credit_pack_purchase_request_response, use_verbose_validation, validation_results),
+            validate_selected_agreeing_supernodes(credit_pack_ticket_txid, credit_pack_purchase_request_response, validation_results)
+        ]
+        # Run validation tasks in parallel
+        await asyncio.gather(*validation_tasks)
+        if validation_results["credit_pack_ticket_is_valid"] and not validation_results["validation_failure_reasons_list"]:
+            logger.info(f"All validation checks passed for credit pack ticket with TXID {credit_pack_ticket_txid}")
+        else:
+            logger.info(f"Validation failures for credit pack ticket with TXID {credit_pack_ticket_txid}: {validation_results['validation_failure_reasons_list']}")
+            list_of_reasons_it_is_known_bad = json.dumps(validation_results['validation_failure_reasons_list'])
+            known_bad_txid_object = await insert_credit_pack_ticket_txid_into_known_bad_table_in_db(credit_pack_ticket_txid, list_of_reasons_it_is_known_bad)
+            if known_bad_txid_object:
+                logger.info(f"Added invalid credit pack ticket TXID {credit_pack_ticket_txid} to known bad list in database!")
+        # Sort validation_failure_reasons_list alphabetically
+        validation_results["validation_failure_reasons_list"].sort()
+        return validation_results
+    except Exception as e:
+        logger.error(f"Error validating credit pack ticket with TXID {credit_pack_ticket_txid}: {str(e)}")
+        traceback.print_exc()
+        raise
+
+async def validate_payment(credit_pack_ticket_txid, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, validation_results):
+    matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_transaction(
+        credit_pack_purchase_request_confirmation.txid_of_credit_purchase_burn_transaction,
+        credit_pack_purchase_request_response.credit_usage_tracking_psl_address,
+        credit_pack_purchase_request_response.proposed_total_cost_of_credit_pack_in_psl,
+        credit_pack_purchase_request_response.request_response_pastel_block_height
+    )
+    validation_results["validation_checks"].append({
+        "check_name": f"Ticket Payment Burn Transaction validation (Burn payment TXID: {credit_pack_purchase_request_confirmation.txid_of_credit_purchase_burn_transaction} sent with {amount_received_at_burn_address} PSL",
+        "is_valid": matching_transaction_found or exceeding_transaction_found
+    })
+    if not (matching_transaction_found or exceeding_transaction_found):
+        validation_results["credit_pack_ticket_is_valid"] = False
+        validation_results["validation_failure_reasons_list"].append(f"Invalid burn transaction for credit pack ticket with TXID: {credit_pack_ticket_txid}")
+
+async def validate_supernode_lists(credit_pack_ticket_txid, credit_pack_purchase_request_response, validation_results):
+    active_supernodes_count_at_the_time, active_supernodes_at_the_time = await fetch_active_supernodes_count_and_details(credit_pack_purchase_request_response.request_response_pastel_block_height)
+    list_of_active_supernode_pastelids_at_the_time = [x["pastel_id"] for x in active_supernodes_at_the_time]
+    list_of_potentially_agreeing_supernodes = credit_pack_purchase_request_response.list_of_potentially_agreeing_supernodes
+    try:
+        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms
+        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion
+        if list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion is None:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append("Required field 'list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion' is missing in credit pack purchase request response")
+            return
+    except AttributeError as e:
+        logger.error(f"Required field missing in credit pack purchase request response: {str(e)}")
+        validation_results["credit_pack_ticket_is_valid"] = False
+        validation_results["validation_failure_reasons_list"].append(f"Required field missing in credit pack purchase request response: {str(e)}")
+        return
+    for potentially_agreeing_supernode_pastelid in list_of_potentially_agreeing_supernodes:
+        potentially_agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height = potentially_agreeing_supernode_pastelid in list_of_active_supernode_pastelids_at_the_time
+        validation_results["validation_checks"].append({
+            "check_name": f"Potentially agreeing supernode with pastelid {potentially_agreeing_supernode_pastelid} was in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}",
+            "is_valid": potentially_agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height
+        })
+        if not potentially_agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Potentially agreeing supernode with pastelid {potentially_agreeing_supernode_pastelid} was NOT in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}")
+    for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms:
+        agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height = agreeing_supernode_pastelid in list_of_active_supernode_pastelids_at_the_time
+        validation_results["validation_checks"].append({
+            "check_name": f"Agreeing supernode with pastelid {agreeing_supernode_pastelid} was in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}",
+            "is_valid": agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height
+        })
+        if not agreeing_supernode_pastelid_in_list_of_active_supernodes_at_block_height:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Agreeing supernode with pastelid {agreeing_supernode_pastelid} was NOT in the list of active supernodes as of block height {credit_pack_purchase_request_response.request_response_pastel_block_height:,}")
+
+async def validate_hashes(credit_pack_ticket_txid, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, validation_results):
+    credit_pack_purchase_request_response_transformed = parse_sqlmodel_strings_into_lists_and_dicts_func(credit_pack_purchase_request_response)
+    credit_pack_purchase_request_confirmation_transformed = parse_sqlmodel_strings_into_lists_and_dicts_func(credit_pack_purchase_request_confirmation)
+    validation_errors_in_credit_pack_purchase_request_response = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_response_transformed)
+    validation_errors_in_credit_pack_purchase_request_confirmation = await validate_credit_pack_blockchain_ticket_data_field_hashes(credit_pack_purchase_request_confirmation_transformed)
+    if len(validation_errors_in_credit_pack_purchase_request_response) > 0:
+        logger.warning(f"Warning! Computed hash does not match for ticket request response object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_response}")
+        validation_results["validation_checks"].append({
+            "check_name": f"Computed hash does not match for ticket request response object for credit pack ticket with txid: {validation_errors_in_credit_pack_purchase_request_response}",
+            "is_valid": False
+        })
+        validation_results["credit_pack_ticket_is_valid"] = False
+        validation_results["validation_failure_reasons_list"].append("Hash of credit pack request response object stored in blockchain does not match the hash included in the object.")
+    if len(validation_errors_in_credit_pack_purchase_request_confirmation) > 0:
+        logger.warning(f"Warning! Computed hash does not match for ticket request confirmation object for credit pack ticket with txid {credit_pack_ticket_txid}; Validation errors detected:\n{validation_errors_in_credit_pack_purchase_request_confirmation}")
+        validation_results["validation_checks"].append({
+            "check_name": f"Computed hash does not match for ticket request confirmation object for credit pack ticket with txid: {validation_errors_in_credit_pack_purchase_request_confirmation}",
+            "is_valid": False
+        })
+        validation_results["credit_pack_ticket_is_valid"] = False
+        validation_results["validation_failure_reasons_list"].append("Hash of credit pack request confirmation object stored in blockchain does not match the hash included in the object.")
+
+async def validate_signatures(credit_pack_ticket_txid, credit_pack_purchase_request_response, use_verbose_validation, validation_results):
+    list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion
+    if list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
+        selected_agreeing_supernodes_signatures_dict = credit_pack_purchase_request_response.selected_agreeing_supernodes_signatures_dict
+        for agreeing_supernode_pastelid in list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion:
+            signatures = selected_agreeing_supernodes_signatures_dict[agreeing_supernode_pastelid]
+            if use_verbose_validation:
+                logger.info(f"Verifying signature for selected agreeing supernode {agreeing_supernode_pastelid}")
+                logger.info(f"Message to verify (decoded from b64): {credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64}")
+                logger.info(f"Signature: {signatures['credit_pack_purchase_request_fields_json_b64_signature']}")
+            is_fields_json_b64_signature_valid = await verify_message_with_pastelid_func(agreeing_supernode_pastelid,
+                                                                                        credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64,
+                                                                                        signatures['credit_pack_purchase_request_fields_json_b64_signature'])
+            if not is_fields_json_b64_signature_valid:
+                logger.warning(f"Warning! Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
+            if use_verbose_validation:
+                logger.info(f"Signature validation result: {is_fields_json_b64_signature_valid}")
+            validation_results["validation_checks"].append({
+                "check_name": f"Signature validation for selected agreeing supernode {agreeing_supernode_pastelid} on credit pack purchase request fields json",
+                "is_valid": is_fields_json_b64_signature_valid
+            })
+            if not is_fields_json_b64_signature_valid:
+                validation_results["credit_pack_ticket_is_valid"] = False
+                validation_results["validation_failure_reasons_list"].append(f"Signature failed for SN {agreeing_supernode_pastelid} for credit pack with txid {credit_pack_ticket_txid}")
+    else:
+        validation_results["credit_pack_ticket_is_valid"] = False
+        validation_results["validation_failure_reasons_list"].append("Required field 'list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion' is missing in credit pack purchase request response")
+
+async def validate_selected_agreeing_supernodes(credit_pack_ticket_txid, credit_pack_purchase_request_response, validation_results):
+    list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms
+    best_block_merkle_root = credit_pack_purchase_request_response.best_block_merkle_root
+    best_block_height = credit_pack_purchase_request_response.best_block_height
+    if best_block_merkle_root:
+        request_response_pastel_block_height = credit_pack_purchase_request_response.request_response_pastel_block_height
+        list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion = credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion
+        selected_agreeing_supernodes = await select_top_n_closest_supernodes_to_best_block_merkle_root(
+            list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms,
+            n=10,
+            best_block_merkle_root=best_block_merkle_root
+        )
+        best_block_merkle_root_matches = await validate_merkle_root_at_block_height(best_block_merkle_root, best_block_height)
+        if not best_block_merkle_root_matches:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Best block merkle root {best_block_merkle_root} does not match actual merkle root as of block height {best_block_height} for credit pack with txid {credit_pack_ticket_txid}")
+        max_block_height_difference_between_best_block_height_and_request_response_pastel_block_height = 10
+        actual_block_height_difference_between_best_block_height_and_request_response_pastel_block_height = abs(request_response_pastel_block_height - best_block_height)
+        if actual_block_height_difference_between_best_block_height_and_request_response_pastel_block_height > max_block_height_difference_between_best_block_height_and_request_response_pastel_block_height:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Block height difference between specified best block height {best_block_height} and request response pastel block height {request_response_pastel_block_height} exceeds the maximum allowed difference of {max_block_height_difference_between_best_block_height_and_request_response_pastel_block_height} for credit pack with txid {credit_pack_ticket_txid}")
+        selected_agreeing_supernodes_set = set(list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms_selected_for_signature_inclusion)
+        computed_selected_agreeing_supernodes_set = set(selected_agreeing_supernodes)
+        is_selected_agreeing_supernodes_valid = selected_agreeing_supernodes_set == computed_selected_agreeing_supernodes_set
+        validation_results["validation_checks"].append({
+            "check_name": "Validation of selected agreeing supernodes for signature inclusion",
+            "is_valid": is_selected_agreeing_supernodes_valid,
+            "expected_selected_agreeing_supernodes": list(computed_selected_agreeing_supernodes_set),
+            "actual_selected_agreeing_supernodes": list(selected_agreeing_supernodes_set)
+        })
+        if not is_selected_agreeing_supernodes_valid:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append("Selected agreeing supernodes for signature inclusion do not match the expected set based on XOR distance to the best block merkle root.")
+        num_potentially_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_potentially_agreeing_supernodes)
+        num_agreeing_supernodes = len(credit_pack_purchase_request_response.list_of_supernode_pastelids_agreeing_to_credit_pack_purchase_terms)
+        number_of_blacklisted_supernodes_at_the_time = len(credit_pack_purchase_request_response.list_of_blacklisted_supernode_pastelids)
+        quorum_percentage = num_potentially_agreeing_supernodes / (num_potentially_agreeing_supernodes + number_of_blacklisted_supernodes_at_the_time)
+        agreeing_percentage = num_agreeing_supernodes / num_potentially_agreeing_supernodes
+        is_quorum_valid = quorum_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE
+        is_agreeing_percentage_valid = agreeing_percentage >= SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE
+        validation_results["validation_checks"].append({
+            "check_name": "Agreeing supernodes percentage validation",
+            "is_valid": is_agreeing_percentage_valid and is_quorum_valid,
+            "quorum_percentage": round(quorum_percentage, 5),
+            "agreeing_percentage": round(agreeing_percentage, 5)
+        })
+        if not is_quorum_valid:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Agreeing supernodes quorum percentage validation failed for credit pack with txid {credit_pack_ticket_txid}; quorum % was only {quorum_percentage:.3f} (i.e., {num_potentially_agreeing_supernodes} out of {(num_potentially_agreeing_supernodes + number_of_blacklisted_supernodes_at_the_time)}) and the minimum required % is {SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE:.3f}")
+        if not is_agreeing_percentage_valid:
+            validation_results["credit_pack_ticket_is_valid"] = False
+            validation_results["validation_failure_reasons_list"].append(f"Agreeing supernodes agreement percentage validation failed for credit pack with txid {credit_pack_ticket_txid}; agreement % was only {agreeing_percentage:.3f} (i.e., {num_agreeing_supernodes} out of {num_potentially_agreeing_supernodes}) and the minimum required % is {SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE:.3f}")
+    else:
+        validation_results["credit_pack_ticket_is_valid"] = False
+        validation_results["validation_failure_reasons_list"].append("Required field 'best_block_merkle_root' is missing in credit pack purchase request response")
 
 async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
     async def process_request_confirmation(request_confirmation):
