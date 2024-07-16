@@ -24,7 +24,7 @@ import pytz
 from pathlib import Path
 from collections.abc import Iterable
 from urllib.parse import quote_plus, unquote_plus
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 import datetime as dt
 import pandas as pd
 import httpx
@@ -1357,7 +1357,7 @@ async def send_user_message_via_supernodes(from_pastelid: str, to_pastelid: str,
             "message": user_message_data['message_body'],  # The content of the message
             "message_type": "user_message",  # Static type as per your design
             "sending_sn_pastelid": sending_sn_pastelid,  # From local machine supernode data
-            "timestamp": datetime.now(dt.UTC).isoformat(),  # Current UTC timestamp
+            "timestamp": datetime.now(timezone.utc).isoformat(),  # Current UTC timestamp
             "id": supernode_user_message_data['id'],  # ID from the supernode user message record
             "signature": pastelid_signature_on_message,
             "user_message": {
@@ -2175,7 +2175,7 @@ async def process_credit_purchase_initial_request(credit_pack_purchase_request: 
             credit_pack_purchase_request_fields_json_b64=base64.b64encode(credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
             preliminary_quoted_price_per_credit_in_psl=preliminary_quoted_price_per_credit_in_psl,
             preliminary_total_cost_of_credit_pack_in_psl=preliminary_total_cost_of_credit_pack_in_psl,
-            preliminary_price_quote_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+            price_quote_timestamp_utc_iso_string = datetime.now().isoformat()
             preliminary_price_quote_pastel_block_height=await get_current_pastel_block_height_func(),
             preliminary_price_quote_message_version_string="1.0",
             responding_supernode_pastelid=MY_PASTELID,
@@ -2208,7 +2208,7 @@ async def generate_credit_pack_request_rejection_message(credit_pack_request: db
         sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
         credit_pack_purchase_request_fields_json_b64=base64.b64encode(credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
         rejection_reason_string=", ".join(validation_errors),
-        rejection_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+        rejection_timestamp_utc_iso_string=datetime.now().isoformat(),
         rejection_pastel_block_height=await get_current_pastel_block_height_func(),
         credit_purchase_request_rejection_message_version_string="1.0",
         responding_supernode_pastelid=MY_PASTELID,
@@ -2470,7 +2470,7 @@ async def process_credit_pack_price_agreement_request(price_agreement_request: d
             agree_with_proposed_price=agree_with_proposed_price,
             credit_usage_tracking_psl_address=price_agreement_request.credit_usage_tracking_psl_address,
             proposed_psl_price_per_credit=price_agreement_request.proposed_psl_price_per_credit,
-            proposed_price_agreement_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+            proposed_price_agreement_response_timestamp_utc_iso_string=datetime.now().isoformat(),
             proposed_price_agreement_response_pastel_block_height=await get_current_pastel_block_height_func(),
             proposed_price_agreement_response_message_version_string="1.0",
             responding_supernode_signature_on_credit_pack_purchase_request_fields_json_b64=await sign_message_with_pastelid_func(MY_PASTELID, price_agreement_request.credit_pack_purchase_request_fields_json_b64, LOCAL_PASTEL_ID_PASSPHRASE),
@@ -2518,7 +2518,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             credit_pack_purchase_request_fields_json_b64=preliminary_price_quote_response.credit_pack_purchase_request_fields_json_b64,
             credit_usage_tracking_psl_address=preliminary_price_quote_response.credit_usage_tracking_psl_address,
             proposed_psl_price_per_credit=preliminary_price_quote_response.preliminary_quoted_price_per_credit_in_psl,
-            price_agreement_request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+            price_agreement_request_timestamp_utc_iso_string=datetime.now().isoformat(),
             price_agreement_request_pastel_block_height=await get_current_pastel_block_height_func(),
             price_agreement_request_message_version_string="1.0",
             sha3_256_hash_of_price_agreement_request_fields="",
@@ -2565,7 +2565,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
                 sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
                 credit_pack_purchase_request_fields_json_b64=preliminary_price_quote_response.credit_pack_purchase_request_fields_json_b64,
                 termination_reason_string="Not enough supernodes responded with valid price agreement responses",
-                termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+                termination_timestamp_utc_iso_string=datetime.now().isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_purchase_request_termination_message_version_string="1.0",
                 responding_supernode_pastelid=MY_PASTELID,
@@ -2595,7 +2595,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
                 sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
                 credit_pack_purchase_request_fields_json_b64=preliminary_price_quote_response.credit_pack_purchase_request_fields_json_b64,
                 termination_reason_string="Not enough supernodes agreed to the proposed pricing",
-                termination_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+                termination_timestamp_utc_iso_string=datetime.now().isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_purchase_request_termination_message_version_string="1.0",
                 responding_supernode_pastelid=MY_PASTELID,
@@ -2636,7 +2636,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             psl_cost_per_credit=preliminary_price_quote_response.preliminary_quoted_price_per_credit_in_psl,
             proposed_total_cost_of_credit_pack_in_psl=requested_initial_credits_in_credit_pack*preliminary_price_quote_response.preliminary_quoted_price_per_credit_in_psl,
             credit_usage_tracking_psl_address=preliminary_price_quote_response.credit_usage_tracking_psl_address,
-            request_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+            request_response_timestamp_utc_iso_string=datetime.now(timezone.utc).isoformat(),
             request_response_pastel_block_height=await get_current_pastel_block_height_func(),
             best_block_merkle_root=best_block_merkle_root,
             best_block_height=best_block_height,
@@ -2706,7 +2706,7 @@ async def get_credit_purchase_request_status(status_request: db_code.CreditPackR
             sha3_256_hash_of_credit_pack_purchase_request_response_fields=credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields if credit_pack_purchase_request_response else "",
             status=status,
             status_details=status_details,
-            status_update_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+            status_update_timestamp_utc_iso_string=datetime.now(timezone.utc).isoformat(),
             status_update_pastel_block_height=await get_current_pastel_block_height_func(),
             credit_purchase_request_status_message_version_string="1.0",
             responding_supernode_pastelid=credit_pack_purchase_request_response.responding_supernode_pastelid if credit_pack_purchase_request_response else MY_PASTELID,
@@ -2900,7 +2900,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 credit_pack_confirmation_outcome_string=credit_pack_confirmation_outcome_string,
                 pastel_api_credit_pack_ticket_registration_txid=pastel_api_credit_pack_ticket_registration_txid,
                 credit_pack_confirmation_failure_reason_if_applicable="",
-                credit_purchase_request_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+                credit_purchase_request_confirmation_response_utc_iso_string=datetime.now(timezone.utc).isoformat(),
                 credit_purchase_request_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_purchase_request_confirmation_response_message_version_string="1.0",
                 responding_supernode_pastelid=MY_PASTELID,
@@ -2927,7 +2927,7 @@ async def process_credit_purchase_request_confirmation(confirmation: db_code.Cre
                 credit_pack_confirmation_outcome_string="failure",
                 pastel_api_credit_pack_ticket_registration_txid="",
                 credit_pack_confirmation_failure_reason_if_applicable="Burn transaction not confirmed within the required number of blocks",
-                credit_purchase_request_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+                credit_purchase_request_confirmation_response_utc_iso_string=datetime.now(timezone.utc).isoformat(),
                 credit_purchase_request_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_purchase_request_confirmation_response_message_version_string="1.0",
                 responding_supernode_pastelid=MY_PASTELID,
@@ -3036,7 +3036,7 @@ async def process_credit_pack_storage_retry_request(storage_retry_request: db_co
                 credit_pack_storage_retry_confirmation_outcome_string=credit_pack_confirmation_outcome_string,
                 pastel_api_credit_pack_ticket_registration_txid=pastel_api_credit_pack_ticket_registration_txid,
                 credit_pack_storage_retry_confirmation_failure_reason_if_applicable="",
-                credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+                credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.now(timezone.utc).isoformat(),
                 credit_pack_storage_retry_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_pack_storage_retry_confirmation_response_message_version_string="1.0",
                 closest_agreeing_supernode_to_retry_storage_pastelid=MY_PASTELID,
@@ -3058,7 +3058,7 @@ async def process_credit_pack_storage_retry_request(storage_retry_request: db_co
                 credit_pack_storage_retry_confirmation_outcome_string="failure",
                 pastel_api_credit_pack_ticket_registration_txid="",
                 credit_pack_storage_retry_confirmation_failure_reason_if_applicable="Original responding supernode already confirmed storage",
-                credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+                credit_pack_storage_retry_confirmation_response_utc_iso_string=datetime.now(timezone.utc).isoformat(),
                 credit_pack_storage_retry_confirmation_response_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_pack_storage_retry_confirmation_response_message_version_string="1.0",
                 closest_agreeing_supernode_to_retry_storage_pastelid=MY_PASTELID,
@@ -3526,11 +3526,11 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                 complete_ticket = json.loads(existing_data.complete_credit_pack_data_json)
                 current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
                 complete_ticket['credit_pack_current_credit_balance'] = current_credit_balance
-                complete_ticket['balance_as_of_datetime'] = datetime.now(dt.UTC).isoformat()
+                complete_ticket['balance_as_of_datetime'] = datetime.now(timezone.utc).isoformat()
                 complete_ticket_json = json.dumps(complete_ticket)
                 async with db_code.Session() as db_session:
                     existing_data.complete_credit_pack_data_json = complete_ticket_json
-                    existing_data.datetime_last_updated = datetime.now(dt.UTC)
+                    existing_data.datetime_last_updated = datetime.now(timezone.utc)
                     db_session.add(existing_data)
                     await db_session.commit()
             else:
@@ -3545,7 +3545,7 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                         "credit_pack_purchase_request_confirmation": credit_pack_purchase_request_confirmation.model_dump(),
                         "credit_pack_registration_txid": txid,
                         "credit_pack_current_credit_balance": current_credit_balance,
-                        "balance_as_of_datetime": datetime.now(dt.UTC).isoformat()
+                        "balance_as_of_datetime": datetime.now(timezone.utc).isoformat()
                     }
                     complete_ticket = convert_uuids_to_strings(complete_ticket)
                     complete_ticket = normalize_data(complete_ticket)
@@ -3553,13 +3553,13 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                     async with db_code.Session() as db_session:
                         if existing_data:
                             existing_data.complete_credit_pack_data_json = complete_ticket_json
-                            existing_data.datetime_last_updated = datetime.now(dt.UTC)
+                            existing_data.datetime_last_updated = datetime.now(timezone.utc)
                             db_session.add(existing_data)
                         else:
                             new_complete_ticket = db_code.CreditPackCompleteTicketWithBalance(
                                 credit_pack_ticket_registration_txid=txid,
                                 complete_credit_pack_data_json=complete_ticket_json,
-                                datetime_last_updated=datetime.now(dt.UTC)
+                                datetime_last_updated=datetime.now(timezone.utc)
                             )
                             db_session.add(new_complete_ticket)
                         await db_session.commit()
@@ -4460,7 +4460,7 @@ async def create_and_save_inference_api_usage_response(saved_request: db_code.In
         credit_usage_tracking_psl_address=credit_usage_tracking_psl_address,
         request_confirmation_message_amount_in_patoshis=int(proposed_cost_in_credits * CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER),
         max_block_height_to_include_confirmation_transaction=await get_current_pastel_block_height_func() + 10,  # Adjust as needed
-        inference_request_response_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+        inference_request_response_utc_iso_string=datetime.now(timezone.utc).isoformat(),
         inference_request_response_pastel_block_height=await get_current_pastel_block_height_func(),
         inference_request_response_message_version_string="1.0"
     )
@@ -4626,7 +4626,7 @@ async def save_inference_output_results(inference_request_id: str, inference_res
             responding_supernode_pastelid=local_supernode_pastelid,
             inference_result_json_base64=base64.b64encode(json.dumps(output_results).encode("utf-8")).decode("utf-8"),
             inference_result_file_type_strings=json.dumps(output_results_file_type_strings),
-            inference_result_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+            inference_result_utc_iso_string=datetime.now(timezone.utc).isoformat(),
             inference_result_pastel_block_height=await get_current_pastel_block_height_func(),
             inference_result_message_version_string="1.0"
         )
