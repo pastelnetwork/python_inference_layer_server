@@ -1160,12 +1160,12 @@ async def monitor_new_messages():
                     query = await db.exec(select(db_code.Message.timestamp).order_by(db_code.Message.timestamp.desc()).limit(1))
                     last_processed_timestamp_raw = query.one_or_none()
                     if last_processed_timestamp_raw is None:
-                        last_processed_timestamp = pd.Timestamp.min
+                        last_processed_timestamp = pd.Timestamp.min.tz_localize('UTC')
                     else:
-                        last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw.timestamp)
+                        last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw.timestamp).tz_convert('UTC')
                 new_messages_df = await list_sn_messages_func()
                 if new_messages_df is not None and not new_messages_df.empty:
-                    new_messages_df['timestamp'] = pd.to_datetime(new_messages_df['timestamp'])
+                    new_messages_df['timestamp'] = pd.to_datetime(new_messages_df['timestamp'], utc=True)
                     new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
                     if not new_messages_df.empty:
                         for _, message in new_messages_df.iterrows():
