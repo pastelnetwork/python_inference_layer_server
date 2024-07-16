@@ -2,7 +2,6 @@ import warnings
 import uuid
 from logger_config import logger
 from datetime import datetime, timezone
-import datetime as dt
 from typing import Optional
 from contextlib import asynccontextmanager
 from sqlmodel import Field, SQLModel, Relationship, Column, JSON
