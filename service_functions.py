@@ -836,7 +836,7 @@ async def decompress_data_with_zstd_func(compressed_input_data):
     return zstd_decompressed_data
 
 async def list_sn_messages_func():
-    datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now() - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
+    datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now(timezone.utc) - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
     supernode_list_df, _ = await check_supernode_list_func()
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
     async with db_code.Session() as db:
@@ -900,7 +900,7 @@ async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase)
 
 async def parse_sn_messages_from_last_k_minutes_func(k=10, message_type='all'):
     messages_list_df = await list_sn_messages_func()
-    messages_list_df__recent = messages_list_df[messages_list_df['timestamp'] > (datetime.now() - timedelta(minutes=k))]
+    messages_list_df__recent = messages_list_df[messages_list_df['timestamp'] > (datetime.now(timezone.utc) - timedelta(minutes=k))]
     if message_type == 'all':
         list_of_message_dicts = messages_list_df__recent[['message_body', 'message_type', 'sending_sn_pastelid', 'timestamp']].to_dict(orient='records')
     else:
@@ -2363,9 +2363,9 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             if supernode_base_url.split(":")[1].replace("//", "").split("/")[0] not in blacklisted_ips
         ]
         logger.info(f"Now sending out {len(request_tasks):,} price agreement requests to potentially agreeing supernodes...")
-        datetime_start = datetime.now()
+        datetime_start = datetime.now(timezone.utc)
         responses = await asyncio.gather(*request_tasks, return_exceptions=True)
-        datetime_end = datetime.now()
+        datetime_end = datetime.now(timezone.utc)
         duration = datetime_end - datetime_start
         logger.info(f"Finished sending price agreement requests to supernodes in {duration.total_seconds():.2f} seconds!")
         price_agreement_request_responses = [
@@ -3670,7 +3670,7 @@ async def is_api_key_valid(api_name, api_key_tests):
 
 def is_test_result_valid(test_timestamp):
     test_datetime = datetime.fromisoformat(test_timestamp)
-    return (datetime.now() - test_datetime) < timedelta(hours=API_KEY_TEST_VALIDITY_HOURS)
+    return (datetime.now(timezone.utc) - test_datetime) < timedelta(hours=API_KEY_TEST_VALIDITY_HOURS)
 
 async def run_api_key_test(api_name):
     if api_name == "stability":
