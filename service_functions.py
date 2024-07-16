@@ -3669,7 +3669,7 @@ async def is_api_key_valid(api_name, api_key_tests):
         return api_key_tests[api_name]["passed"]
 
 def is_test_result_valid(test_timestamp):
-    test_datetime = datetime.fromisoformat(test_timestamp)
+    test_datetime = datetime.fromisoformat(test_timestamp).replace(tzinfo=timezone.utc)
     return (datetime.now(timezone.utc) - test_datetime) < timedelta(hours=API_KEY_TEST_VALIDITY_HOURS)
 
 async def run_api_key_test(api_name):
