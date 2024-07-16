@@ -2176,7 +2176,7 @@ async def process_credit_purchase_initial_request(credit_pack_purchase_request: 
             credit_pack_purchase_request_fields_json_b64=base64.b64encode(credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
             preliminary_quoted_price_per_credit_in_psl=preliminary_quoted_price_per_credit_in_psl,
             preliminary_total_cost_of_credit_pack_in_psl=preliminary_total_cost_of_credit_pack_in_psl,
-            price_quote_timestamp_utc_iso_string = datetime.now(timezone.utc).isoformat(),
+            preliminary_price_quote_timestamp_utc_iso_string = datetime.now(timezone.utc).isoformat(),
             preliminary_price_quote_pastel_block_height=await get_current_pastel_block_height_func(),
             preliminary_price_quote_message_version_string="1.0",
             responding_supernode_pastelid=MY_PASTELID,
