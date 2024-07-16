@@ -818,7 +818,7 @@ The data models used to support these functions are defined using SQLModel, whic
         message_type: str = Field(index=True)
         message_body: str = Field(sa_column=Column(JSON))
         signature: str
-        timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
+        timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 ```
 
 - `MessageMetadata` - Tracks the overall total messages, senders, and receivers in the system:
@@ -829,7 +829,7 @@ The data models used to support these functions are defined using SQLModel, whic
         total_messages: int
         total_senders: int
         total_receivers: int
-        timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
+        timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 ```
 
 - `MessageSenderMetadata` - Tracks the total messages sent and data sent by each sending supernode:
@@ -842,7 +842,7 @@ The data models used to support these functions are defined using SQLModel, whic
         sending_sn_pubkey: str = Field(index=True)
         total_messages_sent: int
         total_data_sent_bytes: float
-        timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
+        timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 ```
 
 - `MessageReceiverMetadata` - Tracks the total messages received and data received by each receiving supernode:
@@ -854,7 +854,7 @@ The data models used to support these functions are defined using SQLModel, whic
         receiving_sn_txid_vout: str = Field(index=True)
         total_messages_received: int
         total_data_received_bytes: float
-        timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
+        timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 ```
 
 - `MessageSenderReceiverMetadata` - Tracks the total messages and data exchanged between each pair of sending and receiving Supernodes:
@@ -866,7 +866,7 @@ The data models used to support these functions are defined using SQLModel, whic
         receiving_sn_pastelid: str = Field(index=True)
         total_messages: int
         total_data_bytes: float
-        timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
+        timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 ```
 
 These models work together with the functions to facilitate the processing of inference requests, broadcasting of messages, and handling of received broadcast messages in the Inference Layer server. They enable the Supernodes to communicate and coordinate effectively, ensuring that inference requests are properly processed and the necessary information is stored and tracked in the database.

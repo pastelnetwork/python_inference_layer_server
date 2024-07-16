@@ -912,7 +912,7 @@ class Message(SQLModel, table=True):
     message_type: str = Field(index=True)
     message_body: str = Field(sa_column=Column(JSON))
     signature: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
     def __repr__(self):
         return f"<Message(id={self.id}, sending_sn_pastelid='{self.sending_sn_pastelid}', receiving_sn_pastelid='{self.receiving_sn_pastelid}', message_type='{self.message_type}', timestamp='{self.timestamp}')>"
     class Config:
@@ -936,7 +936,7 @@ class UserMessage(SQLModel, table=True):
     to_pastelid: str = Field(index=True)
     message_body: str = Field(sa_column=Column(JSON))
     message_signature: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(dt.UTC), index=True)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
     class Config:
         arbitrary_types_allowed = True  # Allow arbitrary types
         json_schema_extra = {
@@ -1593,7 +1593,7 @@ class PastelInferenceClient:
             agree_with_preliminary_price_quote=agree_with_preliminary_price_quote,
             credit_usage_tracking_psl_address=preliminary_price_quote.credit_usage_tracking_psl_address,
             preliminary_quoted_price_per_credit_in_psl=preliminary_price_quote.preliminary_quoted_price_per_credit_in_psl,
-            preliminary_price_quote_response_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+            preliminary_price_quote_response_timestamp_utc_iso_string=datetime.now(timezone.utc).isoformat(),
             preliminary_price_quote_response_pastel_block_height=await get_current_pastel_block_height_func(),
             preliminary_price_quote_response_message_version_string="1.0",
             requesting_end_user_pastelid=credit_pack_request.requesting_end_user_pastelid,
@@ -2137,7 +2137,7 @@ async def handle_credit_pack_ticket_end_to_end(
         requested_initial_credits_in_credit_pack=number_of_credits,
         list_of_authorized_pastelids_allowed_to_use_credit_pack=json.dumps([MY_LOCAL_PASTELID]),
         credit_usage_tracking_psl_address=credit_usage_tracking_psl_address,
-        request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+        request_timestamp_utc_iso_string=datetime.now(timezone.utc).isoformat(),
         request_pastel_block_height=await get_current_pastel_block_height_func(),
         credit_purchase_request_message_version_string="1.0",
         sha3_256_hash_of_credit_pack_purchase_request_fields="",
@@ -2167,7 +2167,7 @@ async def handle_credit_pack_ticket_end_to_end(
         credit_pack_purchase_request_fields_json_b64=signed_credit_pack_ticket.credit_pack_purchase_request_fields_json_b64,
         requesting_end_user_pastelid=MY_LOCAL_PASTELID,
         txid_of_credit_purchase_burn_transaction=burn_transaction_txid,
-        credit_purchase_request_confirmation_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+        credit_purchase_request_confirmation_utc_iso_string=datetime.now(timezone.utc).isoformat(),
         credit_purchase_request_confirmation_pastel_block_height=await get_current_pastel_block_height_func(),
         credit_purchase_request_confirmation_message_version_string="1.0",
         sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields="",
@@ -2205,7 +2205,7 @@ async def handle_credit_pack_ticket_end_to_end(
             credit_pack_purchase_request_fields_json_b64=signed_credit_pack_ticket.credit_pack_purchase_request_fields_json_b64,
             requesting_end_user_pastelid=MY_LOCAL_PASTELID,
             closest_agreeing_supernode_to_retry_storage_pastelid=closest_agreeing_supernode_pastelid,
-            credit_pack_storage_retry_request_timestamp_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+            credit_pack_storage_retry_request_timestamp_utc_iso_string=datetime.now(timezone.utc).isoformat(),
             credit_pack_storage_retry_request_pastel_block_height=await get_current_pastel_block_height_func(),
             credit_pack_storage_retry_request_message_version_string="1.0",
             sha3_256_hash_of_credit_pack_storage_retry_request_fields="",
@@ -2276,7 +2276,7 @@ async def handle_inference_request_end_to_end(
         model_inference_type_string=model_inference_type_string,
         model_parameters_json_b64=base64.b64encode(model_parameters_json.encode('utf-8')).decode('utf-8'),
         model_input_data_json_b64=input_prompt_to_llm__base64_encoded,
-        inference_request_utc_iso_string=datetime.now(dt.UTC).isoformat(),
+        inference_request_utc_iso_string=datetime.now(timezone.utc).isoformat(),
         inference_request_pastel_block_height=await get_current_pastel_block_height_func(),
         status="initiating",
         inference_request_message_version_string="1.0",
