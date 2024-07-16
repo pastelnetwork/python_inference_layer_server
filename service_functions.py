@@ -2175,7 +2175,7 @@ async def process_credit_purchase_initial_request(credit_pack_purchase_request: 
             credit_pack_purchase_request_fields_json_b64=base64.b64encode(credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
             preliminary_quoted_price_per_credit_in_psl=preliminary_quoted_price_per_credit_in_psl,
             preliminary_total_cost_of_credit_pack_in_psl=preliminary_total_cost_of_credit_pack_in_psl,
-            price_quote_timestamp_utc_iso_string = datetime.now().isoformat()
+            price_quote_timestamp_utc_iso_string = datetime.now(timezone.utc).isoformat(),
             preliminary_price_quote_pastel_block_height=await get_current_pastel_block_height_func(),
             preliminary_price_quote_message_version_string="1.0",
             responding_supernode_pastelid=MY_PASTELID,
@@ -2208,7 +2208,7 @@ async def generate_credit_pack_request_rejection_message(credit_pack_request: db
         sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_request.sha3_256_hash_of_credit_pack_purchase_request_fields,
         credit_pack_purchase_request_fields_json_b64=base64.b64encode(credit_pack_purchase_request_fields_json.encode('utf-8')).decode('utf-8'),
         rejection_reason_string=", ".join(validation_errors),
-        rejection_timestamp_utc_iso_string=datetime.now().isoformat(),
+        rejection_timestamp_utc_iso_string=datetime.now(timezone.utc).isoformat(),
         rejection_pastel_block_height=await get_current_pastel_block_height_func(),
         credit_purchase_request_rejection_message_version_string="1.0",
         responding_supernode_pastelid=MY_PASTELID,
@@ -2470,7 +2470,7 @@ async def process_credit_pack_price_agreement_request(price_agreement_request: d
             agree_with_proposed_price=agree_with_proposed_price,
             credit_usage_tracking_psl_address=price_agreement_request.credit_usage_tracking_psl_address,
             proposed_psl_price_per_credit=price_agreement_request.proposed_psl_price_per_credit,
-            proposed_price_agreement_response_timestamp_utc_iso_string=datetime.now().isoformat(),
+            proposed_price_agreement_response_timestamp_utc_iso_string=datetime.now(timezone.utc).isoformat(),
             proposed_price_agreement_response_pastel_block_height=await get_current_pastel_block_height_func(),
             proposed_price_agreement_response_message_version_string="1.0",
             responding_supernode_signature_on_credit_pack_purchase_request_fields_json_b64=await sign_message_with_pastelid_func(MY_PASTELID, price_agreement_request.credit_pack_purchase_request_fields_json_b64, LOCAL_PASTEL_ID_PASSPHRASE),
@@ -2518,7 +2518,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
             credit_pack_purchase_request_fields_json_b64=preliminary_price_quote_response.credit_pack_purchase_request_fields_json_b64,
             credit_usage_tracking_psl_address=preliminary_price_quote_response.credit_usage_tracking_psl_address,
             proposed_psl_price_per_credit=preliminary_price_quote_response.preliminary_quoted_price_per_credit_in_psl,
-            price_agreement_request_timestamp_utc_iso_string=datetime.now().isoformat(),
+            price_agreement_request_timestamp_utc_iso_string=datetime.now(timezone.utc).isoformat(),
             price_agreement_request_pastel_block_height=await get_current_pastel_block_height_func(),
             price_agreement_request_message_version_string="1.0",
             sha3_256_hash_of_price_agreement_request_fields="",
@@ -2565,7 +2565,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
                 sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
                 credit_pack_purchase_request_fields_json_b64=preliminary_price_quote_response.credit_pack_purchase_request_fields_json_b64,
                 termination_reason_string="Not enough supernodes responded with valid price agreement responses",
-                termination_timestamp_utc_iso_string=datetime.now().isoformat(),
+                termination_timestamp_utc_iso_string=datetime.now(timezone.utc).isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_purchase_request_termination_message_version_string="1.0",
                 responding_supernode_pastelid=MY_PASTELID,
@@ -2595,7 +2595,7 @@ async def process_credit_purchase_preliminary_price_quote_response(preliminary_p
                 sha3_256_hash_of_credit_pack_purchase_request_fields=preliminary_price_quote_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
                 credit_pack_purchase_request_fields_json_b64=preliminary_price_quote_response.credit_pack_purchase_request_fields_json_b64,
                 termination_reason_string="Not enough supernodes agreed to the proposed pricing",
-                termination_timestamp_utc_iso_string=datetime.now().isoformat(),
+                termination_timestamp_utc_iso_string=datetime.now(timezone.utc).isoformat(),
                 termination_pastel_block_height=await get_current_pastel_block_height_func(),
                 credit_purchase_request_termination_message_version_string="1.0",
                 responding_supernode_pastelid=MY_PASTELID,
@@ -3662,7 +3662,7 @@ async def is_api_key_valid(api_name, api_key_tests):
         test_passed = await run_api_key_test(api_name)
         api_key_tests[api_name] = {
             "passed": test_passed,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         return test_passed
     else:
