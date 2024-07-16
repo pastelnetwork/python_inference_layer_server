@@ -836,7 +836,7 @@ async def decompress_data_with_zstd_func(compressed_input_data):
     return zstd_decompressed_data
 
 async def list_sn_messages_func():
-    datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now(timezone.utc) - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE))
+    datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now(timezone.utc) - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE)).isoformat()
     supernode_list_df, _ = await check_supernode_list_func()
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
     async with db_code.Session() as db:
@@ -861,7 +861,7 @@ async def list_sn_messages_func():
         if sending_pastelid is None or receiving_pastelid is None:
             # logger.warning(f"Skipping message due to missing PastelID for txid_vout: {sending_sn_txid_vout} or {receiving_sn_txid_vout}")
             continue
-        message_timestamp = parse_timestamp(datetime.fromtimestamp(message['Timestamp']).isoformat())
+        message_timestamp = pd.to_datetime(datetime.fromtimestamp(message['Timestamp']).isoformat(), utc=True)
         # Check if the message already exists in the database
         if (sending_pastelid, receiving_pastelid, message_timestamp) in existing_messages:
             logger.debug("Message already exists in the database. Skipping...")
@@ -890,6 +890,7 @@ async def list_sn_messages_func():
             new_messages_data.append(new_message)
     combined_messages_df = pd.DataFrame(new_messages_data)
     if not combined_messages_df.empty:
+        combined_messages_df['timestamp'] = pd.to_datetime(combined_messages_df['timestamp'], utc=True)
         combined_messages_df = combined_messages_df[combined_messages_df['timestamp'] >= datetime_cutoff_to_ignore_obsolete_messages]
         combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
     return combined_messages_df
