@@ -1726,13 +1726,19 @@ async def check_burn_transaction(txid: str, credit_usage_tracking_psl_address: s
     
 async def save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse, txid: str) -> None:
     try:
-        mapping = db_code.CreditPackPurchaseRequestResponseTxidMapping(
-            sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
-            pastel_api_credit_pack_ticket_registration_txid=txid
-        )
         async with db_code.Session() as db_session:
-            db_session.add(mapping)
-            await db_session.commit()
+            existing_mapping = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestResponseTxidMapping).where(
+                    db_code.CreditPackPurchaseRequestResponseTxidMapping.pastel_api_credit_pack_ticket_registration_txid == txid
+                )
+            )
+            if existing_mapping.one_or_none() is None:
+                mapping = db_code.CreditPackPurchaseRequestResponseTxidMapping(
+                    sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
+                    pastel_api_credit_pack_ticket_registration_txid=txid
+                )
+                db_session.add(mapping)
+                await db_session.commit()
     except Exception as e:
         logger.error(f"Error saving credit pack purchase request response txid mapping: {str(e)}")
         raise
