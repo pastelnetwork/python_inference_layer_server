@@ -1162,9 +1162,10 @@ async def monitor_new_messages():
                     if last_processed_timestamp_raw is None:
                         last_processed_timestamp = pd.Timestamp.min
                     else:
-                        last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw)
+                        last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw.timestamp)
                 new_messages_df = await list_sn_messages_func()
                 if new_messages_df is not None and not new_messages_df.empty:
+                    new_messages_df['timestamp'] = pd.to_datetime(new_messages_df['timestamp'])
                     new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
                     if not new_messages_df.empty:
                         for _, message in new_messages_df.iterrows():
@@ -1291,7 +1292,7 @@ async def monitor_new_messages():
             traceback.print_exc()
             await asyncio.sleep(5)
         finally:
-            await asyncio.sleep(5)            
+            await asyncio.sleep(5)
             
 async def create_user_message(from_pastelid: str, to_pastelid: str, message_body: str, message_signature: str) -> dict:
     async with db_code.Session() as db:
