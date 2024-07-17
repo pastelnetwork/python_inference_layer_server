@@ -836,7 +836,10 @@ async def decompress_data_with_zstd_func(compressed_input_data):
 
 async def list_sn_messages_func():
     datetime_cutoff_to_ignore_obsolete_messages = pd.to_datetime(datetime.now(timezone.utc) - timedelta(days=NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE)).isoformat()
-    supernode_list_df, _ = await check_supernode_list_func()
+    try:
+        supernode_list_df, _ = await check_supernode_list_func()
+    except Exception as e:  # noqa: F841
+        return None
     txid_vout_to_pastelid_dict = dict(zip(supernode_list_df.index, supernode_list_df['extKey']))
     async with db_code.Session() as db:
         # Retrieve messages from the database that meet the timestamp criteria
@@ -1163,7 +1166,10 @@ async def monitor_new_messages():
                         last_processed_timestamp = pd.Timestamp.min.tz_localize('UTC')
                     else:
                         last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw.timestamp).tz_convert('UTC')
-                new_messages_df = await list_sn_messages_func()
+                try:                        
+                    new_messages_df = await list_sn_messages_func()
+                except Exception as e: # noqa: F841
+                    new_messages_df = None
                 if new_messages_df is not None and not new_messages_df.empty:
                     new_messages_df['timestamp'] = pd.to_datetime(new_messages_df['timestamp'], utc=True)
                     new_messages_df = new_messages_df[new_messages_df['timestamp'] > last_processed_timestamp]
