@@ -5657,7 +5657,7 @@ async def full_rescan_burn_transactions():
         logger.info("No burn transaction records found in database, proceeding with full rescan...")
         logger.info("Please wait, retrieving ALL burn transactions from ANY address starting with the genesis block (may take a while and cause high CPU usage...)")
         burn_transactions = await rpc_connection.scanburntransactions("*")
-        chunk_size = 1000  # Adjust the chunk size as needed
+        chunk_size = 5000  # Adjust the chunk size as needed
         ignore_unconfirmed_transactions = 1
         if burn_transactions:
             decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, ignore_unconfirmed_transactions)
@@ -5666,7 +5666,7 @@ async def full_rescan_burn_transactions():
         logger.info("No block hash records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
         logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        chunk_size = 1000
+        chunk_size = 25000
         await fetch_and_insert_block_hashes(0, current_block_height, chunk_size)
         logger.info("Block hashes updated successfully.")
     else:
@@ -5900,7 +5900,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
             if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height) and abs(tx.get("amount")) < 1.0
         ]
         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
-        chunk_size = 50
+        chunk_size = 250
         ignore_unconfirmed_transactions = 0
         new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
         logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
