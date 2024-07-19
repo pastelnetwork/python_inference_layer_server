@@ -1165,8 +1165,8 @@ async def monitor_new_messages():
                     if last_processed_timestamp_raw is None:
                         last_processed_timestamp = pd.Timestamp.min.tz_localize('UTC')
                     else:
-                        last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw.timestamp()).tz_convert('UTC')
-                try:                        
+                        last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw.timestamp()).tz_localize('UTC').tz_convert('UTC')
+                try:
                     new_messages_df = await list_sn_messages_func()
                 except Exception as e: # noqa: F841
                     new_messages_df = None
@@ -1190,7 +1190,7 @@ async def monitor_new_messages():
                             sending_sn_pastelid = message['sending_sn_pastelid']
                             receiving_sn_pastelid = message['receiving_sn_pastelid']
                             message_size_bytes = len(message['message_body'].encode('utf-8'))
-                            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before updating metadata                            
+                            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before updating metadata
                             # Update MessageSenderMetadata
                             query = await db.exec(
                                 select(db_code.MessageSenderMetadata).where(db_code.MessageSenderMetadata.sending_sn_pastelid == sending_sn_pastelid)
@@ -1259,7 +1259,7 @@ async def monitor_new_messages():
                                 )
                                 for _, row in new_messages_df.iterrows()
                             ]
-                            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding messages                            
+                            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before adding messages
                             await retry_on_database_locked(db.add_all, new_messages)
                             await retry_on_database_locked(db.commit)  # Commit the transaction for adding new messages
                             # Update overall MessageMetadata
@@ -1284,7 +1284,7 @@ async def monitor_new_messages():
                                     total_receivers=total_receivers
                                 )
                                 db.add(message_metadata)
-                            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before updating message metadata                                
+                            await asyncio.sleep(random.uniform(0.1, 0.5))  # Add a short random sleep before updating message metadata
                             await retry_on_database_locked(db.commit)
                             # Process broadcast messages concurrently
                             processing_tasks = [
