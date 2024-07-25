@@ -5666,7 +5666,7 @@ async def full_rescan_burn_transactions():
         logger.info("No block hash records found in database, proceeding with full rescan...")
         current_block_height = await get_current_pastel_block_height_func()
         logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        chunk_size = 25000
+        chunk_size = 2000
         await fetch_and_insert_block_hashes(0, current_block_height, chunk_size)
         logger.info("Block hashes updated successfully.")
     else:
@@ -5957,7 +5957,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions_b
             existing_transactions_query = select(db_code.BurnAddressTransaction)
             existing_transactions_result = await db.execute(existing_transactions_query)
             existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
-        chunk_size = 5000
+        chunk_size = 2500
         new_burn_transactions = await rpc_connection.scanburntransactions(credit_usage_tracking_psl_address, latest_db_block_height - chunk_size*3)  # second argument to this function was just "latest_db_block_height" but now trying to subtract an additional offset to make it work.
         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
         ignore_unconfirmed_transactions = 0
