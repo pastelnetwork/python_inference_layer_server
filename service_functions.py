@@ -5653,7 +5653,7 @@ async def full_rescan_burn_transactions():
         # Check if there are any records in BurnAddressTransaction or BlockHash tables
         burn_address_query_results = await db.execute(select(db_code.BurnAddressTransaction).limit(1))
         burn_tx_exists = burn_address_query_results.first()
-        block_hash_query_results = await db.execute(select(db_code.BlockHash).count())
+        block_hash_query_results = await db.execute(select(func.count(db_code.BlockHash.id)))
         block_hash_count = block_hash_query_results.scalar()
     if not burn_tx_exists:
         logger.info("No burn transaction records found in database, proceeding with full rescan...")
