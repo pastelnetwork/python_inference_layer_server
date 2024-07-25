@@ -5669,7 +5669,7 @@ async def full_rescan_burn_transactions():
         logger.info(f"Current block count: {current_block_count:,}, Block hashes in DB: {block_hash_count:,}")
         current_block_height = await get_current_pastel_block_height_func()
         logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        chunk_size = 2000
+        chunk_size = 5000
         await fetch_and_insert_block_hashes(block_hash_count, current_block_height, chunk_size)
         logger.info("Block hashes updated successfully.")
     else:
