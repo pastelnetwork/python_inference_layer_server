@@ -5648,11 +5648,13 @@ async def full_rescan_burn_transactions_old():
 
 async def full_rescan_burn_transactions():
     global burn_address
-    async with db_code.Session() as db:  # Check if there are any records in BurnAddressTransaction or BlockHash tables
+    current_block_count = await rpc_connection.getblockcount()
+    async with db_code.Session() as db:
+        # Check if there are any records in BurnAddressTransaction or BlockHash tables
         burn_address_query_results = await db.execute(select(db_code.BurnAddressTransaction).limit(1))
         burn_tx_exists = burn_address_query_results.first()
-        block_hash_query_results = await db.execute(select(db_code.BlockHash).limit(1))
-        block_hash_exists = block_hash_query_results.first()
+        block_hash_query_results = await db.execute(select(db_code.BlockHash).count())
+        block_hash_count = block_hash_query_results.scalar()
     if not burn_tx_exists:
         logger.info("No burn transaction records found in database, proceeding with full rescan...")
         logger.info("Please wait, retrieving ALL burn transactions from ANY address starting with the genesis block (may take a while and cause high CPU usage...)")
@@ -5662,15 +5664,16 @@ async def full_rescan_burn_transactions():
         if burn_transactions:
             decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, ignore_unconfirmed_transactions)
             logger.info(f"Decoded {len(decoded_tx_data_list):,} new burn transactions in total!")
-    if not block_hash_exists:
-        logger.info("No block hash records found in database, proceeding with full rescan...")
+    if block_hash_count < current_block_count:
+        logger.info("Block hash records are incomplete in the database, proceeding with rescan...")
+        logger.info(f"Current block count: {current_block_count:,}, Block hashes in DB: {block_hash_count:,}")
         current_block_height = await get_current_pastel_block_height_func()
         logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
         chunk_size = 2000
-        await fetch_and_insert_block_hashes(0, current_block_height, chunk_size)
+        await fetch_and_insert_block_hashes(block_hash_count, current_block_height, chunk_size)
         logger.info("Block hashes updated successfully.")
     else:
-        logger.info("Existing records found. Skipping full rescan.")
+        logger.info("Existing records found and up-to-date. Skipping full rescan.")
 
 async def fetch_all_mnid_tickets_details():
     mnid_response = await rpc_connection.tickets('list', 'id', 'mn')
@@ -5957,7 +5960,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions_b
             existing_transactions_query = select(db_code.BurnAddressTransaction)
             existing_transactions_result = await db.execute(existing_transactions_query)
             existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
-        chunk_size = 2500
+        chunk_size = 5000
         new_burn_transactions = await rpc_connection.scanburntransactions(credit_usage_tracking_psl_address, latest_db_block_height - chunk_size*3)  # second argument to this function was just "latest_db_block_height" but now trying to subtract an additional offset to make it work.
         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
         ignore_unconfirmed_transactions = 0
