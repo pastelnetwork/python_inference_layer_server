@@ -5501,236 +5501,6 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
             raise ValueError("Unauthorized access to inference output results")
         return inference_output_result
 
-async def process_transactions_in_chunks_old(transactions, chunk_size):
-    decoded_tx_data_list = []
-    total_chunk_count = math.ceil(len(transactions) / chunk_size)
-    chunk_count = 0
-    if transactions:
-        for i in range(0, len(transactions), chunk_size):
-            chunk = transactions[i:i + chunk_size]
-            chunk_count += 1
-            if total_chunk_count > 1:
-                logger.info(f"Processing burn transactions chunk {chunk_count} of {total_chunk_count} (total transaction count of {len(transactions):,})...")
-            # Create tasks for each transaction that needs processing
-            tasks = [create_transaction_task(transaction) for transaction in chunk if transaction['category'] == 'receive' and transaction['amount'] > 0]
-            transactions_to_insert = await asyncio.gather(*tasks)
-            # Filter out None values and prepare to bulk insert
-            transactions_to_insert = [txn for txn in transactions_to_insert if txn]
-            if transactions_to_insert:
-                async with db_code.Session() as db:
-                    db.add_all(transactions_to_insert)
-                    await db.commit()
-                    logger.info(f"Added {len(transactions_to_insert):,} new burn transactions to the database successfully.")
-            await db_code.consolidate_wal_data()  # Consolidate WAL after processing each chunk
-            decoded_tx_data_list.extend(chunk)  # Optional: Keep track of processed chunks
-        return decoded_tx_data_list
-    else:
-        return []
-
-async def process_transactions_in_chunks(transactions, chunk_size, ignore_unconfirmed_transactions=0):
-    decoded_tx_data_list = []
-    total_chunk_count = math.ceil(len(transactions) / chunk_size)
-    chunk_count = 0
-    all_seen_txids = set()  # Track all txids processed in this session
-    for i in range(0, len(transactions), chunk_size):
-        chunk = transactions[i:i + chunk_size]
-        chunk_count += 1
-        if total_chunk_count > 1:       
-            logger.info(f"Processing burn transactions chunk {chunk_count} of {total_chunk_count} (total transaction count of {len(transactions):,})...")
-        if ignore_unconfirmed_transactions:
-            tasks = [create_transaction_task(transaction) for transaction in chunk if transaction['amount'] > 0]
-        else:
-            tasks = [create_transaction_task_old(transaction) for transaction in chunk if transaction['amount'] > 0]
-        transactions_to_insert = await asyncio.gather(*tasks)
-        transactions_to_insert = [txn for txn in transactions_to_insert if txn]
-        # Ensure no duplicates are inserted within the same batch
-        filtered_transactions = []
-        for txn in transactions_to_insert:
-            if txn.txid not in all_seen_txids:
-                filtered_transactions.append(txn)
-                all_seen_txids.add(txn.txid)
-        if filtered_transactions:
-            async with db_code.Session() as db:
-                try:
-                    db.add_all(filtered_transactions)
-                    await db.commit()
-                    logger.info(f"Added {len(filtered_transactions):,} new burn transactions to the database successfully.")
-                except IntegrityError:
-                    await db.rollback()  # Rollback the session in case of an IntegrityError
-                    for txn in filtered_transactions:
-                        try:
-                            db.add(txn)
-                            await db.commit()  # Try to commit each transaction individually
-                        except IntegrityError:
-                            await db.rollback()  # Skip the transaction if it still fails
-        await db_code.consolidate_wal_data()  # Consolidate WAL after processing each chunk
-        decoded_tx_data_list.extend(transactions_to_insert)  # Optional: Keep track of processed chunks
-    return decoded_tx_data_list
-    
-async def create_transaction_task(transaction):
-    txid = transaction['txid']
-    async with db_code.Session() as db:
-        # Check if transaction already exists; if it does, return early without doing anything
-        stmt = select(db_code.BurnAddressTransaction).where(db_code.BurnAddressTransaction.txid == txid)
-        stmt_output = await db.execute(stmt)
-        if stmt_output.scalars().first():
-            return None  # Skip if transaction already exists in the database
-        return db_code.BurnAddressTransaction(
-            txid=txid,
-            block_height=transaction['blockindex'],
-            burn_address=burn_address,
-            tracking_address=transaction['from_address'],
-            amount=transaction['amount'],
-            pending=transaction['blockindex'] is None
-        )
-
-async def create_transaction_task_old(transaction):
-    txid = transaction['txid']
-    async with db_code.Session() as db:
-        # Check if transaction already exists
-        stmt = select(db_code.BurnAddressTransaction).where(db_code.BurnAddressTransaction.txid == txid)
-        stmt_output = await db.execute(stmt)
-        if stmt_output.scalars().first():
-            return None  # Skip if transaction already exists in the database
-        raw_tx = await rpc_connection.getrawtransaction(txid, 1)
-        block_height = raw_tx.get('height', None)
-        input_addresses = await gather_input_addresses(raw_tx['vin'])
-        if len(input_addresses) == 1:
-            tracking_address = next(iter(input_addresses))
-            amount = sum(vout['value'] for vout in raw_tx['vout'] if burn_address in vout['scriptPubKey'].get('addresses', []))
-            return db_code.BurnAddressTransaction(
-                txid=txid,
-                block_height=block_height,
-                burn_address=burn_address,
-                tracking_address=tracking_address,
-                amount=amount,
-                pending=block_height is None
-            )
-        return None
-    
-async def gather_input_addresses(vins):
-    input_addresses = set()
-    tasks = [fetch_input_address(vin) for vin in vins if 'txid' in vin]
-    vin_results = await asyncio.gather(*tasks)
-    for addresses in vin_results:
-        input_addresses.update(addresses)
-    return input_addresses
-
-async def fetch_input_address(vin):
-    prev_tx_details = await rpc_connection.getrawtransaction(vin['txid'], 1)
-    prev_output = prev_tx_details['vout'][vin['vout']]
-    return prev_output['scriptPubKey'].get('addresses', []) if 'scriptPubKey' in prev_output and 'addresses' in prev_output['scriptPubKey'] else []
-
-async def full_rescan_burn_transactions_old2():
-    async with db_code.Session() as db: # Check if there are any records in BurnAddressTransaction or BlockHash tables
-        burn_address_query_results = await db.execute(select(db_code.BurnAddressTransaction).limit(1))
-        burn_tx_exists = burn_address_query_results.first()
-        block_hash_query_results = await db.execute(select(db_code.BlockHash).limit(1))
-        block_hash_exists = block_hash_query_results.first()
-    if not burn_tx_exists:
-        logger.info("No burn transaction records found in database, proceeding with full rescan...")
-        current_block_height = await get_current_pastel_block_height_func()
-        first_block_hash = await rpc_connection.getblockhash(0)
-        listsinceblock_output = await rpc_connection.listsinceblock(first_block_hash, 1, True)
-        all_transactions = listsinceblock_output["transactions"]        
-        burn_transactions = [tx for tx in all_transactions if tx.get("address") == burn_address]
-        chunk_size = 100  # Adjust the chunk size as needed
-        decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size)
-        logger.info(f"Decoded {len(decoded_tx_data_list):,} new burn transactions in total!")
-    if not block_hash_exists:
-        logger.info("No block hash records found in database, proceeding with full rescan...")
-        current_block_height = await get_current_pastel_block_height_func()
-        logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        await fetch_and_insert_block_hashes(0, current_block_height)
-        logger.info("Block hashes updated successfully.")
-    else:
-        logger.info("Existing records found. Skipping full rescan.")
-
-async def full_rescan_burn_transactions_old():
-    global burn_address
-    current_block_count = await rpc_connection.getblockcount()
-    async with db_code.Session() as db:
-        # Check if there are any records in BurnAddressTransaction or BlockHash tables
-        burn_address_query_results = await db.execute(select(db_code.BurnAddressTransaction).limit(1))
-        burn_tx_exists = burn_address_query_results.first()
-        block_hash_query_results = await db.execute(select(func.count(db_code.BlockHash.id)))
-        block_hash_count = block_hash_query_results.scalar()
-    if not burn_tx_exists:
-        logger.info("No burn transaction records found in database, proceeding with full rescan...")
-        logger.info("Please wait, retrieving ALL burn transactions from ANY address starting with the genesis block (may take a while and cause high CPU usage...)")
-        burn_transactions = await rpc_connection.scanburntransactions("*")
-        chunk_size = 5000  # Adjust the chunk size as needed
-        ignore_unconfirmed_transactions = 1
-        if burn_transactions:
-            decoded_tx_data_list = await process_transactions_in_chunks(burn_transactions, chunk_size, ignore_unconfirmed_transactions)
-            logger.info(f"Decoded {len(decoded_tx_data_list):,} new burn transactions in total!")
-    if block_hash_count < current_block_count:
-        logger.info("Block hash records are incomplete in the database, proceeding with rescan...")
-        logger.info(f"Current block count: {current_block_count:,}, Block hashes in DB: {block_hash_count:,}")
-        current_block_height = await get_current_pastel_block_height_func()
-        logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        await fetch_and_insert_block_hashes(block_hash_count, current_block_height)
-        logger.info("Block hashes updated successfully.")
-    else:
-        logger.info("Existing records found and up-to-date. Skipping full rescan.")
-
-async def full_rescan_burn_transactions():
-    global burn_address
-    current_block_count = await rpc_connection.getblockcount()
-    async with db_code.Session() as db:
-        burn_address_query_results = await db.execute(select(db_code.BurnAddressTransaction).limit(1))
-        burn_tx_exists = burn_address_query_results.first()
-        block_hash_query_results = await db.execute(select(func.count(db_code.BlockHash.id)))
-        block_hash_count = block_hash_query_results.scalar()
-    if not burn_tx_exists:
-        logger.info("No burn transaction records found in database, proceeding with full rescan...")
-        logger.info("Please wait, retrieving ALL burn transactions from ANY address starting with the genesis block (may take a while and cause high CPU usage...)")
-        burn_transactions = await rpc_connection.getaddressutxos({"addresses": [f"{burn_address}"], "chainInfo": True})
-        if burn_transactions:
-            utxos = burn_transactions.get("utxos", [])
-            chunk_size = 5000
-            ignore_unconfirmed_transactions = 1
-            _ = await process_transactions_in_chunks(utxos, chunk_size, ignore_unconfirmed_transactions)
-            async def fetch_tracking_address(txid):
-                tx_data = await rpc_connection.getrawtransaction(txid, 1)
-                vin = tx_data.get('vin', [])
-                if not vin:
-                    return None
-                vin_txid = vin[0].get('txid')
-                vin_vout = vin[0].get('vout')
-                vin_tx_data = await rpc_connection.getrawtransaction(vin_txid, 1)
-                vout = vin_tx_data.get('vout', [])
-                for v in vout:
-                    if v['n'] == vin_vout:
-                        return v['scriptPubKey']['addresses'][0]
-                return None
-            mempool_response = await rpc_connection.getaddressmempool({"addresses": [burn_address]})
-            mempool_txids = {tx["txid"] for tx in mempool_response}
-            new_decoded_tx_data_list = []
-            for tx in utxos:
-                tracking_address = await fetch_tracking_address(tx['txid'])
-                new_decoded_tx_data_list.append(db_code.BurnAddressTransaction(
-                    txid=tx['txid'],
-                    block_height=tx['height'],
-                    burn_address=tx['address'],
-                    tracking_address=tracking_address,
-                    amount=tx['patoshis'] / COIN,
-                    output_index=tx['outputIndex'],
-                    pending=tx['txid'] in mempool_txids
-                ))
-            if len(new_decoded_tx_data_list) > 0:
-                logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
-            await process_transactions_in_chunks(new_decoded_tx_data_list, chunk_size, ignore_unconfirmed_transactions)
-    if block_hash_count < current_block_count:
-        logger.info("Block hash records are incomplete in the database, proceeding with rescan...")
-        logger.info(f"Current block count: {current_block_count:,}, Block hashes in DB: {block_hash_count:,}")
-        current_block_height = await get_current_pastel_block_height_func()
-        logger.info(f"Now getting block hashes for {current_block_height:,} blocks...")
-        await fetch_and_insert_block_hashes(block_hash_count, current_block_height)
-        logger.info("Block hashes updated successfully.")
-    else:
-        logger.info("Existing records found and up-to-date. Skipping full rescan.")
-
 async def fetch_all_mnid_tickets_details():
     mnid_response = await rpc_connection.tickets('list', 'id', 'mn')
     if mnid_response is None or len(mnid_response) == 0:
@@ -5809,216 +5579,71 @@ async def fetch_active_supernodes_count_and_details(block_height: int):
     active_supernodes_count = len(active_supernodes)
     return active_supernodes_count, active_supernodes
 
-async def detect_chain_reorg_and_rescan():
-    while True:
-        async with db_code.Session() as db:
-            query = await db.exec(select(db_code.BlockHash).order_by(db_code.BlockHash.block_height.desc()).limit(1))
-            latest_stored_block_hash = query.one_or_none()
-        if latest_stored_block_hash:
-            latest_stored_block_height = latest_stored_block_hash.block_height
-            latest_stored_block_hash = latest_stored_block_hash.block_hash
-            latest_blockchain_block_hash = await rpc_connection.getblockhash(latest_stored_block_height)
-            if latest_blockchain_block_hash != latest_stored_block_hash:
-                logger.warning("Chain reorg detected! Triggering a full rescan of burn transactions.")
-                async with db_code.Session() as db:
-                    await db.exec(delete(db_code.BurnAddressTransaction))
-                    await db.exec(delete(db_code.BlockHash))
-                    await db.commit()
-                await full_rescan_burn_transactions()
-        await asyncio.sleep(6000)  # Check for chain reorg every 6000 seconds
-                
-async def fetch_and_insert_block_hashes_old2(start_height, end_height, batch_size=300):
-    current_height = max(start_height - 1, 0)
-    total_inserted = 0
-    batch_counter = 0
-    while current_height <= end_height:
-        tasks = [asyncio.create_task(rpc_connection.getblock(h, 1)) for h in range(current_height, min(current_height + batch_size, end_height + 1), 3)]
-        results = await asyncio.gather(*tasks)
-        blocks_to_insert = []
-        # Collect potential blocks to insert
-        for result in results:
-            if result:
-                if 'previousblockhash' in result and result['height'] > start_height:
-                    blocks_to_insert.append((result['height'] - 1, result['previousblockhash']))
-                blocks_to_insert.append((result['height'], result['hash']))
-                if 'nextblockhash' in result and result['height'] < end_height:
-                    blocks_to_insert.append((result['height'] + 1, result['nextblockhash']))
-        # Filter out duplicate heights from the batch itself
-        unique_blocks = {block[0]: block for block in blocks_to_insert}.values()
-        # Check database for existing heights from the refined list
-        unique_heights = {height for height, _ in unique_blocks}
-        async with db_code.Session() as db:
-            existing_query = await db.execute(select(db_code.BlockHash.block_height).where(db_code.BlockHash.block_height.in_(unique_heights)))
-            existing_heights = set(existing_query.scalars().all())
-        # Filter out existing block heights
-        final_blocks_to_insert = [block for block in unique_blocks if block[0] not in existing_heights]
-        # Bulk insert new blocks
-        if final_blocks_to_insert:
-            await bulk_insert_block_hashes(final_blocks_to_insert)
-            inserted_count = len(final_blocks_to_insert)
-            total_inserted += inserted_count
-            batch_counter += inserted_count
-        # Log progress for every 500 inserts or as needed
-        if batch_counter >= 500:
-            blocks_left = end_height - current_height + 1
-            logger.info(f"Fetched and inserted {batch_counter:,} block hashes; {total_inserted:,} total block hashes in total, {blocks_left:,} blocks left to process...")
-            batch_counter = 0
-        # Move to the next range, skipping ahead to optimize RPC calls
-        current_height += batch_size * 3
-
-async def fetch_and_insert_block_hashes_old(start_height, end_height, batch_size=300):
-    current_height = max(start_height - 1, 0)
-    total_inserted = 0
-    batch_counter = 0
-    while current_height <= end_height:
-        # Calculate the number of hashes to fetch in this batch
-        num_hashes = min((end_height + 1) - current_height, batch_size)
-        result = await rpc_connection.getblockhash(current_height, num_hashes)
-        blocks_to_insert = []
-        previous_height = None
-        previous_hash = None
-        # Loop through the results to construct the potential block insert tuples
-        for block in result:
-            block_height = block['height']
-            block_hash = block['hash']
-            # Insert the previous block hash if available and in the correct range
-            if previous_height is not None and previous_height >= start_height:
-                blocks_to_insert.append((previous_height, previous_hash))
-            blocks_to_insert.append((block_height, block_hash))
-            previous_height = block_height + 1
-            previous_hash = block_hash
-        # Filter out duplicate heights from the batch itself
-        unique_blocks = {block[0]: block for block in blocks_to_insert}.values()
-        # Check database for existing heights from the refined list
-        unique_heights = {height for height, _ in unique_blocks}
-        async with db_code.Session() as db:
-            existing_query = await db.execute(select(db_code.BlockHash.block_height).where(db_code.BlockHash.block_height.in_(unique_heights)))
-            existing_heights = set(existing_query.scalars().all())
-        # Filter out existing block heights
-        final_blocks_to_insert = [block for block in unique_blocks if block[0] not in existing_heights]
-        # Bulk insert new blocks
-        if final_blocks_to_insert:
-            await bulk_insert_block_hashes(final_blocks_to_insert)
-            inserted_count = len(final_blocks_to_insert)
-            total_inserted += inserted_count
-            batch_counter += inserted_count
-        # Log progress for every 500 inserts or as needed
-        if batch_counter >= 500:
-            blocks_left = end_height - current_height + 1
-            logger.info(f"Fetched and inserted {batch_counter:,} block hashes; {total_inserted:,} total block hashes in total, {blocks_left:,} blocks left to process...")
-            batch_counter = 0
-        # Move to the next range, accounting for the batch size
-        current_height += num_hashes
-
-async def fetch_and_insert_block_hashes(start_height, end_height, batch_size=25000):
-    current_height = max(start_height, 0)
-    total_inserted = 0
-    batch_counter = 0
-    while current_height <= end_height:
-        num_hashes = min((end_height + 1) - current_height, batch_size)
-        result = await rpc_connection.getblockhash(current_height, num_hashes)
-        blocks_to_insert = []
-        for block in result:
-            block_height = block['height']
-            block_hash = block['hash']
-            blocks_to_insert.append((block_height, block_hash))
-        unique_blocks = {block[0]: block for block in blocks_to_insert}.values()
-        unique_heights = {height for height, _ in unique_blocks}
-        async with db_code.Session() as db:
-            existing_query = await db.execute(select(db_code.BlockHash.block_height).where(db_code.BlockHash.block_height.in_(unique_heights)))
-            existing_heights = set(existing_query.scalars().all())
-        final_blocks_to_insert = [block for block in unique_blocks if block[0] not in existing_heights]
-        if final_blocks_to_insert:
-            await bulk_insert_block_hashes(final_blocks_to_insert)
-            inserted_count = len(final_blocks_to_insert)
-            total_inserted += inserted_count
-            batch_counter += inserted_count
-        if batch_counter >= 500:
-            blocks_left = end_height - current_height + 1
-            logger.info(f"Fetched and inserted {batch_counter:,} block hashes; {total_inserted:,} total block hashes in total, {blocks_left:,} blocks left to process...")
-            batch_counter = 0
-        current_height += num_hashes
-
-async def bulk_insert_block_hashes(block_hashes):
-    async with db_code.Session() as db:
-        # Recheck existing heights just before inserting to handle race conditions
-        heights_to_check = [block[0] for block in block_hashes]
-        existing_query = await db.execute(select(db_code.BlockHash.block_height).where(db_code.BlockHash.block_height.in_(heights_to_check)))
-        existing_heights = set(existing_query.scalars().all())
-        new_blocks = [db_code.BlockHash(block_height=height, block_hash=hash) for height, hash in block_hashes if height not in existing_heights]
-        if new_blocks:
-            db.add_all(new_blocks)
-            try:
-                await db.commit()
-            except Exception as e:
-                await db.rollback()
-                logger.error(f"Error during bulk insert of block hashes: {str(e)}")
-
-async def determine_current_credit_pack_balance_based_on_tracking_transactions_old(credit_pack_ticket_txid: str):
-    logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
-    _, credit_pack_purchase_request_response, _ = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
-    credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
-    credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_fields_json)
-    initial_credit_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
-    credit_usage_tracking_psl_address = credit_pack_purchase_request_response.credit_usage_tracking_psl_address
-    logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,.1f}, Tracking address: {credit_usage_tracking_psl_address}")
-    async with db_code.Session() as db:
-        db_transactions_result = await db.exec(
-            select(db_code.BurnAddressTransaction)
-            .where(db_code.BurnAddressTransaction.burn_address == burn_address)
-            .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-            .where(db_code.BurnAddressTransaction.amount <= 1.0)
-        )
-        db_transactions = db_transactions_result.all()
-    total_credits_consumed = sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
-    async with db_code.Session() as db:
-        query_results = await db.execute(select(db_code.BlockHash.block_height))
-        latest_db_block_height = max(query_results.scalars().all())
-    current_block_height = await get_current_pastel_block_height_func()
-    if current_block_height > latest_db_block_height:
-        async with db_code.Session() as db:
-            existing_transactions_query = select(db_code.BurnAddressTransaction)
-            existing_transactions_result = await db.execute(existing_transactions_query)
-            existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
-        latest_db_block_hash = await rpc_connection.getblockhash(latest_db_block_height)
-        listsinceblock_output = await rpc_connection.listsinceblock(latest_db_block_hash, 1, True)
-        new_transactions = listsinceblock_output["transactions"]
-        new_burn_transactions = [
-            tx for tx in new_transactions
-            if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height) and abs(tx.get("amount")) < 1.0
-        ]
-        filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
-        chunk_size = 250
-        ignore_unconfirmed_transactions = 0
-        new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
-        logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
-        async with db_code.Session() as db:
-            new_tracking_transactions_results = await db.exec(
-                select(db_code.BurnAddressTransaction)
-                .where(db_code.BurnAddressTransaction.burn_address == burn_address)
-                .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-                .where(
-                    or_(
-                        db_code.BurnAddressTransaction.block_height > latest_db_block_height,
-                        db_code.BurnAddressTransaction.pending == True  # noqa: E712
-                    )
-                )
-            )
-            new_tracking_transactions = new_tracking_transactions_results.all()
-        total_credits_consumed += sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_tracking_transactions)
-        use_update_block_hashes = 0
-        if use_update_block_hashes:
-            async with db_code.Session() as db:
-                existing_block_hash_results = await db.exec( select(db_code.BlockHash) )
-                existing_block_hash_heights = [block_hash.block_height for block_hash in existing_block_hash_results.all()]
-            new_block_heights_to_get_block_hash_for = [height for height in range(1, current_block_height) if height not in existing_block_hash_heights]
-            logger.info(f"Now getting block hashes for {len(new_block_heights_to_get_block_hash_for):,} new block heights (from {new_block_heights_to_get_block_hash_for[0]:,} to {current_block_height:,}) and storing in the DB...")
-            await fetch_and_insert_block_hashes(new_block_heights_to_get_block_hash_for[0], current_block_height)
-            logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
-    current_credit_balance = initial_credit_balance - total_credits_consumed
-    number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
-    logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
-    return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
+# async def determine_current_credit_pack_balance_based_on_tracking_transactions_old(credit_pack_ticket_txid: str):
+#     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
+#     _, credit_pack_purchase_request_response, _ = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
+#     credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
+#     credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_fields_json)
+#     initial_credit_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
+#     credit_usage_tracking_psl_address = credit_pack_purchase_request_response.credit_usage_tracking_psl_address
+#     logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,.1f}, Tracking address: {credit_usage_tracking_psl_address}")
+#     async with db_code.Session() as db:
+#         db_transactions_result = await db.exec(
+#             select(db_code.BurnAddressTransaction)
+#             .where(db_code.BurnAddressTransaction.burn_address == burn_address)
+#             .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
+#             .where(db_code.BurnAddressTransaction.amount <= 1.0)
+#         )
+#         db_transactions = db_transactions_result.all()
+#     total_credits_consumed = sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
+#     async with db_code.Session() as db:
+#         query_results = await db.execute(select(db_code.BlockHash.block_height))
+#         latest_db_block_height = max(query_results.scalars().all())
+#     current_block_height = await get_current_pastel_block_height_func()
+#     if current_block_height > latest_db_block_height:
+#         async with db_code.Session() as db:
+#             existing_transactions_query = select(db_code.BurnAddressTransaction)
+#             existing_transactions_result = await db.execute(existing_transactions_query)
+#             existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
+#         latest_db_block_hash = await rpc_connection.getblockhash(latest_db_block_height)
+#         listsinceblock_output = await rpc_connection.listsinceblock(latest_db_block_hash, 1, True)
+#         new_transactions = listsinceblock_output["transactions"]
+#         new_burn_transactions = [
+#             tx for tx in new_transactions
+#             if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height) and abs(tx.get("amount")) < 1.0
+#         ]
+#         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
+#         chunk_size = 250
+#         ignore_unconfirmed_transactions = 0
+#         new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
+#         logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
+#         async with db_code.Session() as db:
+#             new_tracking_transactions_results = await db.exec(
+#                 select(db_code.BurnAddressTransaction)
+#                 .where(db_code.BurnAddressTransaction.burn_address == burn_address)
+#                 .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
+#                 .where(
+#                     or_(
+#                         db_code.BurnAddressTransaction.block_height > latest_db_block_height,
+#                         db_code.BurnAddressTransaction.pending == True  # noqa: E712
+#                     )
+#                 )
+#             )
+#             new_tracking_transactions = new_tracking_transactions_results.all()
+#         total_credits_consumed += sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_tracking_transactions)
+#         use_update_block_hashes = 0
+#         if use_update_block_hashes:
+#             async with db_code.Session() as db:
+#                 existing_block_hash_results = await db.exec( select(db_code.BlockHash) )
+#                 existing_block_hash_heights = [block_hash.block_height for block_hash in existing_block_hash_results.all()]
+#             new_block_heights_to_get_block_hash_for = [height for height in range(1, current_block_height) if height not in existing_block_hash_heights]
+#             logger.info(f"Now getting block hashes for {len(new_block_heights_to_get_block_hash_for):,} new block heights (from {new_block_heights_to_get_block_hash_for[0]:,} to {current_block_height:,}) and storing in the DB...")
+#             await fetch_and_insert_block_hashes(new_block_heights_to_get_block_hash_for[0], current_block_height)
+#             logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
+#     current_credit_balance = initial_credit_balance - total_credits_consumed
+#     number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
+#     logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
+#     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
 
 async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_txid: str):
     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
@@ -6030,172 +5655,113 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     initial_credit_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
     credit_usage_tracking_psl_address = credit_pack_purchase_request_response.credit_usage_tracking_psl_address
     logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,.1f}, Tracking address: {credit_usage_tracking_psl_address}")
-    async with db_code.Session() as db:
-        db_transactions_result = await db.exec(
-            select(db_code.BurnAddressTransaction)
-            .where(db_code.BurnAddressTransaction.burn_address == burn_address)
-            .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-        )
-        db_transactions = db_transactions_result.all()
-    total_credits_consumed = sum(tx.amount for tx in db_transactions)
-    async with db_code.Session() as db:
-        query_results = await db.execute(select(db_code.BlockHash.block_height))
-        latest_db_block_height = max(query_results.scalars().all())
-    current_block_height = await get_current_pastel_block_height_func()
-    if current_block_height > latest_db_block_height:
-        async with db_code.Session() as db:
-            existing_transactions_query = select(db_code.BurnAddressTransaction)
-            existing_transactions_result = await db.execute(existing_transactions_query)
-            existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
-        new_burn_transactions_response = await rpc_connection.getaddressutxos({
-            "addresses": [credit_usage_tracking_psl_address], 
-            "chainInfo": True
+    try:
+        logger.info(f"Now scanning blockchain for burn transactions sent from address {credit_usage_tracking_psl_address}...")
+        burn_transactions = await rpc_connection.getaddressutxosextra({
+            "addresses": [burn_address],
+            "simple": True,
+            "sender": credit_usage_tracking_psl_address
         })
-        new_burn_transactions = new_burn_transactions_response.get("utxos", [])
-        mempool_response = await rpc_connection.getaddressmempool({
-            "addresses": [credit_usage_tracking_psl_address]
-        })
-        mempool_txids = {tx["txid"] for tx in mempool_response}
-        filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
-        async def fetch_tracking_address(txid):
-            tx_data = await rpc_connection.getrawtransaction(txid, 1)
-            vin = tx_data.get('vin', [])
-            if not vin:
-                return None
-            vin_txid = vin[0].get('txid')
-            vin_vout = vin[0].get('vout')
-            vin_tx_data = await rpc_connection.getrawtransaction(vin_txid, 1)
-            vout = vin_tx_data.get('vout', [])
-            for v in vout:
-                if v['n'] == vin_vout:
-                    return v['scriptPubKey']['addresses'][0]
-            return None
-        new_decoded_tx_data_list = []
-        for tx in filtered_new_burn_transactions:
-            tracking_address = await fetch_tracking_address(tx['txid'])
-            new_decoded_tx_data_list.append(db_code.BurnAddressTransaction(
-                txid=tx['txid'],
-                block_height=tx['height'],
-                burn_address=tx['address'],
-                tracking_address=tracking_address,
-                amount=tx['patoshis'] / COIN,
-                output_index=tx['outputIndex'],
-                pending=tx['txid'] in mempool_txids
-            ))
-        if len(new_decoded_tx_data_list) > 0:
-            logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
-        async with db_code.Session() as db:
-            new_tracking_transactions_results = await db.exec(
-                select(db_code.BurnAddressTransaction)
-                .where(db_code.BurnAddressTransaction.burn_address == burn_address)
-                .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-                .where(
-                    or_(
-                        db_code.BurnAddressTransaction.block_height > latest_db_block_height,
-                        db_code.BurnAddressTransaction.pending == True  # noqa: E712
-                    )
-                )
-            )
-            new_tracking_transactions = new_tracking_transactions_results.all()
-        total_credits_consumed += sum(tx.amount for tx in new_tracking_transactions)
-        use_update_block_hashes = 0
-        if use_update_block_hashes:
-            async with db_code.Session() as db:
-                existing_block_hash_results = await db.exec(select(db_code.BlockHash))
-                existing_block_hash_heights = [block_hash.block_height for block_hash in existing_block_hash_results.all()]
-            new_block_heights_to_get_block_hash_for = [height for height in range(1, current_block_height) if height not in existing_block_hash_heights]
-            logger.info(f"Now getting block hashes for {len(new_block_heights_to_get_block_hash_for):,} new block heights (from {new_block_heights_to_get_block_hash_for[0]:,} to {current_block_height:,}) and storing in the DB...")
-            await fetch_and_insert_block_hashes(new_block_heights_to_get_block_hash_for[0], current_block_height)
-            logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
-    current_credit_balance = initial_credit_balance - total_credits_consumed
-    number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
-    logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
-    return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
+        # Check if the result is valid
+        if not burn_transactions:
+            logger.warning(f"No transactions found for address {credit_usage_tracking_psl_address}. Returning initial balance.")
+            return initial_credit_balance, 0
+        # Calculate the total credits consumed
+        total_credits_consumed = sum(tx.get('patoshis', 0) for tx in burn_transactions) / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER
+        current_credit_balance = initial_credit_balance - total_credits_consumed
+        number_of_confirmation_transactions = len(burn_transactions)
+        logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; "
+                    f"Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions:,} transactions; "
+                    f"Current credit balance: {current_credit_balance:,.1f}")
+        return current_credit_balance, number_of_confirmation_transactions
+    except Exception as e:
+        logger.error(f"Error while determining current credit pack balance: {str(e)}")
+        return initial_credit_balance, 0
 
-async def determine_current_credit_pack_balance_based_on_tracking_transactions_broken(credit_pack_ticket_txid: str): # This is faster but does not work correctly in all cases-- it misses a lot of transactions for some reason. 
-    logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
-    _, credit_pack_purchase_request_response, _ = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
-    credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
-    credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_fields_json)
-    initial_credit_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
-    credit_usage_tracking_psl_address = credit_pack_purchase_request_response.credit_usage_tracking_psl_address
-    logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,.1f}, Tracking address: {credit_usage_tracking_psl_address}")
-    async with db_code.Session() as db:
-        db_transactions_result = await db.exec(
-            select(db_code.BurnAddressTransaction)
-            .where(db_code.BurnAddressTransaction.burn_address == burn_address)
-            .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-        )
-        db_transactions = db_transactions_result.all()
-    total_credits_consumed = sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
-    async with db_code.Session() as db:
-        query_results = await db.execute(select(db_code.BlockHash.block_height))
-        latest_db_block_height = max(query_results.scalars().all())
-    current_block_height = await get_current_pastel_block_height_func()
-    if current_block_height > latest_db_block_height:
-        async with db_code.Session() as db:
-            existing_transactions_query = select(db_code.BurnAddressTransaction)
-            existing_transactions_result = await db.execute(existing_transactions_query)
-            existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
-        chunk_size = 5000
-        new_burn_transactions = await rpc_connection.scanburntransactions(credit_usage_tracking_psl_address, latest_db_block_height - chunk_size*3)  # second argument to this function was just "latest_db_block_height" but now trying to subtract an additional offset to make it work.
-        filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
-        ignore_unconfirmed_transactions = 0
-        new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
-        if len(new_decoded_tx_data_list) > 0:
-            logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
-        async with db_code.Session() as db:
-            new_tracking_transactions_results = await db.exec(
-                select(db_code.BurnAddressTransaction)
-                .where(db_code.BurnAddressTransaction.burn_address == burn_address)
-                .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-                .where(
-                    or_(
-                        db_code.BurnAddressTransaction.block_height > latest_db_block_height,
-                        db_code.BurnAddressTransaction.pending == True  # noqa: E712
-                    )
-                )
-            )
-            new_tracking_transactions = new_tracking_transactions_results.all()
-        total_credits_consumed += sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_tracking_transactions)
-        use_update_block_hashes = 0
-        if use_update_block_hashes:
-            async with db_code.Session() as db:
-                existing_block_hash_results = await db.exec( select(db_code.BlockHash) )
-                existing_block_hash_heights = [block_hash.block_height for block_hash in existing_block_hash_results.all()]
-            new_block_heights_to_get_block_hash_for = [height for height in range(1, current_block_height) if height not in existing_block_hash_heights]
-            logger.info(f"Now getting block hashes for {len(new_block_heights_to_get_block_hash_for):,} new block heights (from {new_block_heights_to_get_block_hash_for[0]:,} to {current_block_height:,}) and storing in the DB...")
-            await fetch_and_insert_block_hashes(new_block_heights_to_get_block_hash_for[0], current_block_height)
-            logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
-    current_credit_balance = initial_credit_balance - total_credits_consumed
-    number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
-    logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
-    return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
+# async def determine_current_credit_pack_balance_based_on_tracking_transactions_broken(credit_pack_ticket_txid: str): # This is faster but does not work correctly in all cases-- it misses a lot of transactions for some reason. 
+#     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
+#     _, credit_pack_purchase_request_response, _ = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
+#     credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
+#     credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_fields_json)
+#     initial_credit_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
+#     credit_usage_tracking_psl_address = credit_pack_purchase_request_response.credit_usage_tracking_psl_address
+#     logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,.1f}, Tracking address: {credit_usage_tracking_psl_address}")
+#     async with db_code.Session() as db:
+#         db_transactions_result = await db.exec(
+#             select(db_code.BurnAddressTransaction)
+#             .where(db_code.BurnAddressTransaction.burn_address == burn_address)
+#             .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
+#         )
+#         db_transactions = db_transactions_result.all()
+#     total_credits_consumed = sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
+#     async with db_code.Session() as db:
+#         query_results = await db.execute(select(db_code.BlockHash.block_height))
+#         latest_db_block_height = max(query_results.scalars().all())
+#     current_block_height = await get_current_pastel_block_height_func()
+#     if current_block_height > latest_db_block_height:
+#         async with db_code.Session() as db:
+#             existing_transactions_query = select(db_code.BurnAddressTransaction)
+#             existing_transactions_result = await db.execute(existing_transactions_query)
+#             existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
+#         chunk_size = 5000
+#         new_burn_transactions = await rpc_connection.scanburntransactions(credit_usage_tracking_psl_address, latest_db_block_height - chunk_size*3)  # second argument to this function was just "latest_db_block_height" but now trying to subtract an additional offset to make it work.
+#         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
+#         ignore_unconfirmed_transactions = 0
+#         new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
+#         if len(new_decoded_tx_data_list) > 0:
+#             logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
+#         async with db_code.Session() as db:
+#             new_tracking_transactions_results = await db.exec(
+#                 select(db_code.BurnAddressTransaction)
+#                 .where(db_code.BurnAddressTransaction.burn_address == burn_address)
+#                 .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
+#                 .where(
+#                     or_(
+#                         db_code.BurnAddressTransaction.block_height > latest_db_block_height,
+#                         db_code.BurnAddressTransaction.pending == True  # noqa: E712
+#                     )
+#                 )
+#             )
+#             new_tracking_transactions = new_tracking_transactions_results.all()
+#         total_credits_consumed += sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_tracking_transactions)
+#         use_update_block_hashes = 0
+#         if use_update_block_hashes:
+#             async with db_code.Session() as db:
+#                 existing_block_hash_results = await db.exec( select(db_code.BlockHash) )
+#                 existing_block_hash_heights = [block_hash.block_height for block_hash in existing_block_hash_results.all()]
+#             new_block_heights_to_get_block_hash_for = [height for height in range(1, current_block_height) if height not in existing_block_hash_heights]
+#             logger.info(f"Now getting block hashes for {len(new_block_heights_to_get_block_hash_for):,} new block heights (from {new_block_heights_to_get_block_hash_for[0]:,} to {current_block_height:,}) and storing in the DB...")
+#             await fetch_and_insert_block_hashes(new_block_heights_to_get_block_hash_for[0], current_block_height)
+#             logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
+#     current_credit_balance = initial_credit_balance - total_credits_consumed
+#     number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
+#     logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
+#     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
 
-async def update_pending_transactions():
-    while True:
-        async with db_code.Session() as db: # Query for pending transactions
-            pending_transactions_result = await db.exec(
-                select(db_code.BurnAddressTransaction)
-                .where(db_code.BurnAddressTransaction.pending == True)  # noqa: E712
-            )
-            pending_transactions = pending_transactions_result.all()
-        for transaction in pending_transactions:
-            try: # Retrieve the raw transaction data from the RPC
-                raw_tx = await rpc_connection.getrawtransaction(transaction.txid, 1)
-                block_height = raw_tx.get('height', None)
-                if block_height is not None:
-                    async with db_code.Session() as db: # Update the transaction's block height and pending status
-                        stmt = (
-                            update(db_code.BurnAddressTransaction)
-                            .where(db_code.BurnAddressTransaction.txid == transaction.txid)
-                            .values(block_height=block_height, pending=False)
-                        )
-                        await db.exec(stmt)
-                        await db.commit()
-            except Exception as e:
-                logger.error(f"Error updating pending transaction {transaction.txid}: {str(e)}")
-        await asyncio.sleep(60)  # Sleep for a certain interval before the next update
+# async def update_pending_transactions():
+#     while True:
+#         async with db_code.Session() as db: # Query for pending transactions
+#             pending_transactions_result = await db.exec(
+#                 select(db_code.BurnAddressTransaction)
+#                 .where(db_code.BurnAddressTransaction.pending == True)  # noqa: E712
+#             )
+#             pending_transactions = pending_transactions_result.all()
+#         for transaction in pending_transactions:
+#             try: # Retrieve the raw transaction data from the RPC
+#                 raw_tx = await rpc_connection.getrawtransaction(transaction.txid, 1)
+#                 block_height = raw_tx.get('height', None)
+#                 if block_height is not None:
+#                     async with db_code.Session() as db: # Update the transaction's block height and pending status
+#                         stmt = (
+#                             update(db_code.BurnAddressTransaction)
+#                             .where(db_code.BurnAddressTransaction.txid == transaction.txid)
+#                             .values(block_height=block_height, pending=False)
+#                         )
+#                         await db.exec(stmt)
+#                         await db.commit()
+#             except Exception as e:
+#                 logger.error(f"Error updating pending transaction {transaction.txid}: {str(e)}")
+#         await asyncio.sleep(60)  # Sleep for a certain interval before the next update
         
 async def update_inference_sn_reputation_score(supernode_pastelid: str, reputation_score: float) -> bool:
     try:
