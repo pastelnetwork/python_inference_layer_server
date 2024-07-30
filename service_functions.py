@@ -5655,11 +5655,13 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     initial_credit_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
     credit_usage_tracking_psl_address = credit_pack_purchase_request_response.credit_usage_tracking_psl_address
     logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,.1f}, Tracking address: {credit_usage_tracking_psl_address}")
+    min_height_for_credit_pack_tickets = 700000
     try:
         logger.info(f"Now scanning blockchain for burn transactions sent from address {credit_usage_tracking_psl_address}...")
         burn_transactions = await rpc_connection.getaddressutxosextra({
             "addresses": [burn_address],
             "simple": True,
+            "minHeight": min_height_for_credit_pack_tickets,
             "sender": credit_usage_tracking_psl_address
         })
         # Check if the result is valid
