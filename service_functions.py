@@ -5668,6 +5668,8 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
         if not burn_transactions:
             logger.warning(f"No transactions found for address {credit_usage_tracking_psl_address}. Returning initial balance.")
             return initial_credit_balance, 0
+        # Filter out transactions where 'patoshis' exceeds 100000
+        burn_transactions = [tx for tx in burn_transactions if tx.get('patoshis', 0) <= 100000]
         # Calculate the total credits consumed
         total_credits_consumed = sum(tx.get('patoshis', 0) for tx in burn_transactions) / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER
         current_credit_balance = initial_credit_balance - total_credits_consumed
