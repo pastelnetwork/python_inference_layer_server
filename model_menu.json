@@ -89,9 +89,9 @@
       }
     },
     {
-      "model_name": "swiss_army_llama-Meta-Llama-3-8B-Instruct.Q3_K_S",
-      "model_url": "https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct.Q3_K_S.gguf",
-      "description": "The Meta-Llama-3-8B-Instruct model is designed for instruction-following tasks with optimized quantization for efficient computation.",
+      "model_name": "swiss_army_llama-Meta-Llama-3.1-8B-Instruct-Q5_K_M",
+      "model_url": "https://huggingface.co/lmstudio-community/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/main/Meta-Llama-3.1-8B-Instruct-Q5_K_M.gguf",
+      "description": "The Meta-Llama-3.1-8B-Instruct model is designed for instruction-following tasks with optimized quantization for efficient computation.",
       "supported_inference_type_strings": [
         "text_completion",
         "embedding",
@@ -177,9 +177,9 @@
       }
     },
     {
-      "model_name": "swiss_army_llama-Lexi-Llama-3-8B-Uncensored_Q5_K_M",
-      "model_url": "https://huggingface.co/Orenguteng/Llama-3-8B-Lexi-Uncensored-GGUF/resolve/main/Lexi-Llama-3-8B-Uncensored_Q5_K_M.gguf",
-      "description": "The Lexi-Llama-3-8B-Uncensored, based on the powerful Meta Llama-3-8B model, is designed for uncensored text generation with a focus on creative and innovative content.",
+      "model_name": "swiss_army_llama-Llama-3.1-8B-Lexi-Uncensored_Q5_fixedrope",
+      "model_url": "https://huggingface.co/Orenguteng/Llama-3.1-8B-Lexi-Uncensored-GGUF/resolve/main/Llama-3.1-8B-Lexi-Uncensored_Q5_fixedrope.gguf",
+      "description": "The Llama-3.1-8B-Lexi-Uncensored, based on the powerful Meta Llama-3.1-8B model, is designed for uncensored text generation with a focus on creative and innovative content.",
       "supported_inference_type_strings": [
         "text_completion",
         "embedding",
@@ -264,6 +264,94 @@
         }
       }
     },
+    {
+      "model_name": "swiss_army_llama-gemma-2-2b-it-abliterated-GGUF",
+      "model_url": "https://huggingface.co/bartowski/gemma-2-2b-it-abliterated-GGUF/resolve/main/gemma-2-2b-it-abliterated-Q5_K_L.gguf",
+      "description": "The gemma-2-2b-it-abliterated-GGUF, is a compact but powerful LLM from Google.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding",
+        "embedding_document",
+        "embedding_audio"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The maximum number of tokens to generate [Optional]"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The temperature for sampling [Optional]"
+        },
+        {
+          "name": "number_of_completions_to_generate [Optional]",
+          "type": "int",
+          "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The number of completions to generate"
+        },
+        {
+          "name": "grammar_file_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "Grammar File String: The grammar file used to restrict text generation [Optional] (Default is to not use any grammar file. Examples: `json`, `list`)"
+        },
+        {
+          "name": "corpus_identifier_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
+          "description": "Corpus Identifier String: Identifies the subset of the stored embeddings to use in the semantic search [Optional] (Default is to use just the embeddings from the uploaded document or audio file transcript)."
+        }
+      ],
+      "credit_costs": {
+        "text_completion": {
+          "input_tokens": 1.1,
+          "output_tokens": 0.9,
+          "compute_cost": 0.7,
+          "memory_cost": 0.5
+        },
+        "embedding": {
+          "input_tokens": 0.4,
+          "compute_cost": 0.5,
+          "memory_cost": 0.4
+        },
+        "embedding_document": {
+          "average_tokens_per_sentence": 0.15,
+          "total_sentences": 0.08,
+          "query_string_included": 0.35,
+          "compute_cost": 0.9,
+          "memory_cost": 0.6
+        },
+        "embedding_audio": {
+          "audio_file_length_in_seconds": 0.03,
+          "query_string_included": 0.35,
+          "compute_cost": 1.0,
+          "memory_cost": 0.8
+        }
+      }
+    },    
     {
       "model_name": "swiss_army_llama-llava-llama-3-8b-v1_1-int4",
       "model_url": "https://huggingface.co/xtuner/llava-llama-3-8b-v1_1-gguf/resolve/main/llava-llama-3-8b-v1_1-int4.gguf",
@@ -848,6 +936,153 @@
       }
     },
     {
+      "model_name": "groq-llama-3.1-405b-reasoning",
+      "model_url": "",
+      "description": "LLaMA3.1 405b reasoning is a powerful language model developed by Meta with a context window of 131,072 tokens.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The maximum number of tokens to generate [Optional]"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The temperature for sampling [Optional]"
+        },
+        {
+          "name": "number_of_completions_to_generate [Optional]",
+          "type": "int",
+          "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "groq-llama-3.1-70b-versatile",
+      "model_url": "",
+      "description": "LLaMA3.1 70b versatile is a powerful language model developed by Meta with a context window of 131,072 tokens.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The maximum number of tokens to generate [Optional]"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The temperature for sampling [Optional]"
+        },
+        {
+          "name": "number_of_completions_to_generate [Optional]",
+          "type": "int",
+          "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "groq-llama-3.1-8b-instant",
+      "model_url": "",
+      "description": "LLaMA3.1 8b instant is a powerful language model developed by Meta with a context window of 131,072 tokens.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The maximum number of tokens to generate [Optional]"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The temperature for sampling [Optional]"
+        },
+        {
+          "name": "number_of_completions_to_generate [Optional]",
+          "type": "int",
+          "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The number of completions to generate"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
       "model_name": "groq-llama3-70b-8192",
       "model_url": "",
       "description": "LLaMA3 70b is a powerful language model developed by Meta with a context window of 8,192 tokens.",
@@ -995,9 +1230,9 @@
       }
     },
     {
-      "model_name": "groq-gemma-7b-it",
+      "model_name": "groq-gemma2-9b-it",
       "model_url": "",
-      "description": "Gemma 7b is a powerful language model developed by Google with a context window of 8,192 tokens.",
+      "description": "Gemma 2 9b is an LLM developed by Google with a context window of 8,192 tokens.",
       "supported_inference_type_strings": [
         "text_completion",
         "embedding"
@@ -1042,7 +1277,7 @@
       "credit_costs": {
         "api_based_pricing": 1
       }
-    },
+    },    
     {
       "model_name": "mistralapi-mistral-small-latest",
       "model_url": "",
