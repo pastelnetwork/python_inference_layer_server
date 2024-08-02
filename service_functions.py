@@ -2340,7 +2340,7 @@ async def send_price_agreement_request_to_supernodes(request: db_code.CreditPack
             for supernode_pastelid in supernodes
         ]
         supernode_urls_and_statuses = await asyncio.gather(*supernode_liveness_tasks)
-        price_agreement_semaphore = asyncio.Semaphore(MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS)
+        price_agreement_semaphore = asyncio.Semaphore(MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS*5)
         async def send_request(supernode_base_url, payload, timeout):
             async with price_agreement_semaphore:
                 try:
