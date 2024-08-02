@@ -313,7 +313,7 @@ class MNIDTicketDetails(SQLModel, table=True):
 # Credit pack related models:
 
 class CreditPackPurchaseRequest(SQLModel, table=True):
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, index=True, nullable=True)
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), index=True, nullable=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
     requesting_end_user_pastelid: str = Field(index=True)
     requested_initial_credits_in_credit_pack: int
@@ -425,7 +425,7 @@ class CreditPackPurchaseRequestPreliminaryPriceQuoteResponse(SQLModel, table=Tru
         }
         
 class CreditPackPurchasePriceAgreementRequest(SQLModel, table=True):
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(index=True)
     supernode_requesting_price_agreement_pastelid: str = Field(index=True)
     credit_pack_purchase_request_fields_json_b64: str
@@ -436,6 +436,7 @@ class CreditPackPurchasePriceAgreementRequest(SQLModel, table=True):
     price_agreement_request_message_version_string: str
     sha3_256_hash_of_price_agreement_request_fields: str = Field(index=True)
     supernode_requesting_price_agreement_pastelid_signature_on_request_hash: str
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -510,7 +511,7 @@ class CreditPackPurchaseRequestResponseTermination(SQLModel, table=True):
         }        
         
 class CreditPackPurchaseRequestResponse(SQLModel, table=True):
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     credit_pack_purchase_request_fields_json_b64: str
     psl_cost_per_credit: float
@@ -552,7 +553,7 @@ class CreditPackPurchaseRequestResponse(SQLModel, table=True):
                 "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x9abc...",
                 "responding_supernode_signature_on_credit_pack_purchase_request_response_hash": "0xdef0..."
             }
-        }
+        }        
         
 class CreditPackPurchaseRequestResponseTxidMapping(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_fields", primary_key=True, index=True)
@@ -566,9 +567,9 @@ class CreditPackPurchaseRequestResponseTxidMapping(SQLModel, table=True):
         }
         
 class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True, index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(index=True, foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields")
+    sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(index=True, foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields")
     credit_pack_purchase_request_fields_json_b64: str
     requesting_end_user_pastelid: str = Field(index=True)
     txid_of_credit_purchase_burn_transaction: str = Field(index=True)
@@ -595,9 +596,9 @@ class CreditPackPurchaseRequestConfirmation(SQLModel, table=True):
         }
 
 class CreditPackPurchaseRequestConfirmationResponse(SQLModel, table=True):
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
-    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str = Field(foreign_key="creditpackpurchaserequestconfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields", index=True)
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True, index=True)
+    sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(index=True, foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields")
+    sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields: str = Field(index=True, foreign_key="creditpackpurchaserequestconfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields")
     credit_pack_confirmation_outcome_string: str
     pastel_api_credit_pack_ticket_registration_txid: str = Field(index=True)
     credit_pack_confirmation_failure_reason_if_applicable: str
@@ -624,7 +625,7 @@ class CreditPackPurchaseRequestConfirmationResponse(SQLModel, table=True):
                 "responding_supernode_signature_on_credit_pack_purchase_request_confirmation_response_hash": "0x1234..."
             }
         }
-
+        
 class CreditPackRequestStatusCheck(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(primary_key=True, index=True)
     requesting_end_user_pastelid: str = Field(index=True)
@@ -639,7 +640,7 @@ class CreditPackRequestStatusCheck(SQLModel, table=True):
         }
 
 class CreditPackPurchaseRequestStatus(SQLModel, table=True):
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True, index=True)
     sha3_256_hash_of_credit_pack_purchase_request_fields: str = Field(foreign_key="creditpackpurchaserequest.sha3_256_hash_of_credit_pack_purchase_request_fields", index=True)
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(foreign_key="creditpackpurchaserequestresponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields", index=True)
     status: str = Field(index=True)
@@ -650,11 +651,13 @@ class CreditPackPurchaseRequestStatus(SQLModel, table=True):
     responding_supernode_pastelid: str = Field(index=True)
     sha3_256_hash_of_credit_pack_purchase_request_status_fields: str = Field(unique=True, index=True)
     responding_supernode_signature_on_credit_pack_purchase_request_status_hash: str
+
     class Config:
         json_schema_extra = {
             "example": {
                 "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "sha3_256_hash_of_credit_pack_purchase_request_fields": "0x1234...",
+                "sha3_256_hash_of_credit_pack_purchase_request_response_fields": "0x5678...",
                 "status": "in_progress",
                 "status_details": "Waiting for price agreement responses from supernodes",
                 "status_update_timestamp_utc_iso_string": "2023-06-01T12:30:00Z",
@@ -665,7 +668,7 @@ class CreditPackPurchaseRequestStatus(SQLModel, table=True):
                 "responding_supernode_signature_on_credit_pack_purchase_request_status_hash": "0xef01..."
             }
         }
-
+        
 class CreditPackStorageRetryRequest(SQLModel, table=True):
     sha3_256_hash_of_credit_pack_purchase_request_response_fields: str = Field(primary_key=True, index=True)
     credit_pack_purchase_request_fields_json_b64: str
@@ -721,7 +724,7 @@ class CreditPackStorageRetryRequestResponse(SQLModel, table=True):
         }
         
 class CreditPackKnownBadTXID(SQLModel, table=True):
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True, index=True)
     credit_pack_ticket_txid: str = Field(index=True)
     list_of_reasons_it_is_known_bad: str = Field(sa_column=Column(JSON))
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
@@ -730,13 +733,16 @@ class CreditPackKnownBadTXID(SQLModel, table=True):
             "example": {
                 "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "credit_pack_ticket_txid": "0x1234...",
-                "list_of_reasons_it_is_known_bad": '["Hash of credit pack request response object stored in blockchain does not match the hash included in the object.", "Hash of credit pack request confirmation object stored in blockchain does not match the hash included in the object."]',
+                "list_of_reasons_it_is_known_bad": [
+                    "Hash of credit pack request response object stored in blockchain does not match the hash included in the object.",
+                    "Hash of credit pack request confirmation object stored in blockchain does not match the hash included in the object."
+                ],
                 "timestamp": "2023-06-01T12:00:00Z"
             }
         }
         
 class CreditPackCompleteTicketWithBalance(SQLModel, table=True):
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True, index=True)
     credit_pack_ticket_registration_txid: str = Field(index=True)
     complete_credit_pack_data_json: str = Field(sa_column=Column(JSON))
     datetime_last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
@@ -744,18 +750,18 @@ class CreditPackCompleteTicketWithBalance(SQLModel, table=True):
         json_schema_extra = {
             "example": {
                 "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
-                "credit_pack_ticket_registration_txid": "0x1234...",    
+                "credit_pack_ticket_registration_txid": "0x1234...",
                 "complete_credit_pack_data_json": "",
                 "datetime_last_updated": "2023-06-01T12:00:00Z"
             }
-        }
-                
+        }   
                 
 ##______________________________________________________________________________________________________________________
 # Inference request related models (i.e., using the credit packs to do inferences):
     
+
 class InferenceAPIUsageRequest(SQLModel, table=True):
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True, index=True)
     inference_request_id: str = Field(unique=True, index=True)
     requesting_pastelid: str = Field(index=True)
     credit_pack_ticket_pastel_txid: str = Field(index=True)
@@ -773,7 +779,7 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
         protected_namespaces = ()
         json_schema_extra = {
             "example": {
-                id: "79df343b-4ad3-435c-800e-e59e616ff84d",
+                "id": "79df343b-4ad3-435c-800e-e59e616ff84d",
                 "inference_request_id": "0x1234...",
                 "requesting_pastelid": "jXYJud3rmrR1Sk2scvR47N4E4J5Vv48uCC6se2nUHyfSJ17wacN7rVZLe6Sk",
                 "credit_pack_ticket_pastel_txid": "0x5678...",
@@ -791,9 +797,9 @@ class InferenceAPIUsageRequest(SQLModel, table=True):
         }
 
 class InferenceAPIUsageResponse(SQLModel, table=True):
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True, index=True)
     inference_response_id: str = Field(unique=True, index=True)
-    inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
+    inference_request_id: str = Field(index=True, foreign_key="inferenceapiusagerequest.inference_request_id")
     proposed_cost_of_request_in_inference_credits: float
     remaining_credits_in_pack_after_request_processed: float
     credit_usage_tracking_psl_address: str = Field(index=True)
@@ -801,7 +807,7 @@ class InferenceAPIUsageResponse(SQLModel, table=True):
     max_block_height_to_include_confirmation_transaction: int
     inference_request_response_utc_iso_string: str
     inference_request_response_pastel_block_height: int
-    inference_request_response_message_version_string: str    
+    inference_request_response_message_version_string: str
     sha3_256_hash_of_inference_request_response_fields: str
     supernode_pastelid_and_signature_on_inference_request_response_hash: str
     class Config:
@@ -824,17 +830,17 @@ class InferenceAPIUsageResponse(SQLModel, table=True):
         }
         
 class InferenceAPIOutputResult(SQLModel, table=True):
-    id: Optional[uuid.UUID] = Field(default_factory=uuid.uuid4, primary_key=True, index=True)
+    id: Optional[str] = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True, index=True)
     inference_result_id: str = Field(unique=True, index=True)
-    inference_request_id: str = Field(foreign_key="inferenceapiusagerequest.inference_request_id", index=True)
-    inference_response_id: str = Field(foreign_key="inferenceapiusageresponse.inference_response_id", index=True)
+    inference_request_id: str = Field(index=True, foreign_key="inferenceapiusagerequest.inference_request_id")
+    inference_response_id: str = Field(index=True, foreign_key="inferenceapiusageresponse.inference_response_id")
     responding_supernode_pastelid: str = Field(index=True)
     inference_result_json_base64: str
     inference_result_file_type_strings: str
     inference_result_utc_iso_string: str
     inference_result_pastel_block_height: int
-    inference_result_message_version_string: str    
-    sha3_256_hash_of_inference_result_fields: str    
+    inference_result_message_version_string: str
+    sha3_256_hash_of_inference_result_fields: str
     responding_supernode_signature_on_inference_result_id: str
     class Config:
         json_schema_extra = {
