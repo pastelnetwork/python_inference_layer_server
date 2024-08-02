@@ -58,6 +58,7 @@ python -m pip install --upgrade pip
 python -m pip install --upgrade setuptools
 pip install wheel
 pip install -r requirements.txt
+pip list --outdated --format=columns | tail -n +3 | awk '{print $1}' | xargs -n1 pip install -U
 python main.py
 EOF
 chmod 0755 ~/run_script.sh
