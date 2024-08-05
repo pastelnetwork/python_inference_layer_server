@@ -5660,13 +5660,13 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
         logger.info(f"Now scanning blockchain for burn transactions sent from address {credit_usage_tracking_psl_address}...")
         burn_transactions = await rpc_connection.getaddressutxosextra({
             "addresses": [burn_address],
-            "simple": True,
+            "mempool": True,
             "minHeight": min_height_for_credit_pack_tickets,
             "sender": credit_usage_tracking_psl_address
         })
         # Check if the result is valid
         if not burn_transactions:
-            logger.warning(f"No transactions found for address {credit_usage_tracking_psl_address}. Returning initial balance.")
+            logger.info(f"No transactions found for address {credit_usage_tracking_psl_address}. Returning initial balance.")
             return initial_credit_balance, 0
         # Filter out transactions where 'patoshis' exceeds 100000
         burn_transactions = [tx for tx in burn_transactions if tx.get('patoshis', 0) <= 100000]
