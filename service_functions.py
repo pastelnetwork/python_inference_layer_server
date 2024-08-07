@@ -789,8 +789,7 @@ async def check_inference_port(supernode, max_response_time_in_milliseconds, loc
             last_updated = (datetime.now(timezone.utc) - timestamp).total_seconds()
             local_performance_data.append({'IP Address': ip_address, 'Performance Ratio': performance_ratio, 'Actual Score': actual_score, 'Seconds Since Last Updated': last_updated})
             return supernode
-    except (httpx.RequestError, httpx.ConnectTimeout) as e:
-        logger.error(f"Error checking port for {ip_address}: {e}", exc_info=True)
+    except (httpx.RequestError, httpx.ConnectTimeout):
         return None
 
 async def update_performance_data_df(local_performance_data):
