@@ -1261,21 +1261,16 @@ async def get_supernode_inference_server_benchmark_plots():
     performance_data_history = await read_performance_data()
     if not performance_data_history:
         raise HTTPException(status_code=404, detail="No performance data available.")
-    
     data_frames = []
     for timestamp, df in performance_data_history.items():
         df['Timestamp'] = timestamp
         data_frames.append(df)
-    
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
     
     combined_df = pd.concat(data_frames)
     non_summary_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
     summary_df = combined_df[combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
-    
-    # Get the most recent entry for each supernode
-    most_recent_df = non_summary_df.sort_values('Timestamp').groupby('IP Address').tail(1)
     
     # Generate the main plot with line charts for each supernode
     fig_main = px.line(non_summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
@@ -1311,6 +1306,8 @@ async def get_supernode_inference_server_benchmark_plots():
     )
     summary_plot_html = fig_summary.to_html(full_html=False, include_plotlyjs=False)
     
+    # Get the most recent entry for each supernode
+    most_recent_df = non_summary_df.sort_values('Timestamp').groupby('IP Address').tail(1)
     # Convert the most recent dataframe to HTML table format
     table_html = most_recent_df.to_html(classes='display nowrap', index=False)
     
