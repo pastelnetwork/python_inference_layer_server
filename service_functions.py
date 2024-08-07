@@ -630,7 +630,7 @@ async def micro_benchmarking_func():
             if 'blocks' in info_results and isinstance(info_results['blocks'], int):
                 actual_score += 1
         except Exception as e:
-            logger.error(f"Error during benchmarking: {e}")
+            logger.error(f"Error during benchmarking: {e}", exc_info=True)
             continue
     benchmark_performance_ratio = actual_score / baseline_score
     current_datetime_utc = datetime.utcnow().isoformat()
@@ -770,8 +770,8 @@ async def check_inference_port(supernode, max_response_time_in_milliseconds, loc
         return None
     ip_address = ip_address_port.split(":")[0]
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(f'http://{ip_address}:7123/liveness_ping', timeout=max_response_time_in_milliseconds / 1000)
+        async with httpx.AsyncClient(timeout=max_response_time_in_milliseconds / 1000) as client:
+            response = await client.get(f'http://{ip_address}:7123/liveness_ping')
             if response.status_code != 200:
                 return None
             response_data = response.json()
@@ -783,33 +783,35 @@ async def check_inference_port(supernode, max_response_time_in_milliseconds, loc
             last_updated = (datetime.now(timezone.utc) - datetime.fromisoformat(response_data.get('timestamp'))).total_seconds()
             local_performance_data.append({'IP Address': ip_address, 'Performance Ratio': performance_ratio, 'Actual Score': actual_score, 'Seconds Since Last Updated': last_updated})
             return supernode
-    except Exception as e:
-        logger.error(f"Error checking port for {ip_address}: {e}", exc_info=True)
+    except (httpx.RequestError, httpx.ConnectTimeout) as e:  # noqa: F841
+        pass
         return None
 
 async def update_performance_data_df(local_performance_data):
     global performance_data_df
     local_performance_data_df = pd.DataFrame(local_performance_data)
     local_performance_data_df.sort_values(by='IP Address', inplace=True)
+    # Replace "N/A" with NaN for numerical operations
+    local_performance_data_df.replace("N/A", pd.NA, inplace=True)
     summary_statistics = {
         'IP Address': ['Min', 'Average', 'Median', 'Max'],
         'Performance Ratio': [
-            local_performance_data_df['Performance Ratio'].min(),
-            local_performance_data_df['Performance Ratio'].mean(),
-            local_performance_data_df['Performance Ratio'].median(),
-            local_performance_data_df['Performance Ratio'].max()
+            pd.to_numeric(local_performance_data_df['Performance Ratio'], errors='coerce').min(),
+            pd.to_numeric(local_performance_data_df['Performance Ratio'], errors='coerce').mean(),
+            pd.to_numeric(local_performance_data_df['Performance Ratio'], errors='coerce').median(),
+            pd.to_numeric(local_performance_data_df['Performance Ratio'], errors='coerce').max()
         ],
         'Actual Score': [
-            local_performance_data_df['Actual Score'].min(),
-            local_performance_data_df['Actual Score'].mean(),
-            local_performance_data_df['Actual Score'].median(),
-            local_performance_data_df['Actual Score'].max()
+            pd.to_numeric(local_performance_data_df['Actual Score'], errors='coerce').min(),
+            pd.to_numeric(local_performance_data_df['Actual Score'], errors='coerce').mean(),
+            pd.to_numeric(local_performance_data_df['Actual Score'], errors='coerce').median(),
+            pd.to_numeric(local_performance_data_df['Actual Score'], errors='coerce').max()
         ],
         'Seconds Since Last Updated': [
-            local_performance_data_df['Seconds Since Last Updated'].min(),
-            local_performance_data_df['Seconds Since Last Updated'].mean(),
-            local_performance_data_df['Seconds Since Last Updated'].median(),
-            local_performance_data_df['Seconds Since Last Updated'].max()
+            pd.to_numeric(local_performance_data_df['Seconds Since Last Updated'], errors='coerce').min(),
+            pd.to_numeric(local_performance_data_df['Seconds Since Last Updated'], errors='coerce').mean(),
+            pd.to_numeric(local_performance_data_df['Seconds Since Last Updated'], errors='coerce').median(),
+            pd.to_numeric(local_performance_data_df['Seconds Since Last Updated'], errors='coerce').max()
         ]
     }
     summary_df = pd.DataFrame(summary_statistics)
