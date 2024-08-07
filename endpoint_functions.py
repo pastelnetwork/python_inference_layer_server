@@ -1261,15 +1261,22 @@ async def get_supernode_inference_server_benchmark_plots():
     performance_data_history = await read_performance_data()
     if not performance_data_history:
         raise HTTPException(status_code=404, detail="No performance data available.")
+    
     data_frames = []
     for timestamp, df in performance_data_history.items():
         df['Timestamp'] = timestamp
         data_frames.append(df)
+    
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
+    
     combined_df = pd.concat(data_frames)
     non_summary_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
     summary_df = combined_df[combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
+    
+    # Get the most recent entry for each supernode
+    most_recent_df = non_summary_df.sort_values('Timestamp').groupby('IP Address').tail(1)
+    
     # Generate the main plot with line charts for each supernode
     fig_main = px.line(non_summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
                         title="Supernode Inference Server Benchmark Performance",
@@ -1286,6 +1293,7 @@ async def get_supernode_inference_server_benchmark_plots():
         text=non_summary_df['IP Address']
     )
     main_plot_html = fig_main.to_html(full_html=False, include_plotlyjs='cdn')
+    
     # Generate the summary plot with line charts for Min, Average, Median, Max
     fig_summary = px.line(summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
                             title="Summary Statistics (Min, Average, Median, Max)",
@@ -1302,8 +1310,10 @@ async def get_supernode_inference_server_benchmark_plots():
         text=summary_df['IP Address']
     )
     summary_plot_html = fig_summary.to_html(full_html=False, include_plotlyjs=False)
-    # Convert the combined dataframe to HTML table format
-    table_html = combined_df.to_html(classes='display nowrap', index=False)
+    
+    # Convert the most recent dataframe to HTML table format
+    table_html = most_recent_df.to_html(classes='display nowrap', index=False)
+    
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -1336,6 +1346,21 @@ async def get_supernode_inference_server_benchmark_plots():
             }}
             hr {{
                 margin: 40px 0;
+            }}
+            table.dataTable {{
+                width: 100% !important;
+                border-collapse: collapse;
+            }}
+            table.dataTable thead th {{
+                background-color: #f2f2f2;
+                text-align: left;
+                padding: 8px;
+            }}
+            table.dataTable tbody tr:nth-child(even) {{
+                background-color: #f9f9f9;
+            }}
+            table.dataTable tbody td {{
+                padding: 8px;
             }}
         </style>
         <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
