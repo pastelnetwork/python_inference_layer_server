@@ -828,9 +828,23 @@ async def update_performance_data_df(local_performance_data):
 async def save_performance_data_history(local_performance_data_df):
     global performance_data_history
     current_time_str = datetime.utcnow().isoformat()
+    # Load existing data
+    if pickle_file_path.exists():
+        try:
+            with open(pickle_file_path, 'rb') as f:
+                existing_data = pickle.load(f)
+        except (EOFError, pickle.UnpicklingError) as e:
+            logger.error(f"Error reading existing pickle file: {e}", exc_info=True)
+            existing_data = {}
+    else:
+        existing_data = {}
+    # Update the global performance_data_history
+    performance_data_history.update(existing_data)
     performance_data_history[current_time_str] = local_performance_data_df
+    # Remove entries older than two weeks
     cutoff_date = datetime.utcnow() - timedelta(weeks=2)
     performance_data_history = {k: v for k, v in performance_data_history.items() if datetime.fromisoformat(k) >= cutoff_date}
+    # Save updated data
     try:
         with open(pickle_file_path, 'wb') as f:
             pickle.dump(performance_data_history, f)
