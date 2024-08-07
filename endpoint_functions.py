@@ -1041,13 +1041,14 @@ async def update_inference_sn_reputation_score_endpoint(
     is_updated = await service_functions.update_inference_sn_reputation_score(reputation_score_data.supernode_pastelid, reputation_score_data.reputation_score)
     return {"is_updated": is_updated}
 
+
 @router.get("/show_logs/{minutes}", response_class=HTMLResponse)
 async def show_logs(minutes: int = 5):
     # read the entire log file and generate HTML with logs up to `minutes` minutes from now
     with open("pastel_supernode_inference_layer.log", "r") as f:
         lines = f.readlines()
     logs = []
-    now = datetime.now(timezone('UTC'))  # get current time, make it timezone-aware
+    now = datetime.now(timezone.utc)  # get current time, make it timezone-aware
     for line in lines:
         if line.strip() == "":
             continue
@@ -1055,26 +1056,26 @@ async def show_logs(minutes: int = 5):
             try:  # Try to parse the datetime
                 log_datetime_str = line.split(" - ")[0]  # assuming the datetime is at the start of each line
                 log_datetime = datetime.strptime(log_datetime_str, "%Y-%m-%d %H:%M:%S,%f")  # parse the datetime string to a datetime object
-                log_datetime = log_datetime.replace(tzinfo=timezone('UTC'))  # set the datetime object timezone to UTC to match `now`
+                log_datetime = log_datetime.replace(tzinfo=timezone.utc)  # set the datetime object timezone to UTC to match `now`
                 if now - log_datetime <= timedelta(minutes=minutes):  # if the log is within `minutes` minutes from now
-                    continue  # ignore the log and continue with the next line
+                    logs.append(service_functions.highlight_rules_func(line.rstrip('\n')))  # add the highlighted log to the list and strip any newline at the end
             except ValueError:
                 pass  # If the line does not start with a datetime, ignore the ValueError and process the line anyway                        
-            logs.append(service_functions.highlight_rules_func(line.rstrip('\n')))  # add the highlighted log to the list and strip any newline at the end
+    
     logs_as_string = "<br>".join(logs)  # joining with <br> directly
     logs_as_string_newlines_rendered = logs_as_string.replace("\n", "<br>")
-    logs_as_string_newlines_rendered_font_specified = """
+    logs_as_string_newlines_rendered_font_specified = f"""
     <html>
     <head>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
     <script>
     var logContainer;
-    var lastLogs = `{0}`;
+    var lastLogs = `{logs_as_string_newlines_rendered}`;
     var shouldScroll = true;
     var userScroll = false;
     var lastPosition = 0;
-    var minutes = {1};
+    var minutes = {minutes};
     function fetchLogs() {{
         if (typeof minutes !== 'undefined' && typeof lastPosition !== 'undefined') {{
             fetch('/show_logs_incremental/' + minutes + '/' + lastPosition)
@@ -1194,13 +1195,13 @@ async def show_logs(minutes: int = 5):
     <button id="copy-button" class="icon-button"><i class="fas fa-copy"></i></button>
     <button id="download-button" class="icon-button"><i class="fas fa-download"></i></button>
     </body>
-    </html>""".format(logs_as_string_newlines_rendered, minutes)
-    return logs_as_string_newlines_rendered_font_specified
+    </html>"""
+    return HTMLResponse(content=logs_as_string_newlines_rendered_font_specified)
 
 
 @router.get("/show_logs", response_class=HTMLResponse)
 async def show_logs_default():
-    return show_logs(5)
+    return await show_logs(5)
 
 
 async def read_performance_data():
