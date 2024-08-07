@@ -1203,6 +1203,7 @@ async def show_logs_default():
     return show_logs(5)
 
 
+
 async def read_performance_data():
     retries = 3
     for _ in range(retries):
@@ -1219,35 +1220,46 @@ async def read_performance_data():
             await asyncio.sleep(2)
     raise HTTPException(status_code=500, detail="Could not read performance data.")
 
-
 @router.get("/get_supernode_inference_server_benchmark_plots")
 async def get_supernode_inference_server_benchmark_plots():
     performance_data_history = await read_performance_data()
     if not performance_data_history:
         raise HTTPException(status_code=404, detail="No performance data available.")
+    
     data_frames = []
     for timestamp, df in performance_data_history.items():
         df['Timestamp'] = timestamp
         data_frames.append(df)
+    
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
+    
     combined_df = pd.concat(data_frames)
     combined_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
+    
+    # Generate the plot
     fig = px.scatter(combined_df, x='Timestamp', y='Performance Ratio', color='IP Address',
                         title="Supernode Inference Server Benchmark Performance",
                         labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
                         template='ggplot2')
+    
     fig.update_layout(
         font=dict(family="Montserrat", size=14, color="black"),
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray')
     )
+    
     fig.update_traces(marker=dict(size=12),
                         selector=dict(mode='markers'),
                         hovertemplate='<b>IP Address</b>: %{text}<br><b>Performance Ratio</b>: %{y}<br><b>Timestamp</b>: %{x}<extra></extra>',
                         text=combined_df['IP Address'])
+    
     plot_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
+    
+    # Convert the combined dataframe to HTML table format
+    table_html = combined_df.to_html(classes='display nowrap', index=False)
+    
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -1256,6 +1268,7 @@ async def get_supernode_inference_server_benchmark_plots():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Supernode Inference Server Benchmark Performance</title>
         <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500&display=swap" rel="stylesheet">
+        <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.css">
         <style>
             body {{
                 font-family: 'Montserrat', sans-serif;
@@ -1273,7 +1286,16 @@ async def get_supernode_inference_server_benchmark_plots():
                 width: 90%;
                 margin: 0 auto;
             }}
+            .table-container {{
+                width: 90%;
+                margin: 20px auto;
+            }}
+            hr {{
+                margin: 40px 0;
+            }}
         </style>
+        <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
+        <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.js"></script>
         <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
     </head>
     <body>
@@ -1281,7 +1303,20 @@ async def get_supernode_inference_server_benchmark_plots():
         <div class="plot-container">
             {plot_html}
         </div>
+        <hr>
+        <h2 style="text-align:center;">Benchmark Data Table</h2>
+        <div class="table-container">
+            {table_html}
+        </div>
+        <script>
+            $(document).ready(function() {{
+                $('table.display').DataTable({{
+                    scrollX: true
+                }});
+            }});
+        </script>
     </body>
     </html>
     """
+    
     return HTMLResponse(content=html_content)
