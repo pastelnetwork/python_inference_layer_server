@@ -1023,6 +1023,11 @@ async def get_inference_model_menu_endpoint(
     return model_menu
 
 
+@router.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return FileResponse("favicon.ico")
+
+
 @router.get("/download/{file_name}")
 async def download_file(file_name: str):
     file_location = os.path.join(tempfile.gettempdir(), file_name)
@@ -1044,6 +1049,7 @@ async def update_inference_sn_reputation_score_endpoint(
 
 @router.get("/show_logs/{minutes}", response_class=HTMLResponse)
 async def show_logs(minutes: int = 5):
+    logger.info("Reading logs for the last %d minutes", minutes)
     # Read the entire log file and generate HTML with logs up to `minutes` minutes from now
     with open("pastel_supernode_inference_layer.log", "r") as f:
         lines = f.readlines()
@@ -1215,10 +1221,11 @@ def show_logs_incremental(minutes: int, last_position: int):
                     log_datetime_str = line.split(" - ")[0]  # Assuming the datetime is at the start of each line
                     log_datetime = datetime.strptime(log_datetime_str, "%Y-%m-%d %H:%M:%S,%f")  # Parse the datetime string to a datetime object
                     log_datetime = log_datetime.replace(tzinfo=timezone.utc)  # Set the datetime object timezone to UTC to match `now`
-                    if now - log_datetime <= timedelta(minutes=minutes):  # If the log is within `minutes` minutes from now
-                        new_logs.append(service_functions.highlight_rules_func(line.rstrip('\n')))  # Add the highlighted log to the list and strip any newline at the end
+                    if now - log_datetime > timedelta(minutes=minutes):  # If the log is older than `minutes` minutes from now
+                        continue  # Ignore the log and continue with the next line
                 except ValueError:
                     pass  # If the line does not start with a datetime, ignore the ValueError and process the line anyway
+                new_logs.append(service_functions.highlight_rules_func(line.rstrip('\n')))  # Add the highlighted log to the list and strip any newline at the end
             last_position = f.tell()  # Get the last position
         new_logs_as_string = "<br>".join(new_logs)  # Joining with <br> directly
     except FileNotFoundError:
@@ -1230,6 +1237,7 @@ def show_logs_incremental(minutes: int, last_position: int):
 @router.get("/show_logs", response_class=HTMLResponse)
 async def show_logs_default():
     return await show_logs(5)
+
 
 async def read_performance_data():
     retries = 3
