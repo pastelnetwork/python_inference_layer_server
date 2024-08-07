@@ -1267,7 +1267,6 @@ async def get_supernode_inference_server_benchmark_plots():
         data_frames.append(df)
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
-    
     combined_df = pd.concat(data_frames)
     non_summary_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
     summary_df = combined_df[combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
