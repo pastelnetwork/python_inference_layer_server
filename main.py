@@ -18,7 +18,7 @@ from uvicorn import Config, Server
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from database_code import initialize_db
 from setup_swiss_army_llama import check_and_setup_swiss_army_llama
-from service_functions import (monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value, fetch_all_mnid_tickets_details, establish_ssh_tunnel,
+from service_functions import (monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value, fetch_all_mnid_tickets_details, establish_ssh_tunnel, schedule_micro_benchmark_periodically
                                 list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them, periodic_ticket_listing_and_validation, generate_supernode_inference_ip_blacklist)
 
 config = DecoupleConfig(RepositoryEnv('.env'))
@@ -98,6 +98,7 @@ async def startup():
         asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
         await generate_supernode_inference_ip_blacklist()  # Compile IP blacklist text file of unresponsive Supernodes for inference tasks
         asyncio.create_task(schedule_generate_supernode_inference_ip_blacklist())  # Schedule the task
+        asyncio.create_task(schedule_micro_benchmark_periodically())  # Schedule the task
     except Exception as e:
         logger.error(f"Error during startup: {e}")
         
