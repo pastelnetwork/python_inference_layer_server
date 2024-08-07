@@ -155,7 +155,7 @@ local_ip = get_local_ip()
 benchmark_results_cache = [] # Global cache to store benchmark results in memory
 performance_data_df = pd.DataFrame(columns=['IP Address', 'Performance Ratio', 'Actual Score', 'Seconds Since Last Updated'])
 performance_data_history = {}
-csv_file_path = Path('local_sn_micro_benchmark_results.csv')
+local_benchmark_csv_file_path = Path('local_sn_micro_benchmark_results.csv')
 pickle_file_path = Path('performance_data_history.pkl')
 
 config = DecoupleConfig(RepositoryEnv('.env'))
@@ -641,7 +641,7 @@ async def micro_benchmarking_func():
 
 async def write_benchmark_cache_to_csv():
     try:
-        with open(csv_file_path, mode='w', newline='') as file:
+        with open(local_benchmark_csv_file_path, mode='w', newline='') as file:
             writer = csv.writer(file)
             writer.writerows(benchmark_results_cache)
     except Exception as e:
@@ -650,8 +650,8 @@ async def write_benchmark_cache_to_csv():
 async def load_benchmark_cache_from_csv():
     global benchmark_results_cache
     try:
-        if csv_file_path.exists():
-            with open(csv_file_path, mode='r') as file:
+        if local_benchmark_csv_file_path.exists():
+            with open(local_benchmark_csv_file_path, mode='r') as file:
                 reader = csv.reader(file)
                 benchmark_results_cache = list(reader)
     except Exception as e:
