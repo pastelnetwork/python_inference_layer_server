@@ -1332,13 +1332,10 @@ async def get_supernode_inference_server_benchmark_plots():
                 font-size: 2.5em;
                 margin-bottom: 20px;
             }}
-            .plot-container {{
+            .plot-container, .table-container {{
                 width: 90%;
                 margin: 0 auto;
-            }}
-            .table-container {{
-                width: 90%;
-                margin: 20px auto;
+                max-width: 1200px;
             }}
             hr {{
                 margin: 40px 0;
