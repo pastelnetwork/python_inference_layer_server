@@ -1,3 +1,6 @@
+import warnings
+from cryptography.utils import CryptographyDeprecationWarning
+warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 from logger_config import setup_logger
 from endpoint_functions import router
 import asyncio
