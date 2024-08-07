@@ -775,16 +775,18 @@ async def check_inference_port(supernode, max_response_time_in_milliseconds, loc
             if response.status_code != 200:
                 return None
             response_data = response.json()
-            performance_ratio = response_data.get('performance_ratio_score', 0)
+            performance_ratio = response_data.get('performance_ratio_score')
+            if performance_ratio is None:
+                performance_ratio = float('nan')  # Assign NaN if the value is None
             actual_score = response_data.get('raw_benchmark_score', 'N/A')
-            if performance_ratio < MICRO_BENCHMARK_PERFORMANCE_RATIO_THRESHOLD:
+            if not isinstance(performance_ratio, (int, float)) or performance_ratio < MICRO_BENCHMARK_PERFORMANCE_RATIO_THRESHOLD:
                 performance_ratio = 'N/A'
                 actual_score = 'N/A'
             last_updated = (datetime.now(timezone.utc) - datetime.fromisoformat(response_data.get('timestamp'))).total_seconds()
             local_performance_data.append({'IP Address': ip_address, 'Performance Ratio': performance_ratio, 'Actual Score': actual_score, 'Seconds Since Last Updated': last_updated})
             return supernode
-    except (httpx.RequestError, httpx.ConnectTimeout) as e:  # noqa: F841
-        pass
+    except (httpx.RequestError, httpx.ConnectTimeout) as e:
+        logger.error(f"Error checking port for {ip_address}: {e}", exc_info=True)
         return None
 
 async def update_performance_data_df(local_performance_data):
