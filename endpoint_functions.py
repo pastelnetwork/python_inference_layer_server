@@ -1042,6 +1042,36 @@ async def update_inference_sn_reputation_score_endpoint(
     return {"is_updated": is_updated}
 
 
+@router.get("/show_logs_incremental/{minutes}/{last_position}")
+def show_logs_incremental(minutes: int, last_position: int):
+    new_logs = []
+    now = datetime.now(timezone('UTC'))  # get current time, make it timezone-aware
+    try:
+        with open("opennode_fastapi_log.txt", "r") as f:
+            f.seek(last_position)  # seek to `last_position`
+            while True:
+                line = f.readline()
+                if line == "":  # if EOF
+                    break
+                if line.strip() == "":
+                    continue
+                try:  # Try to parse the datetime
+                    log_datetime_str = line.split(" - ")[0]  # assuming the datetime is at the start of each line
+                    log_datetime = datetime.strptime(log_datetime_str, "%Y-%m-%d %H:%M:%S,%f")  # parse the datetime string to a datetime object
+                    log_datetime = log_datetime.replace(tzinfo=timezone('UTC'))  # set the datetime object timezone to UTC to match `now`
+                    if now - log_datetime > timedelta(minutes=minutes):  # if the log is older than `minutes` minutes from now
+                        continue  # ignore the log and continue with the next line
+                except ValueError:
+                    pass  # If the line does not start with a datetime, ignore the ValueError and process the line anyway
+                new_logs.append(service_functions.highlight_rules_func(line.rstrip('\n')))  # add the highlighted log to the list and strip any newline at the end
+            last_position = f.tell()  # get the last position
+        new_logs_as_string = "<br>".join(new_logs)  # joining with <br> directly
+    except FileNotFoundError:
+        new_logs_as_string = ""
+        last_position = 0
+    return {"logs": new_logs_as_string, "last_position": last_position}  # also return the last position
+
+
 @router.get("/show_logs/{minutes}", response_class=HTMLResponse)
 async def show_logs(minutes: int = 5):
     # read the entire log file and generate HTML with logs up to `minutes` minutes from now
