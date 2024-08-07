@@ -782,7 +782,11 @@ async def check_inference_port(supernode, max_response_time_in_milliseconds, loc
             if not isinstance(performance_ratio, (int, float)) or performance_ratio < MICRO_BENCHMARK_PERFORMANCE_RATIO_THRESHOLD:
                 performance_ratio = 'N/A'
                 actual_score = 'N/A'
-            last_updated = (datetime.now(timezone.utc) - datetime.fromisoformat(response_data.get('timestamp'))).total_seconds()
+            timestamp_str = response_data.get('timestamp')
+            timestamp = datetime.fromisoformat(timestamp_str)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=timezone.utc)
+            last_updated = (datetime.now(timezone.utc) - timestamp).total_seconds()
             local_performance_data.append({'IP Address': ip_address, 'Performance Ratio': performance_ratio, 'Actual Score': actual_score, 'Seconds Since Last Updated': last_updated})
             return supernode
     except (httpx.RequestError, httpx.ConnectTimeout) as e:

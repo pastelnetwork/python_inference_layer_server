@@ -46,20 +46,23 @@ class DateTimeEncoder(JSONEncoder):
 @router.get("/liveness_ping", response_model=dict)
 async def liveness_ping_function():
     current_utc_timestamp = datetime.now(timezone.utc)
-    if service_functions.benchmark_results_cache: # Get the latest benchmark results from the cache
+    if service_functions.benchmark_results_cache:
         latest_benchmark = service_functions.benchmark_results_cache[-1]
         raw_benchmark_score = latest_benchmark[1]
         performance_ratio_score = latest_benchmark[2]
         last_benchmark_time = datetime.fromisoformat(latest_benchmark[0])
+        if last_benchmark_time.tzinfo is None:
+            last_benchmark_time = last_benchmark_time.replace(tzinfo=timezone.utc)
         last_benchmark_n_seconds_ago = (current_utc_timestamp - last_benchmark_time).total_seconds()
     else:
         raw_benchmark_score = None
         performance_ratio_score = None
         last_benchmark_n_seconds_ago = None
+
     response_dict = {
-        'status': 'alive',
-        'timestamp': current_utc_timestamp,
-        'raw_benchmark_score': raw_benchmark_score,
+        'status': 'alive', 
+        'timestamp': current_utc_timestamp, 
+        'raw_benchmark_score': raw_benchmark_score, 
         'performance_ratio_score': performance_ratio_score,
         'last_benchmark_n_seconds_ago': last_benchmark_n_seconds_ago
     }
