@@ -20,6 +20,7 @@ import traceback
 import html
 import tempfile
 import warnings
+import pickle
 import pytz
 from pathlib import Path
 from collections.abc import Iterable
@@ -152,6 +153,8 @@ loop = asyncio.get_event_loop()
 warnings.filterwarnings('ignore')
 local_ip = get_local_ip()
 benchmark_results_cache = [] # Global cache to store benchmark results in memory
+performance_data_df = pd.DataFrame(columns=['IP Address', 'Performance Ratio', 'Actual Score', 'Seconds Since Last Updated'])
+performance_data_history = {}
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0, cast=int)
@@ -761,42 +764,83 @@ async def check_masternode_top_func():
     masternode_top_command_output = await rpc_connection.masternode('top')
     return masternode_top_command_output
 
+async def check_inference_port(supernode, max_response_time_in_milliseconds, local_performance_data):
+    ip_address_port = supernode.get('ipaddress:port')
+    if not ip_address_port or ip_address_port.startswith(local_ip):
+        return None
+    ip_address = ip_address_port.split(":")[0]
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f'http://{ip_address}:7123/liveness_ping', timeout=max_response_time_in_milliseconds / 1000)
+            if response.status_code != 200:
+                return None
+            response_data = response.json()
+            performance_ratio = response_data.get('performance_ratio_score', 0)
+            actual_score = response_data.get('raw_benchmark_score', 'N/A')
+            if performance_ratio < MICRO_BENCHMARK_PERFORMANCE_RATIO_THRESHOLD:
+                performance_ratio = 'N/A'
+                actual_score = 'N/A'
+            last_updated = (datetime.now(timezone.utc) - datetime.fromisoformat(response_data.get('timestamp'))).total_seconds()
+            local_performance_data.append({'IP Address': ip_address, 'Performance Ratio': performance_ratio, 'Actual Score': actual_score, 'Seconds Since Last Updated': last_updated})
+            return supernode
+    except httpx.RequestError:
+        return None
+
+async def update_performance_data_df(local_performance_data):
+    global performance_data_df
+    local_performance_data_df = pd.DataFrame(local_performance_data)
+    local_performance_data_df.sort_values(by='IP Address', inplace=True)
+    summary_statistics = {
+        'IP Address': ['Min', 'Average', 'Median', 'Max'],
+        'Performance Ratio': [
+            local_performance_data_df['Performance Ratio'].min(),
+            local_performance_data_df['Performance Ratio'].mean(),
+            local_performance_data_df['Performance Ratio'].median(),
+            local_performance_data_df['Performance Ratio'].max()
+        ],
+        'Actual Score': [
+            local_performance_data_df['Actual Score'].min(),
+            local_performance_data_df['Actual Score'].mean(),
+            local_performance_data_df['Actual Score'].median(),
+            local_performance_data_df['Actual Score'].max()
+        ],
+        'Seconds Since Last Updated': [
+            local_performance_data_df['Seconds Since Last Updated'].min(),
+            local_performance_data_df['Seconds Since Last Updated'].mean(),
+            local_performance_data_df['Seconds Since Last Updated'].median(),
+            local_performance_data_df['Seconds Since Last Updated'].max()
+        ]
+    }
+    summary_df = pd.DataFrame(summary_statistics)
+    local_performance_data_df = pd.concat([local_performance_data_df, summary_df], ignore_index=True)
+    local_performance_data_df.to_csv('supernode_performance_data.csv', index=False)
+    performance_data_df = pd.concat([performance_data_df, local_performance_data_df], ignore_index=True)
+    return local_performance_data_df
+
+async def save_performance_data_history(local_performance_data_df):
+    global performance_data_history
+    current_time_str = datetime.utcnow().isoformat()
+    performance_data_history[current_time_str] = local_performance_data_df
+    cutoff_date = datetime.utcnow() - timedelta(weeks=2)
+    performance_data_history = {k: v for k, v in performance_data_history.items() if datetime.fromisoformat(k) >= cutoff_date}
+    with open('performance_data_history.pkl', 'wb') as f:
+        pickle.dump(performance_data_history, f)
+
 async def generate_supernode_inference_ip_blacklist(max_response_time_in_milliseconds=1200):
+    global performance_data_df, performance_data_history
     blacklist_path = Path('supernode_inference_ip_blacklist.txt')
     logger.info("Now compiling Supernode IP blacklist based on Supernode responses to port checks...")
     if not blacklist_path.exists():
         blacklist_path.touch()
     full_supernode_list_df, _ = await check_supernode_list_func()
-    port_7123_failures = 0
-    micro_benchmark_failures = 0
-    async def check_port(supernode):
-        nonlocal port_7123_failures, micro_benchmark_failures
-        ip_address_port = supernode.get('ipaddress:port')
-        if not ip_address_port or ip_address_port.startswith(local_ip):
-            return None
-
-        ip_address = ip_address_port.split(":")[0]
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(f'http://{ip_address}:7123/liveness_ping', timeout=max_response_time_in_milliseconds / 1000)
-                if response.status_code != 200:
-                    port_7123_failures += 1
-                    return None
-                response_data = response.json()
-                if response_data.get('performance_ratio_score', 0) < MICRO_BENCHMARK_PERFORMANCE_RATIO_THRESHOLD:
-                    micro_benchmark_failures += 1
-                    return None
-                return supernode
-        except httpx.RequestError:
-            port_7123_failures += 1
-            return None
-    check_results = await asyncio.gather(*(check_port(supernode) for supernode in full_supernode_list_df.to_dict(orient='records')))
+    local_performance_data = []
+    check_results = await asyncio.gather(*(check_inference_port(supernode, max_response_time_in_milliseconds, local_performance_data) for supernode in full_supernode_list_df.to_dict(orient='records')))
     filtered_supernodes = [supernode['extKey'] for supernode in check_results if supernode is not None]
     successful_nodes = {supernode['extKey'] for supernode in check_results if supernode is not None}
     failed_nodes = {supernode['ipaddress:port'] for supernode in full_supernode_list_df.to_dict(orient='records') if supernode['extKey'] not in successful_nodes}
-    logger.info(f"Port 7123 failures: {port_7123_failures}")
-    logger.info(f"Micro benchmark failures: {micro_benchmark_failures}")
     logger.info(f"There were {len(failed_nodes)} failed Supernodes out of {len(full_supernode_list_df)} total Supernodes, a failure rate of {len(failed_nodes) / len(full_supernode_list_df) * 100:.2f}%")
+    local_performance_data_df = await update_performance_data_df(local_performance_data)
+    await save_performance_data_history(local_performance_data_df)
     with blacklist_path.open('w') as blacklist_file:
         for failed_node in failed_nodes:
             ip_address = failed_node.split(':')[0]

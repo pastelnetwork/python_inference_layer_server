@@ -8,10 +8,13 @@ from starlette.background import BackgroundTask
 from json import JSONEncoder
 import json
 import os
+import asyncio
 import tempfile
 import uuid
 import traceback
+import pickle
 import pandas as pd
+import plotly.express as px
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Union, Dict, Any
 from pydantic import SecretStr, BaseModel
@@ -1193,4 +1196,83 @@ async def show_logs(minutes: int = 5):
 @router.get("/show_logs", response_class=HTMLResponse)
 async def show_logs_default():
     return show_logs(5)
+
+async def read_performance_data():
+    retries = 3
+    for _ in range(retries):
+        try:
+            with open('performance_data_history.pkl', 'rb') as f:
+                performance_data_history = pickle.load(f)
+            return performance_data_history
+        except (EOFError, pickle.UnpicklingError):
+            await asyncio.sleep(2)
+    raise HTTPException(status_code=500, detail="Could not read performance data.")
+        
+@router.get("/get_supernode_inference_server_benchmark_plots")
+async def get_supernode_inference_server_benchmark_plots():
+    performance_data_history = await read_performance_data()
+    if not performance_data_history:
+        raise HTTPException(status_code=404, detail="No performance data available.")
+    data_frames = []
+    for timestamp, df in performance_data_history.items():
+        df['Timestamp'] = timestamp
+        data_frames.append(df)
+    if not data_frames:
+        raise HTTPException(status_code=404, detail="No data available for plotting.")
+    combined_df = pd.concat(data_frames)
+    # Filter out the summary statistics rows
+    combined_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
+    # Create plots using Plotly
+    fig = px.scatter(combined_df, x='Timestamp', y='Performance Ratio', color='IP Address',
+                        title="Supernode Inference Server Benchmark Performance",
+                        labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
+                        template='ggplot2')
+    fig.update_layout(
+        font=dict(family="Montserrat", size=14, color="black"),
+        title=dict(font=dict(size=20)),
+        xaxis=dict(showgrid=True, gridcolor='LightGray'),
+        yaxis=dict(showgrid=True, gridcolor='LightGray')
+    )
+    fig.update_traces(marker=dict(size=12),
+                        selector=dict(mode='markers'),
+                        hovertemplate='<b>IP Address</b>: %{text}<br><b>Performance Ratio</b>: %{y}<br><b>Timestamp</b>: %{x}<extra></extra>',
+                        text=combined_df['IP Address'])
+    plot_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Supernode Inference Server Benchmark Performance</title>
+        <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500&display=swap" rel="stylesheet">
+        <style>
+            body {{
+                font-family: 'Montserrat', sans-serif;
+                background-color: #f5f5f5;
+                color: #333;
+                margin: 0;
+                padding: 20px;
+            }}
+            h1 {{
+                text-align: center;
+                font-size: 2.5em;
+                margin-bottom: 20px;
+            }}
+            .plot-container {{
+                width: 90%;
+                margin: 0 auto;
+            }}
+        </style>
+        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    </head>
+    <body>
+        <h1>Supernode Inference Server Benchmark Performance</h1>
+        <div class="plot-container">
+            {plot_html}
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
         

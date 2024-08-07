@@ -12,6 +12,7 @@ mutagen
 pandas
 picologging
 pillow
+plotly
 plyvel
 psutil
 python-decouple
