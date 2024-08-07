@@ -7,9 +7,9 @@ import json
 import os
 import io
 import platform
-import math
 import statistics
 import time
+import csv
 import uuid
 import socket
 import subprocess
@@ -44,7 +44,7 @@ from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
 import database_code as db_code
-from sqlmodel import select, delete, update, func, or_, SQLModel
+from sqlmodel import select, func, SQLModel
 from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
@@ -151,6 +151,7 @@ my_os = platform.system()
 loop = asyncio.get_event_loop()
 warnings.filterwarnings('ignore')
 local_ip = get_local_ip()
+benchmark_results_cache = [] # Global cache to store benchmark results in memory
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0, cast=int)
@@ -183,6 +184,7 @@ MINIMUM_NUMBER_OF_PASTEL_BLOCKS_BEFORE_TICKET_STORAGE_RETRY_ALLOWED = config.get
 MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION = config.get("MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION", default=3, cast=int)
 MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES = config.get("MINIMUM_NUMBER_OF_POTENTIALLY_AGREEING_SUPERNODES", default=10, cast=int)
 MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS = config.get("MAXIMUM_NUMBER_OF_CONCURRENT_RPC_REQUESTS", default=30, cast=int)
+MICRO_BENCHMARK_PERFORMANCE_RATIO_THRESHOLD = config.get("MICRO_BENCHMARK_PERFORMANCE_RATIO_THRESHOLD", default=0.4, cast=float)
 INDIVIDUAL_SUPERNODE_PRICE_AGREEMENT_REQUEST_TIMEOUT_PERIOD_IN_SECONDS = config.get("INDIVIDUAL_SUPERNODE_PRICE_AGREEMENT_REQUEST_TIMEOUT_PERIOD_IN_SECONDS", default=12, cast=int)
 INDIVIDUAL_SUPERNODE_MODEL_MENU_REQUEST_TIMEOUT_PERIOD_IN_SECONDS = config.get("INDIVIDUAL_SUPERNODE_MODEL_MENU_REQUEST_TIMEOUT_PERIOD_IN_SECONDS", default=3, cast=int)
 BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS = config.get("BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS", default=3, cast=float)
@@ -612,6 +614,53 @@ class AsyncAuthServiceProxy:
     async def close(self):
         await self.client.aclose()
                     
+async def micro_benchmarking_func():
+    baseline_score = 20  # Replace this with the actual baseline score determined experimentally
+    duration_of_benchmark_in_seconds = 4.0
+    end_time = time.time() + duration_of_benchmark_in_seconds
+    actual_score = 0
+    while time.time() < end_time:
+        try:
+            info_results = await rpc_connection.getinfo()
+            if 'blocks' in info_results and isinstance(info_results['blocks'], int):
+                actual_score += 1
+        except Exception as e:  # noqa: F841
+            continue
+    benchmark_performance_ratio = actual_score / baseline_score
+    current_datetime_utc = datetime.utcnow().isoformat()
+    logger.info(f"Benchmark performance ratio as of {current_datetime_utc}: {benchmark_performance_ratio}; Raw score: {actual_score}")
+    benchmark_results_cache.append([current_datetime_utc, actual_score, benchmark_performance_ratio])
+    cutoff_date = datetime.utcnow() - timedelta(weeks=2)
+    benchmark_results_cache[:] = [row for row in benchmark_results_cache if datetime.fromisoformat(row[0]) >= cutoff_date]
+    
+async def write_benchmark_cache_to_csv():
+    csv_file = 'local_sn_micro_benchmark_results.csv'
+    try:
+        with open(csv_file, mode='w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerows(benchmark_results_cache)
+    except Exception as e:
+        logger.error(f"Error writing to CSV: {e}")
+
+async def load_benchmark_cache_from_csv():
+    global benchmark_results_cache
+    csv_file = 'local_sn_micro_benchmark_results.csv'
+    try:
+        with open(csv_file, mode='r') as file:
+            reader = csv.reader(file)
+            benchmark_results_cache = list(reader)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.error(f"Error loading from CSV: {e}")
+
+async def schedule_micro_benchmark_periodically():
+    await load_benchmark_cache_from_csv()
+    while True:
+        await micro_benchmarking_func()
+        await asyncio.sleep(30)  # Run the benchmark every 30 seconds
+        await write_benchmark_cache_to_csv()
+                        
 async def get_current_pastel_block_height_func():
     best_block_hash = await rpc_connection.getbestblockhash()
     best_block_details = await rpc_connection.getblock(best_block_hash)
@@ -719,11 +768,13 @@ async def generate_supernode_inference_ip_blacklist(max_response_time_in_millise
         blacklist_path.touch()
     full_supernode_list_df, _ = await check_supernode_list_func()
     port_7123_failures = 0
+    micro_benchmark_failures = 0
     async def check_port(supernode):
-        nonlocal port_7123_failures
+        nonlocal port_7123_failures, micro_benchmark_failures
         ip_address_port = supernode.get('ipaddress:port')
         if not ip_address_port or ip_address_port.startswith(local_ip):
             return None
+
         ip_address = ip_address_port.split(":")[0]
         try:
             async with httpx.AsyncClient() as client:
@@ -731,7 +782,11 @@ async def generate_supernode_inference_ip_blacklist(max_response_time_in_millise
                 if response.status_code != 200:
                     port_7123_failures += 1
                     return None
-            return supernode
+                response_data = response.json()
+                if response_data.get('performance_ratio_score', 0) < MICRO_BENCHMARK_PERFORMANCE_RATIO_THRESHOLD:
+                    micro_benchmark_failures += 1
+                    return None
+                return supernode
         except httpx.RequestError:
             port_7123_failures += 1
             return None
@@ -740,6 +795,7 @@ async def generate_supernode_inference_ip_blacklist(max_response_time_in_millise
     successful_nodes = {supernode['extKey'] for supernode in check_results if supernode is not None}
     failed_nodes = {supernode['ipaddress:port'] for supernode in full_supernode_list_df.to_dict(orient='records') if supernode['extKey'] not in successful_nodes}
     logger.info(f"Port 7123 failures: {port_7123_failures}")
+    logger.info(f"Micro benchmark failures: {micro_benchmark_failures}")
     logger.info(f"There were {len(failed_nodes)} failed Supernodes out of {len(full_supernode_list_df)} total Supernodes, a failure rate of {len(failed_nodes) / len(full_supernode_list_df) * 100:.2f}%")
     with blacklist_path.open('w') as blacklist_file:
         for failed_node in failed_nodes:
@@ -5579,72 +5635,6 @@ async def fetch_active_supernodes_count_and_details(block_height: int):
     active_supernodes_count = len(active_supernodes)
     return active_supernodes_count, active_supernodes
 
-# async def determine_current_credit_pack_balance_based_on_tracking_transactions_old(credit_pack_ticket_txid: str):
-#     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
-#     _, credit_pack_purchase_request_response, _ = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
-#     credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
-#     credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_fields_json)
-#     initial_credit_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
-#     credit_usage_tracking_psl_address = credit_pack_purchase_request_response.credit_usage_tracking_psl_address
-#     logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,.1f}, Tracking address: {credit_usage_tracking_psl_address}")
-#     async with db_code.Session() as db:
-#         db_transactions_result = await db.exec(
-#             select(db_code.BurnAddressTransaction)
-#             .where(db_code.BurnAddressTransaction.burn_address == burn_address)
-#             .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-#             .where(db_code.BurnAddressTransaction.amount <= 1.0)
-#         )
-#         db_transactions = db_transactions_result.all()
-#     total_credits_consumed = sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
-#     async with db_code.Session() as db:
-#         query_results = await db.execute(select(db_code.BlockHash.block_height))
-#         latest_db_block_height = max(query_results.scalars().all())
-#     current_block_height = await get_current_pastel_block_height_func()
-#     if current_block_height > latest_db_block_height:
-#         async with db_code.Session() as db:
-#             existing_transactions_query = select(db_code.BurnAddressTransaction)
-#             existing_transactions_result = await db.execute(existing_transactions_query)
-#             existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
-#         latest_db_block_hash = await rpc_connection.getblockhash(latest_db_block_height)
-#         listsinceblock_output = await rpc_connection.listsinceblock(latest_db_block_hash, 1, True)
-#         new_transactions = listsinceblock_output["transactions"]
-#         new_burn_transactions = [
-#             tx for tx in new_transactions
-#             if tx.get("address") == burn_address and tx.get("category") == "receive" and tx.get("confirmations", 0) <= (current_block_height - latest_db_block_height) and abs(tx.get("amount")) < 1.0
-#         ]
-#         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
-#         chunk_size = 250
-#         ignore_unconfirmed_transactions = 0
-#         new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
-#         logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
-#         async with db_code.Session() as db:
-#             new_tracking_transactions_results = await db.exec(
-#                 select(db_code.BurnAddressTransaction)
-#                 .where(db_code.BurnAddressTransaction.burn_address == burn_address)
-#                 .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-#                 .where(
-#                     or_(
-#                         db_code.BurnAddressTransaction.block_height > latest_db_block_height,
-#                         db_code.BurnAddressTransaction.pending == True  # noqa: E712
-#                     )
-#                 )
-#             )
-#             new_tracking_transactions = new_tracking_transactions_results.all()
-#         total_credits_consumed += sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_tracking_transactions)
-#         use_update_block_hashes = 0
-#         if use_update_block_hashes:
-#             async with db_code.Session() as db:
-#                 existing_block_hash_results = await db.exec( select(db_code.BlockHash) )
-#                 existing_block_hash_heights = [block_hash.block_height for block_hash in existing_block_hash_results.all()]
-#             new_block_heights_to_get_block_hash_for = [height for height in range(1, current_block_height) if height not in existing_block_hash_heights]
-#             logger.info(f"Now getting block hashes for {len(new_block_heights_to_get_block_hash_for):,} new block heights (from {new_block_heights_to_get_block_hash_for[0]:,} to {current_block_height:,}) and storing in the DB...")
-#             await fetch_and_insert_block_hashes(new_block_heights_to_get_block_hash_for[0], current_block_height)
-#             logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
-#     current_credit_balance = initial_credit_balance - total_credits_consumed
-#     number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
-#     logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
-#     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
-
 async def determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_txid: str):
     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
     _, credit_pack_purchase_request_response, _ = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
@@ -5681,91 +5671,6 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     except Exception as e:
         logger.error(f"Error while determining current credit pack balance: {str(e)}")
         return initial_credit_balance, 0
-
-# async def determine_current_credit_pack_balance_based_on_tracking_transactions_broken(credit_pack_ticket_txid: str): # This is faster but does not work correctly in all cases-- it misses a lot of transactions for some reason. 
-#     logger.info(f"Retrieving credit pack ticket data for txid: {credit_pack_ticket_txid}")
-#     _, credit_pack_purchase_request_response, _ = await retrieve_credit_pack_ticket_using_txid(credit_pack_ticket_txid)
-#     credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
-#     credit_pack_purchase_request_dict = json.loads(credit_pack_purchase_request_fields_json)
-#     initial_credit_balance = credit_pack_purchase_request_dict['requested_initial_credits_in_credit_pack']
-#     credit_usage_tracking_psl_address = credit_pack_purchase_request_response.credit_usage_tracking_psl_address
-#     logger.info(f"Credit pack ticket data retrieved. Initial credit balance: {initial_credit_balance:,.1f}, Tracking address: {credit_usage_tracking_psl_address}")
-#     async with db_code.Session() as db:
-#         db_transactions_result = await db.exec(
-#             select(db_code.BurnAddressTransaction)
-#             .where(db_code.BurnAddressTransaction.burn_address == burn_address)
-#             .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-#         )
-#         db_transactions = db_transactions_result.all()
-#     total_credits_consumed = sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in db_transactions)
-#     async with db_code.Session() as db:
-#         query_results = await db.execute(select(db_code.BlockHash.block_height))
-#         latest_db_block_height = max(query_results.scalars().all())
-#     current_block_height = await get_current_pastel_block_height_func()
-#     if current_block_height > latest_db_block_height:
-#         async with db_code.Session() as db:
-#             existing_transactions_query = select(db_code.BurnAddressTransaction)
-#             existing_transactions_result = await db.execute(existing_transactions_query)
-#             existing_txids = [tx.txid for tx in existing_transactions_result.scalars().all()]
-#         chunk_size = 5000
-#         new_burn_transactions = await rpc_connection.scanburntransactions(credit_usage_tracking_psl_address, latest_db_block_height - chunk_size*3)  # second argument to this function was just "latest_db_block_height" but now trying to subtract an additional offset to make it work.
-#         filtered_new_burn_transactions = [x for x in new_burn_transactions if x['txid'] not in existing_txids]
-#         ignore_unconfirmed_transactions = 0
-#         new_decoded_tx_data_list = await process_transactions_in_chunks(filtered_new_burn_transactions, chunk_size, ignore_unconfirmed_transactions)
-#         if len(new_decoded_tx_data_list) > 0:
-#             logger.info(f"Decoded {len(new_decoded_tx_data_list):,} new burn transactions in total!")
-#         async with db_code.Session() as db:
-#             new_tracking_transactions_results = await db.exec(
-#                 select(db_code.BurnAddressTransaction)
-#                 .where(db_code.BurnAddressTransaction.burn_address == burn_address)
-#                 .where(db_code.BurnAddressTransaction.tracking_address == credit_usage_tracking_psl_address)
-#                 .where(
-#                     or_(
-#                         db_code.BurnAddressTransaction.block_height > latest_db_block_height,
-#                         db_code.BurnAddressTransaction.pending == True  # noqa: E712
-#                     )
-#                 )
-#             )
-#             new_tracking_transactions = new_tracking_transactions_results.all()
-#         total_credits_consumed += sum(COIN*tx.amount / CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER for tx in new_tracking_transactions)
-#         use_update_block_hashes = 0
-#         if use_update_block_hashes:
-#             async with db_code.Session() as db:
-#                 existing_block_hash_results = await db.exec( select(db_code.BlockHash) )
-#                 existing_block_hash_heights = [block_hash.block_height for block_hash in existing_block_hash_results.all()]
-#             new_block_heights_to_get_block_hash_for = [height for height in range(1, current_block_height) if height not in existing_block_hash_heights]
-#             logger.info(f"Now getting block hashes for {len(new_block_heights_to_get_block_hash_for):,} new block heights (from {new_block_heights_to_get_block_hash_for[0]:,} to {current_block_height:,}) and storing in the DB...")
-#             await fetch_and_insert_block_hashes(new_block_heights_to_get_block_hash_for[0], current_block_height)
-#             logger.info(f"Finished getting and storing {len(new_block_heights_to_get_block_hash_for):,} block hashes in the DB!")
-#     current_credit_balance = initial_credit_balance - total_credits_consumed
-#     number_of_confirmation_transactions_from_tracking_address_to_burn_address = len(db_transactions) + len(new_tracking_transactions)
-#     logger.info(f"Calculation completed. Initial credit balance: {initial_credit_balance:,.1f}; Total credits consumed: {total_credits_consumed:,.1f} across {number_of_confirmation_transactions_from_tracking_address_to_burn_address:,} inference requests; Current credit balance: {current_credit_balance:,.1f}")
-#     return current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address
-
-# async def update_pending_transactions():
-#     while True:
-#         async with db_code.Session() as db: # Query for pending transactions
-#             pending_transactions_result = await db.exec(
-#                 select(db_code.BurnAddressTransaction)
-#                 .where(db_code.BurnAddressTransaction.pending == True)  # noqa: E712
-#             )
-#             pending_transactions = pending_transactions_result.all()
-#         for transaction in pending_transactions:
-#             try: # Retrieve the raw transaction data from the RPC
-#                 raw_tx = await rpc_connection.getrawtransaction(transaction.txid, 1)
-#                 block_height = raw_tx.get('height', None)
-#                 if block_height is not None:
-#                     async with db_code.Session() as db: # Update the transaction's block height and pending status
-#                         stmt = (
-#                             update(db_code.BurnAddressTransaction)
-#                             .where(db_code.BurnAddressTransaction.txid == transaction.txid)
-#                             .values(block_height=block_height, pending=False)
-#                         )
-#                         await db.exec(stmt)
-#                         await db.commit()
-#             except Exception as e:
-#                 logger.error(f"Error updating pending transaction {transaction.txid}: {str(e)}")
-#         await asyncio.sleep(60)  # Sleep for a certain interval before the next update
         
 async def update_inference_sn_reputation_score(supernode_pastelid: str, reputation_score: float) -> bool:
     try:

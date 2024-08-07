@@ -41,8 +41,24 @@ class DateTimeEncoder(JSONEncoder):
 @router.get("/liveness_ping", response_model=dict)
 async def liveness_ping_function():
     current_utc_timestamp = datetime.now(timezone.utc)
-    response_dict = {'status': 'alive', 'timestamp': current_utc_timestamp}
-    return response_dict     
+    if service_functions.benchmark_results_cache: # Get the latest benchmark results from the cache
+        latest_benchmark = service_functions.benchmark_results_cache[-1]
+        raw_benchmark_score = latest_benchmark[1]
+        performance_ratio_score = latest_benchmark[2]
+        last_benchmark_time = datetime.fromisoformat(latest_benchmark[0])
+        last_benchmark_n_seconds_ago = (current_utc_timestamp - last_benchmark_time).total_seconds()
+    else:
+        raw_benchmark_score = None
+        performance_ratio_score = None
+        last_benchmark_n_seconds_ago = None
+    response_dict = {
+        'status': 'alive',
+        'timestamp': current_utc_timestamp,
+        'raw_benchmark_score': raw_benchmark_score,
+        'performance_ratio_score': performance_ratio_score,
+        'last_benchmark_n_seconds_ago': last_benchmark_n_seconds_ago
+    }
+    return response_dict
 
 @router.get("/supernode_list_json", response_model=dict)
 async def get_supernode_list_json(
