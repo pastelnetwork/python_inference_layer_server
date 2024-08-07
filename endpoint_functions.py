@@ -1210,49 +1210,44 @@ async def read_performance_data():
             if pickle_file_path.exists():
                 with open(pickle_file_path, 'rb') as f:
                     performance_data_history = pickle.load(f)
+                # Replace pd.NA with None to avoid serialization issues
+                for df in performance_data_history.values():
+                    df.replace({pd.NA: None}, inplace=True)
                 return performance_data_history
         except (EOFError, pickle.UnpicklingError) as e:
             logger.error(f"Error reading pickle file: {e}", exc_info=True)
             await asyncio.sleep(2)
     raise HTTPException(status_code=500, detail="Could not read performance data.")
-        
+
 
 @router.get("/get_supernode_inference_server_benchmark_plots")
 async def get_supernode_inference_server_benchmark_plots():
     performance_data_history = await read_performance_data()
     if not performance_data_history:
         raise HTTPException(status_code=404, detail="No performance data available.")
-    
     data_frames = []
     for timestamp, df in performance_data_history.items():
         df['Timestamp'] = timestamp
         data_frames.append(df)
-    
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
-    
     combined_df = pd.concat(data_frames)
     combined_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
-    
     fig = px.scatter(combined_df, x='Timestamp', y='Performance Ratio', color='IP Address',
                         title="Supernode Inference Server Benchmark Performance",
                         labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
                         template='ggplot2')
-    
     fig.update_layout(
         font=dict(family="Montserrat", size=14, color="black"),
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray')
     )
-    
     fig.update_traces(marker=dict(size=12),
                         selector=dict(mode='markers'),
                         hovertemplate='<b>IP Address</b>: %{text}<br><b>Performance Ratio</b>: %{y}<br><b>Timestamp</b>: %{x}<extra></extra>',
                         text=combined_df['IP Address'])
-    
     plot_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
-    
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -1290,4 +1285,3 @@ async def get_supernode_inference_server_benchmark_plots():
     </html>
     """
     return HTMLResponse(content=html_content)
-        
