@@ -1203,7 +1203,6 @@ async def show_logs_default():
     return show_logs(5)
 
 
-
 async def read_performance_data():
     retries = 3
     for _ in range(retries):
@@ -1220,46 +1219,55 @@ async def read_performance_data():
             await asyncio.sleep(2)
     raise HTTPException(status_code=500, detail="Could not read performance data.")
 
+
 @router.get("/get_supernode_inference_server_benchmark_plots")
 async def get_supernode_inference_server_benchmark_plots():
     performance_data_history = await read_performance_data()
     if not performance_data_history:
         raise HTTPException(status_code=404, detail="No performance data available.")
-    
     data_frames = []
     for timestamp, df in performance_data_history.items():
         df['Timestamp'] = timestamp
         data_frames.append(df)
-    
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
-    
     combined_df = pd.concat(data_frames)
-    combined_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
-    
-    # Generate the plot
-    fig = px.scatter(combined_df, x='Timestamp', y='Performance Ratio', color='IP Address',
+    non_summary_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
+    summary_df = combined_df[combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
+    # Generate the main plot with line charts for each supernode
+    fig_main = px.line(non_summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
                         title="Supernode Inference Server Benchmark Performance",
                         labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
                         template='ggplot2')
-    
-    fig.update_layout(
+    fig_main.update_layout(
         font=dict(family="Montserrat", size=14, color="black"),
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray')
     )
-    
-    fig.update_traces(marker=dict(size=12),
-                        selector=dict(mode='markers'),
-                        hovertemplate='<b>IP Address</b>: %{text}<br><b>Performance Ratio</b>: %{y}<br><b>Timestamp</b>: %{x}<extra></extra>',
-                        text=combined_df['IP Address'])
-    
-    plot_html = fig.to_html(full_html=False, include_plotlyjs='cdn')
-    
+    fig_main.update_traces(
+        hovertemplate='<b>IP Address</b>: %{text}<br><b>Performance Ratio</b>: %{y}<br><b>Timestamp</b>: %{x}<extra></extra>',
+        text=non_summary_df['IP Address']
+    )
+    main_plot_html = fig_main.to_html(full_html=False, include_plotlyjs='cdn')
+    # Generate the summary plot with line charts for Min, Average, Median, Max
+    fig_summary = px.line(summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
+                            title="Summary Statistics (Min, Average, Median, Max)",
+                            labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
+                            template='ggplot2')
+    fig_summary.update_layout(
+        font=dict(family="Montserrat", size=14, color="black"),
+        title=dict(font=dict(size=20)),
+        xaxis=dict(showgrid=True, gridcolor='LightGray'),
+        yaxis=dict(showgrid=True, gridcolor='LightGray')
+    )
+    fig_summary.update_traces(
+        hovertemplate='<b>Statistic</b>: %{text}<br><b>Performance Ratio</b>: %{y}<br><b>Timestamp</b>: %{x}<extra></extra>',
+        text=summary_df['IP Address']
+    )
+    summary_plot_html = fig_summary.to_html(full_html=False, include_plotlyjs=False)
     # Convert the combined dataframe to HTML table format
     table_html = combined_df.to_html(classes='display nowrap', index=False)
-    
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -1301,7 +1309,11 @@ async def get_supernode_inference_server_benchmark_plots():
     <body>
         <h1>Supernode Inference Server Benchmark Performance</h1>
         <div class="plot-container">
-            {plot_html}
+            {main_plot_html}
+        </div>
+        <hr>
+        <div class="plot-container">
+            {summary_plot_html}
         </div>
         <hr>
         <h2 style="text-align:center;">Benchmark Data Table</h2>
@@ -1318,5 +1330,4 @@ async def get_supernode_inference_server_benchmark_plots():
     </body>
     </html>
     """
-    
     return HTMLResponse(content=html_content)
