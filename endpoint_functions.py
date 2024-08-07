@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, Fil
 from fastapi.exceptions import HTTPException
 from starlette.background import BackgroundTask
 from json import JSONEncoder
+from pathlib import Path
 import json
 import os
 import asyncio
@@ -22,6 +23,7 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0)
+pickle_file_path = Path('performance_data_history.pkl')
 
 # RPC Client Dependency
 async def get_rpc_connection():
@@ -1201,13 +1203,16 @@ async def read_performance_data():
     retries = 3
     for _ in range(retries):
         try:
-            with open('performance_data_history.pkl', 'rb') as f:
-                performance_data_history = pickle.load(f)
-            return performance_data_history
-        except (EOFError, pickle.UnpicklingError):
+            if pickle_file_path.exists():
+                with open(pickle_file_path, 'rb') as f:
+                    performance_data_history = pickle.load(f)
+                return performance_data_history
+        except (EOFError, pickle.UnpicklingError) as e:
+            logger.error(f"Error reading pickle file: {e}", exc_info=True)
             await asyncio.sleep(2)
     raise HTTPException(status_code=500, detail="Could not read performance data.")
         
+
 @router.get("/get_supernode_inference_server_benchmark_plots")
 async def get_supernode_inference_server_benchmark_plots():
     performance_data_history = await read_performance_data()
@@ -1220,9 +1225,7 @@ async def get_supernode_inference_server_benchmark_plots():
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
     combined_df = pd.concat(data_frames)
-    # Filter out the summary statistics rows
     combined_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
-    # Create plots using Plotly
     fig = px.scatter(combined_df, x='Timestamp', y='Performance Ratio', color='IP Address',
                         title="Supernode Inference Server Benchmark Performance",
                         labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},

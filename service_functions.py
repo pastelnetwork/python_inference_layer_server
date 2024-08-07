@@ -155,6 +155,8 @@ local_ip = get_local_ip()
 benchmark_results_cache = [] # Global cache to store benchmark results in memory
 performance_data_df = pd.DataFrame(columns=['IP Address', 'Performance Ratio', 'Actual Score', 'Seconds Since Last Updated'])
 performance_data_history = {}
+csv_file_path = Path('local_sn_micro_benchmark_results.csv')
+pickle_file_path = Path('performance_data_history.pkl')
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0, cast=int)
@@ -618,7 +620,7 @@ class AsyncAuthServiceProxy:
         await self.client.aclose()
                     
 async def micro_benchmarking_func():
-    baseline_score = 20  # Replace this with the actual baseline score determined experimentally
+    baseline_score = 20
     duration_of_benchmark_in_seconds = 4.0
     end_time = time.time() + duration_of_benchmark_in_seconds
     actual_score = 0
@@ -627,7 +629,8 @@ async def micro_benchmarking_func():
             info_results = await rpc_connection.getinfo()
             if 'blocks' in info_results and isinstance(info_results['blocks'], int):
                 actual_score += 1
-        except Exception as e:  # noqa: F841
+        except Exception as e:
+            logger.error(f"Error during benchmarking: {e}")
             continue
     benchmark_performance_ratio = actual_score / baseline_score
     current_datetime_utc = datetime.utcnow().isoformat()
@@ -635,33 +638,30 @@ async def micro_benchmarking_func():
     benchmark_results_cache.append([current_datetime_utc, actual_score, benchmark_performance_ratio])
     cutoff_date = datetime.utcnow() - timedelta(weeks=2)
     benchmark_results_cache[:] = [row for row in benchmark_results_cache if datetime.fromisoformat(row[0]) >= cutoff_date]
-    
+
 async def write_benchmark_cache_to_csv():
-    csv_file = 'local_sn_micro_benchmark_results.csv'
     try:
-        with open(csv_file, mode='w', newline='') as file:
+        with open(csv_file_path, mode='w', newline='') as file:
             writer = csv.writer(file)
             writer.writerows(benchmark_results_cache)
     except Exception as e:
-        logger.error(f"Error writing to CSV: {e}")
+        logger.error(f"Error writing to CSV: {e}", exc_info=True)
 
 async def load_benchmark_cache_from_csv():
     global benchmark_results_cache
-    csv_file = 'local_sn_micro_benchmark_results.csv'
     try:
-        with open(csv_file, mode='r') as file:
-            reader = csv.reader(file)
-            benchmark_results_cache = list(reader)
-    except FileNotFoundError:
-        pass
+        if csv_file_path.exists():
+            with open(csv_file_path, mode='r') as file:
+                reader = csv.reader(file)
+                benchmark_results_cache = list(reader)
     except Exception as e:
-        logger.error(f"Error loading from CSV: {e}")
+        logger.error(f"Error loading from CSV: {e}", exc_info=True)
 
 async def schedule_micro_benchmark_periodically():
     await load_benchmark_cache_from_csv()
     while True:
         await micro_benchmarking_func()
-        await asyncio.sleep(30)  # Run the benchmark every 30 seconds
+        await asyncio.sleep(30)
         await write_benchmark_cache_to_csv()
                         
 async def get_current_pastel_block_height_func():
@@ -783,7 +783,8 @@ async def check_inference_port(supernode, max_response_time_in_milliseconds, loc
             last_updated = (datetime.now(timezone.utc) - datetime.fromisoformat(response_data.get('timestamp'))).total_seconds()
             local_performance_data.append({'IP Address': ip_address, 'Performance Ratio': performance_ratio, 'Actual Score': actual_score, 'Seconds Since Last Updated': last_updated})
             return supernode
-    except httpx.RequestError:
+    except Exception as e:
+        logger.error(f"Error checking port for {ip_address}: {e}", exc_info=True)
         return None
 
 async def update_performance_data_df(local_performance_data):
@@ -823,8 +824,11 @@ async def save_performance_data_history(local_performance_data_df):
     performance_data_history[current_time_str] = local_performance_data_df
     cutoff_date = datetime.utcnow() - timedelta(weeks=2)
     performance_data_history = {k: v for k, v in performance_data_history.items() if datetime.fromisoformat(k) >= cutoff_date}
-    with open('performance_data_history.pkl', 'wb') as f:
-        pickle.dump(performance_data_history, f)
+    try:
+        with open(pickle_file_path, 'wb') as f:
+            pickle.dump(performance_data_history, f)
+    except Exception as e:
+        logger.error(f"Error saving pickle file: {e}", exc_info=True)
 
 async def generate_supernode_inference_ip_blacklist(max_response_time_in_milliseconds=1200):
     global performance_data_df, performance_data_history
