@@ -1230,18 +1230,16 @@ async def retry_on_database_locked(func, *args, max_retries=5, initial_delay=1, 
                 raise
             
 async def check_if_record_exists(db_session, model, **kwargs):
-    """ Check if a record exists in the database matching the given criteria. """
     existing_record = await db_session.execute(
         select(model).filter_by(**kwargs)
     )
     return existing_record.scalars().first()
-        
+
 async def process_broadcast_messages(message, db_session):
     try:
         message_body = json.loads(message.message_body)
         if message.message_type == 'inference_request_response_announcement_message':
             response_data = json.loads(message_body['message'])
-            # Check if the record already exists
             existing_request = await check_if_record_exists(
                 db_session, db_code.InferenceAPIUsageRequest,
                 sha3_256_hash_of_inference_request_fields=response_data['sha3_256_hash_of_inference_request_fields']
@@ -1251,7 +1249,6 @@ async def process_broadcast_messages(message, db_session):
                 sha3_256_hash_of_inference_request_response_fields=response_data['sha3_256_hash_of_inference_request_response_fields']
             )
             if not existing_request and not existing_response:
-                # If neither record exists, proceed to create new entries
                 usage_request = db_code.InferenceAPIUsageRequest(**response_data)
                 usage_response = db_code.InferenceAPIUsageResponse(**response_data)
                 await asyncio.sleep(random.uniform(0.1, 0.5))  # Random sleep before DB operations
@@ -1276,7 +1273,7 @@ async def process_broadcast_messages(message, db_session):
                 await retry_on_database_locked(db_session.refresh, output_result)
             else:
                 logger.info("Skipping insertion as the result record already exists.")
-    except Exception as e: # noqa: F841
+    except Exception as e:
         traceback.print_exc()
         
 async def monitor_new_messages():
