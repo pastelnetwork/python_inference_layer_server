@@ -16,8 +16,7 @@ import traceback
 import pickle
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from plotly.graph_objs import Layout
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Union, Dict, Any
 from pydantic import SecretStr, BaseModel
@@ -1263,92 +1262,69 @@ async def get_supernode_inference_server_benchmark_plots():
     performance_data_history = await read_performance_data()
     if not performance_data_history:
         raise HTTPException(status_code=404, detail="No performance data available.")
-    
     data_frames = []
     for timestamp, df in performance_data_history.items():
         df['Timestamp'] = timestamp
+        df['Smoothed Performance Ratio'] = df['Performance Ratio'].rolling(window=5, min_periods=1).mean()
         data_frames.append(df)
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
-    
     combined_df = pd.concat(data_frames)
     non_summary_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
-    
-    # Main plot with hover interaction
-    fig_main = go.Figure()
-    
-    for ip_address in non_summary_df['IP Address'].unique():
-        df_subset = non_summary_df[non_summary_df['IP Address'] == ip_address]
-        fig_main.add_trace(go.Scatter(
-            x=df_subset['Timestamp'],
-            y=df_subset['Performance Ratio'],
-            mode='lines+markers',
-            name=ip_address,
-            line=dict(width=2),  # Default line width
-            hoverinfo='name+y+x',
-            customdata=[ip_address] * len(df_subset),
-        ))
-    
+    summary_df = combined_df[combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
+    # Generate the main plot with smoothed line charts for each supernode
+    fig_main = px.line(non_summary_df, x='Timestamp', y='Smoothed Performance Ratio', color='IP Address',
+                        title="Supernode Inference Server Benchmark Performance",
+                        labels={'Smoothed Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
+                        template='plotly_white')
     fig_main.update_layout(
-        title="Supernode Inference Server Benchmark Performance",
-        xaxis_title="Timestamp",
-        yaxis_title="Performance Ratio",
-        hovermode='closest',
-        template='ggplot2',
-        height=800,
         font=dict(family="Montserrat", size=14, color="black"),
-        title_font=dict(size=20),
-    )
-    
-    # Update traces with hover effects
-    fig_main.update_traces(
-        hovertemplate='<b>IP Address</b>: %{customdata}<br><b>Performance Ratio</b>: %{y}<br><b>Timestamp</b>: %{x}<extra></extra>',
-        hoverlabel=dict(bgcolor="white", font_size=16, font_family="Montserrat")
-    )
-
-    fig_main.update_layout(
-        updatemenus=[dict(
-            type="buttons",
-            buttons=[dict(
-                label="Reset",
-                method="relayout",
-                args=["line.color", [trace.line.color for trace in fig_main.data]],
-            )],
-            direction="left",
-            showactive=False,
-            x=1.05,
-            xanchor="right",
-            y=1.15,
-            yanchor="top"
-        )]
-    )
-    
-    # Custom JS to handle hover effect for thickening the line and changing to black color
-    fig_main.update_layout(
-        hovermode="closest",
+        title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        dragmode="pan"
+        height=1000,  # Increased height
+        hovermode="closest"
     )
-
-    for trace in fig_main.data:
-        fig_main.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode='lines',
-                line=dict(color='black', width=4),
-                showlegend=False,
-                hoverinfo="skip",
-                visible=False,
-                name=f"Highlighted: {trace.name}",
-                legendgroup=trace.name,
+    fig_main.update_traces(
+        hovertemplate='<b>IP Address</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
+        customdata=non_summary_df['IP Address']
+    )
+    # Add custom JavaScript for hover effects
+    fig_main.update_layout(
+        updatemenus=[
+            dict(
+                type="buttons",
+                showactive=False,
+                buttons=[
+                    dict(
+                        label="Reset",
+                        method="relayout",
+                        args=[{"updatemenus": [{"visible": False}]}]
+                    )
+                ]
             )
-        )
-
+        ]
+    )
     main_plot_html = fig_main.to_html(full_html=False, include_plotlyjs='cdn')
-
-    # HTML Content Construction
+    # Generate the summary plot with line charts for Min, Average, Median, Max
+    fig_summary = px.line(summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
+                            title="Summary Statistics (Min, Average, Median, Max)",
+                            labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
+                            template='plotly_white')
+    fig_summary.update_layout(
+        font=dict(family="Montserrat", size=14, color="black"),
+        title=dict(font=dict(size=20)),
+        xaxis=dict(showgrid=True, gridcolor='LightGray'),
+        yaxis=dict(showgrid=True, gridcolor='LightGray'),
+        height=1000  # Increased height
+    )
+    fig_summary.update_traces(
+        hovertemplate='<b>Statistic</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
+        customdata=summary_df['IP Address']
+    )
+    summary_plot_html = fig_summary.to_html(full_html=False, include_plotlyjs=False)
+    most_recent_df = non_summary_df.sort_values('Timestamp').groupby('IP Address').tail(1)
+    table_html = most_recent_df.to_html(classes='display nowrap', index=False)
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -1372,9 +1348,9 @@ async def get_supernode_inference_server_benchmark_plots():
                 margin-bottom: 20px;
             }}
             .plot-container, .table-container {{
-                width: 90%;
+                width: 95%;
                 margin: 0 auto;
-                max-width: 1200px;
+                max-width: 1400px;
             }}
             hr {{
                 margin: 40px 0;
@@ -1401,15 +1377,43 @@ async def get_supernode_inference_server_benchmark_plots():
     </head>
     <body>
         <h1>Supernode Inference Server Benchmark Performance</h1>
-        <div class="plot-container">
+        <div class="plot-container" id="main-plot">
             {main_plot_html}
         </div>
         <hr>
+        <div class="plot-container">
+            {summary_plot_html}
+        </div>
+        <hr>
+        <h2 style="text-align:center;">Benchmark Data Table</h2>
+        <div class="table-container">
+            {table_html}
+        </div>
         <script>
-            Plotly.d3.selectAll('.scatterlayer .trace').on('mouseover', function(d) {{
-                Plotly.restyle(this, {{"line.width": [6], "line.color": ["black"]}}, [d.pointNumber]);
-            }}).on('mouseout', function(d) {{
-                Plotly.restyle(this, {{"line.width": [2], "line.color": ["auto"]}}, [d.pointNumber]);
+            $(document).ready(function() {{
+                $('table.display').DataTable({{
+                    scrollX: true
+                }});
+
+                var mainPlot = document.getElementById('main-plot');
+                var plotData = mainPlot.data;
+
+                mainPlot.on('plotly_hover', function(data) {{
+                    var curveNumber = data.points[0].curveNumber;
+                    var update = {{
+                        'line.width': plotData.map((_, i) => i === curveNumber ? 4 : 1),
+                        'line.color': plotData.map((_, i) => i === curveNumber ? 'black' : null)
+                    }};
+                    Plotly.restyle(mainPlot, update);
+                }});
+
+                mainPlot.on('plotly_unhover', function() {{
+                    var update = {{
+                        'line.width': plotData.map(() => 1),
+                        'line.color': plotData.map(() => null)
+                    }};
+                    Plotly.restyle(mainPlot, update);
+                }});
             }});
         </script>
     </body>
