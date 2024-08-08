@@ -16,7 +16,8 @@ import traceback
 import pickle
 import pandas as pd
 import plotly.express as px
-from plotly.graph_objs import Layout
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Union, Dict, Any
 from pydantic import SecretStr, BaseModel
@@ -1283,7 +1284,7 @@ async def get_supernode_inference_server_benchmark_plots():
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        height=1000,
+        height=750,
         hovermode="closest",
         updatemenus=[
             dict(
@@ -1314,7 +1315,7 @@ async def get_supernode_inference_server_benchmark_plots():
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        height=1000
+        height=600
     )
     fig_summary.update_traces(
         hovertemplate='<b>Statistic</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
