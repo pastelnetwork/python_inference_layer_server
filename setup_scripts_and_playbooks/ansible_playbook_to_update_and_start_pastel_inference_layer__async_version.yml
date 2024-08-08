@@ -65,6 +65,20 @@
       poll: 10
       ignore_errors: yes
 
+    - name: Check if inference_log window exists
+      shell: tmux list-windows -t {{ session_name }} -F '#{window_name}' | grep -q '^inference_log$'
+      register: inference_log_exists
+      ignore_errors: yes
+      async: 600
+      poll: 10
+
+    - name: Kill inference_log window if it exists
+      shell: tmux kill-window -t {{ session_name }}:inference_log
+      when: inference_log_exists.rc == 0
+      async: 600
+      poll: 10
+      ignore_errors: yes
+
     - name: Create temporary script
       copy:
         content: |
@@ -88,6 +102,15 @@
     - name: Launch script in new tmux window
       shell: |
         tmux new-window -t {{ session_name }}: -n supernode_script -d "{{ shell_path }} -c '/home/ubuntu/run_script.sh'"
+      args:
+        executable: "{{ shell_path }}"
+      async: 600
+      poll: 10
+      ignore_errors: yes
+
+    - name: Launch inference log in new tmux window
+      shell: |
+        tmux new-window -t {{ session_name }}: -n inference_log -d "{{ shell_path }} -c 'multitail /home/ubuntu/python_inference_layer_server/pastel_supernode_inference_layer.log'"
       args:
         executable: "{{ shell_path }}"
       async: 600

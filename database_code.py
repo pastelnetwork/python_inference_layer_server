@@ -9,7 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy.pool import SingletonThreadPool
+from sqlalchemy.pool import NullPool
 from decouple import Config as DecoupleConfig, RepositoryEnv
         
 config = DecoupleConfig(RepositoryEnv('.env'))
@@ -847,10 +847,7 @@ engine = create_async_engine(
     DATABASE_URL,
     echo=False,
     future=True,
-    poolclass=SingletonThreadPool,
-    pool_size=20,
-    max_overflow=0,
-    pool_timeout=30,    
+    poolclass=NullPool,  # Use NullPool for SQLite
     connect_args={"check_same_thread": False},
 )
 
@@ -871,23 +868,29 @@ async def initialize_db():
         "PRAGMA journal_mode=WAL;",
         "PRAGMA synchronous = NORMAL;",
         "PRAGMA cache_size = -262144;",
-        "PRAGMA busy_timeout = 5000;",
-        "PRAGMA wal_autocheckpoint = 300;",
+        "PRAGMA busy_timeout = 3000;",
+        "PRAGMA wal_autocheckpoint = 100;",
         "PRAGMA mmap_size = 30000000000;",
-        "PRAGMA threads = 4;",
+        "PRAGMA threads = 6;",
         "PRAGMA optimize;",
-        "PRAGMA secure_delete = OFF;"
+        "PRAGMA secure_delete = OFF;",
+        "PRAGMA temp_store = MEMORY;",
+        "PRAGMA page_size = 4096;",
+        "PRAGMA auto_vacuum = INCREMENTAL;"
     ]
     list_of_sqlite_pragma_justification_strings = [
         "Set SQLite to use Write-Ahead Logging (WAL) mode (from default DELETE mode) so that reads and writes can occur simultaneously",
         "Set synchronous mode to NORMAL (from FULL) so that writes are not blocked by reads",
         "Set cache size to 1GB (from default 2MB) so that more data can be cached in memory and not read from disk; to make this 256MB, set it to -262144 instead",
-        "Increase the busy timeout to 5 seconds so that the database waits",
-        "Set the WAL autocheckpoint to 300 (from default 1000) so that the WAL file is checkpointed more frequently",
+        "Increase the busy timeout to 3 seconds so that the database waits",
+        "Set the WAL autocheckpoint to 100 (from default 1000) so that the WAL file is checkpointed more frequently",
         "Set the maximum size of the memory-mapped I/O cache to 30GB to improve performance by accessing the database file directly from memory",
-        "Enable multi-threaded mode in SQLite and set the number of worker threads to 4 to allow concurrent access to the database",
+        "Enable multi-threaded mode in SQLite and set the number of worker threads to 6 to allow concurrent access to the database",
         "Optimize the database by running a set of optimization steps to improve query performance",
-        "Disable the secure delete feature to improve deletion performance at the cost of potentially leaving deleted data recoverable"
+        "Disable the secure delete feature to improve deletion performance at the cost of potentially leaving deleted data recoverable",
+        "Set the temporary store to MEMORY to improve performance by avoiding disk I/O",
+        "Set the page size to 4096 to improve performance by reducing the number of disk I/O operations",
+        "Enable auto-vacuum to improve performance by automatically reclaiming space from deleted data"
     ]
     assert(len(list_of_sqlite_pragma_strings) == len(list_of_sqlite_pragma_justification_strings))
     try:
