@@ -1264,52 +1264,57 @@ async def get_supernode_inference_server_benchmark_plots():
     data_frames = []
     for timestamp, df in performance_data_history.items():
         df['Timestamp'] = timestamp
+        df['Smoothed Performance Ratio'] = df['Performance Ratio'].rolling(window=3, min_periods=1).mean()
         data_frames.append(df)
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
     combined_df = pd.concat(data_frames)
     non_summary_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
     summary_df = combined_df[combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
-    
-    # Generate the main plot with line charts for each supernode
-    fig_main = px.line(non_summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
-                        title="Supernode Inference Server Benchmark Performance",
-                        labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
-                        template='ggplot2')
+
+    # Generate the main plot with smoothed line charts for each supernode
+    fig_main = px.line(non_summary_df, x='Timestamp', y='Smoothed Performance Ratio', color='IP Address', markers=True,
+                       title="Supernode Inference Server Benchmark Performance",
+                       labels={'Smoothed Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
+                       template='ggplot2')
     fig_main.update_layout(
         font=dict(family="Montserrat", size=14, color="black"),
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
-        yaxis=dict(showgrid=True, gridcolor='LightGray')
+        yaxis=dict(showgrid=True, gridcolor='LightGray'),
+        height=800  # Increase the height of the plot
     )
     fig_main.update_traces(
         hovertemplate='<b>IP Address</b>: %{text}<br><b>Performance Ratio</b>: %{y}<br><b>Timestamp</b>: %{x}<extra></extra>',
         text=non_summary_df['IP Address']
     )
+    fig_main.update_traces(selector=dict(mode='lines'), line=dict(width=2))
+    fig_main.for_each_trace(lambda trace: trace.update(line=dict(width=2, color='grey')))
+    fig_main.for_each_trace(lambda trace: trace.on_hover(lambda trace, points, state: trace.update(line=dict(width=4, color='black'))))
+
     main_plot_html = fig_main.to_html(full_html=False, include_plotlyjs='cdn')
-    
+
     # Generate the summary plot with line charts for Min, Average, Median, Max
     fig_summary = px.line(summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
-                            title="Summary Statistics (Min, Average, Median, Max)",
-                            labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
-                            template='ggplot2')
+                          title="Summary Statistics (Min, Average, Median, Max)",
+                          labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
+                          template='ggplot2')
     fig_summary.update_layout(
         font=dict(family="Montserrat", size=14, color="black"),
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
-        yaxis=dict(showgrid=True, gridcolor='LightGray')
+        yaxis=dict(showgrid=True, gridcolor='LightGray'),
+        height=800  # Increase the height of the plot
     )
     fig_summary.update_traces(
         hovertemplate='<b>Statistic</b>: %{text}<br><b>Performance Ratio</b>: %{y}<br><b>Timestamp</b>: %{x}<extra></extra>',
         text=summary_df['IP Address']
     )
     summary_plot_html = fig_summary.to_html(full_html=False, include_plotlyjs=False)
-    
-    # Get the most recent entry for each supernode
+
     most_recent_df = non_summary_df.sort_values('Timestamp').groupby('IP Address').tail(1)
-    # Convert the most recent dataframe to HTML table format
     table_html = most_recent_df.to_html(classes='display nowrap', index=False)
-    
+
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
