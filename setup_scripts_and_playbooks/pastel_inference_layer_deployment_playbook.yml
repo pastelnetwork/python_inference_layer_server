@@ -89,6 +89,7 @@
           - redis
           - redis-server
           - redis-tools
+          - multitail
         state: present
         update_cache: yes
 
