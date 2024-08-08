@@ -851,7 +851,7 @@ async def save_performance_data_history(local_performance_data_df):
     except Exception as e:
         logger.error(f"Error saving pickle file: {e}", exc_info=True)
 
-async def generate_supernode_inference_ip_blacklist(max_response_time_in_milliseconds=1200):
+async def generate_supernode_inference_ip_blacklist(max_response_time_in_milliseconds=800):
     global performance_data_df, performance_data_history
     blacklist_path = Path('supernode_inference_ip_blacklist.txt')
     logger.info("Now compiling Supernode IP blacklist based on Supernode responses to port checks...")
