@@ -3646,7 +3646,7 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                 select(db_code.CreditPackPurchaseRequestResponseTxidMapping)
                 .where(db_code.CreditPackPurchaseRequestResponseTxidMapping.sha3_256_hash_of_credit_pack_purchase_request_fields == hash_of_request_fields)
             )
-            txid_mapping = txid_mapping.one_or_none()
+            txid_mapping = txid_mapping.first()
         if txid_mapping:
             txid = txid_mapping.pastel_api_credit_pack_ticket_registration_txid
             async with db_code.Session() as db_session:
@@ -3654,7 +3654,7 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                     select(db_code.CreditPackCompleteTicketWithBalance)
                     .where(db_code.CreditPackCompleteTicketWithBalance.credit_pack_ticket_registration_txid == txid)
                 )
-                existing_data = existing_data_result.one_or_none()
+                existing_data = existing_data_result.first()
             if existing_data:
                 complete_ticket = json.loads(existing_data.complete_credit_pack_data_json)
                 current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
