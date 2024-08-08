@@ -9,7 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import SingletonThreadPool
 from decouple import Config as DecoupleConfig, RepositoryEnv
         
 config = DecoupleConfig(RepositoryEnv('.env'))
@@ -847,7 +847,10 @@ engine = create_async_engine(
     DATABASE_URL,
     echo=False,
     future=True,
-    poolclass=NullPool,  # Use NullPool for SQLite
+    poolclass=SingletonThreadPool,
+    pool_size=20,
+    max_overflow=0,
+    pool_timeout=30,    
     connect_args={"check_same_thread": False},
 )
 
@@ -868,8 +871,8 @@ async def initialize_db():
         "PRAGMA journal_mode=WAL;",
         "PRAGMA synchronous = NORMAL;",
         "PRAGMA cache_size = -262144;",
-        "PRAGMA busy_timeout = 2000;",
-        "PRAGMA wal_autocheckpoint = 100;",
+        "PRAGMA busy_timeout = 5000;",
+        "PRAGMA wal_autocheckpoint = 300;",
         "PRAGMA mmap_size = 30000000000;",
         "PRAGMA threads = 4;",
         "PRAGMA optimize;",
@@ -879,8 +882,8 @@ async def initialize_db():
         "Set SQLite to use Write-Ahead Logging (WAL) mode (from default DELETE mode) so that reads and writes can occur simultaneously",
         "Set synchronous mode to NORMAL (from FULL) so that writes are not blocked by reads",
         "Set cache size to 1GB (from default 2MB) so that more data can be cached in memory and not read from disk; to make this 256MB, set it to -262144 instead",
-        "Increase the busy timeout to 2 seconds so that the database waits",
-        "Set the WAL autocheckpoint to 100 (from default 1000) so that the WAL file is checkpointed more frequently",
+        "Increase the busy timeout to 5 seconds so that the database waits",
+        "Set the WAL autocheckpoint to 300 (from default 1000) so that the WAL file is checkpointed more frequently",
         "Set the maximum size of the memory-mapped I/O cache to 30GB to improve performance by accessing the database file directly from memory",
         "Enable multi-threaded mode in SQLite and set the number of worker threads to 4 to allow concurrent access to the database",
         "Optimize the database by running a set of optimization steps to improve query performance",
