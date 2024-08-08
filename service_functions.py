@@ -1287,7 +1287,7 @@ async def monitor_new_messages():
                     if last_processed_timestamp_raw is None:
                         last_processed_timestamp = pd.Timestamp.min.tz_localize('UTC')
                     else:
-                        last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw[0]).tz_localize('UTC').tz_convert('UTC')
+                        last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw).tz_localize('UTC').tz_convert('UTC')
                 try:
                     new_messages_df = await list_sn_messages_func()
                 except Exception as e:
