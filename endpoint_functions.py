@@ -1272,25 +1272,19 @@ async def get_supernode_inference_server_benchmark_plots():
     combined_df = pd.concat(data_frames)
     non_summary_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
     summary_df = combined_df[combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
+
     # Generate the main plot with smoothed line charts for each supernode
     fig_main = px.line(non_summary_df, x='Timestamp', y='Smoothed Performance Ratio', color='IP Address',
-                        title="Supernode Inference Server Benchmark Performance",
-                        labels={'Smoothed Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
-                        template='plotly_white')
+                       title="Supernode Inference Server Benchmark Performance",
+                       labels={'Smoothed Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
+                       template='plotly_white')
     fig_main.update_layout(
         font=dict(family="Montserrat", size=14, color="black"),
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        height=1000,  # Increased height
-        hovermode="closest"
-    )
-    fig_main.update_traces(
-        hovertemplate='<b>IP Address</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
-        customdata=non_summary_df['IP Address']
-    )
-    # Add custom JavaScript for hover effects
-    fig_main.update_layout(
+        height=1000,
+        hovermode="closest",
         updatemenus=[
             dict(
                 type="buttons",
@@ -1305,26 +1299,34 @@ async def get_supernode_inference_server_benchmark_plots():
             )
         ]
     )
-    main_plot_html = fig_main.to_html(full_html=False, include_plotlyjs='cdn')
-    # Generate the summary plot with line charts for Min, Average, Median, Max
+    fig_main.update_traces(
+        hovertemplate='<b>IP Address</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
+        customdata=non_summary_df['IP Address']
+    )
+
+    # Generate the summary plot
     fig_summary = px.line(summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
-                            title="Summary Statistics (Min, Average, Median, Max)",
-                            labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
-                            template='plotly_white')
+                          title="Summary Statistics (Min, Average, Median, Max)",
+                          labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
+                          template='plotly_white')
     fig_summary.update_layout(
         font=dict(family="Montserrat", size=14, color="black"),
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        height=1000  # Increased height
+        height=1000
     )
     fig_summary.update_traces(
         hovertemplate='<b>Statistic</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
         customdata=summary_df['IP Address']
     )
+
+    main_plot_html = fig_main.to_html(full_html=False, include_plotlyjs='cdn')
     summary_plot_html = fig_summary.to_html(full_html=False, include_plotlyjs=False)
+
     most_recent_df = non_summary_df.sort_values('Timestamp').groupby('IP Address').tail(1)
     table_html = most_recent_df.to_html(classes='display nowrap', index=False)
+
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
@@ -1381,7 +1383,7 @@ async def get_supernode_inference_server_benchmark_plots():
             {main_plot_html}
         </div>
         <hr>
-        <div class="plot-container">
+        <div class="plot-container" id="summary-plot">
             {summary_plot_html}
         </div>
         <hr>
@@ -1395,7 +1397,7 @@ async def get_supernode_inference_server_benchmark_plots():
                     scrollX: true
                 }});
 
-                var mainPlot = document.getElementById('main-plot');
+                var mainPlot = document.getElementById('main-plot').getElementsByClassName('plotly')[0];
                 var plotData = mainPlot.data;
 
                 mainPlot.on('plotly_hover', function(data) {{
