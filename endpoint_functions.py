@@ -16,8 +16,6 @@ import traceback
 import pickle
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Union, Dict, Any
 from pydantic import SecretStr, BaseModel
@@ -1274,42 +1272,20 @@ async def get_supernode_inference_server_benchmark_plots():
     non_summary_df = combined_df[~combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
     summary_df = combined_df[combined_df['IP Address'].isin(['Min', 'Average', 'Median', 'Max'])]
 
-    # Generate the main plot with smoothed line charts for each supernode
-    fig_main = px.line(non_summary_df, x='Timestamp', y='Smoothed Performance Ratio', color='IP Address',
-                       title="Supernode Inference Server Benchmark Performance",
-                       labels={'Smoothed Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
-                       template='plotly_white')
-    fig_main.update_layout(
-        font=dict(family="Montserrat", size=14, color="black"),
-        title=dict(font=dict(size=20)),
-        xaxis=dict(showgrid=True, gridcolor='LightGray'),
-        yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        height=750,
-        hovermode="closest",
-        updatemenus=[
-            dict(
-                type="buttons",
-                showactive=False,
-                buttons=[
-                    dict(
-                        label="Reset",
-                        method="relayout",
-                        args=[{"updatemenus": [{"visible": False}]}]
-                    )
-                ]
-            )
-        ]
-    )
-    fig_main.update_traces(
-        hovertemplate='<b>IP Address</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
-        customdata=non_summary_df['IP Address']
-    )
+    # Prepare data for Google Charts
+    google_chart_data = [['Timestamp'] + list(non_summary_df['IP Address'].unique())]
+    for timestamp in non_summary_df['Timestamp'].unique():
+        row = [timestamp]
+        for ip in non_summary_df['IP Address'].unique():
+            value = non_summary_df[(non_summary_df['Timestamp'] == timestamp) & (non_summary_df['IP Address'] == ip)]['Smoothed Performance Ratio'].values
+            row.append(float(value[0]) if len(value) > 0 else None)
+        google_chart_data.append(row)
 
-    # Generate the summary plot
+    # Generate the summary plot with Plotly
     fig_summary = px.line(summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
-                          title="Summary Statistics (Min, Average, Median, Max)",
-                          labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
-                          template='plotly_white')
+                            title="Summary Statistics (Min, Average, Median, Max)",
+                            labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
+                            template='plotly_white')
     fig_summary.update_layout(
         font=dict(family="Montserrat", size=14, color="black"),
         title=dict(font=dict(size=20)),
@@ -1322,7 +1298,6 @@ async def get_supernode_inference_server_benchmark_plots():
         customdata=summary_df['IP Address']
     )
 
-    main_plot_html = fig_main.to_html(full_html=False, include_plotlyjs='cdn')
     summary_plot_html = fig_summary.to_html(full_html=False, include_plotlyjs=False)
 
     most_recent_df = non_summary_df.sort_values('Timestamp').groupby('IP Address').tail(1)
@@ -1337,6 +1312,10 @@ async def get_supernode_inference_server_benchmark_plots():
         <title>Supernode Inference Server Benchmark Performance</title>
         <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500&display=swap" rel="stylesheet">
         <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.10.21/css/jquery.dataTables.css">
+        <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+        <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
+        <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.js"></script>
         <style>
             body {{
                 font-family: 'Montserrat', sans-serif;
@@ -1374,15 +1353,89 @@ async def get_supernode_inference_server_benchmark_plots():
                 padding: 8px;
             }}
         </style>
-        <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
-        <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.js"></script>
-        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+        <script type="text/javascript">
+            google.charts.load('current', {{'packages':['corechart']}});
+            google.charts.setOnLoadCallback(drawChart);
+
+            function drawChart() {{
+                var data = google.visualization.arrayToDataTable({json.dumps(google_chart_data)});
+
+                var options = {{
+                    title: 'Supernode Inference Server Benchmark Performance',
+                    curveType: 'function',
+                    width: 1400,
+                    height: 750,
+                    legend: {{ position: 'right' }},
+                    hAxis: {{ title: 'Timestamp' }},
+                    vAxis: {{ title: 'Performance Ratio' }},
+                    explorer: {{
+                        actions: ['dragToZoom', 'rightClickToReset'],
+                        axis: 'horizontal',
+                        keepInBounds: true,
+                        maxZoomIn: 4.0
+                    }}
+                }};
+
+                var chart = new google.visualization.LineChart(document.getElementById('main_chart_div'));
+
+                var highlightedSeries = null;
+                
+                function selectHandler() {{
+                    var selectedItem = chart.getSelection()[0];
+                    if (selectedItem) {{
+                        if (selectedItem.row === null) {{
+                            // Column (series) selected
+                            var column = selectedItem.column;
+                            highlightSeries(column);
+                        }}
+                    }} else {{
+                        // Deselection
+                        unhighlightSeries();
+                    }}
+                }}
+
+                google.visualization.events.addListener(chart, 'select', selectHandler);
+
+                function highlightSeries(seriesIndex) {{
+                    if (highlightedSeries !== null) {{
+                        unhighlightSeries();
+                    }}
+                    var columns = [];
+                    for (var i = 0; i < data.getNumberOfColumns(); i++) {{
+                        columns.push({{
+                            calc: function (dt, row) {{
+                                return {{
+                                    v: dt.getValue(row, i),
+                                    f: dt.getFormattedValue(row, i)
+                                }};
+                            }},
+                            type: data.getColumnType(i),
+                            label: data.getColumnLabel(i),
+                            p: {{
+                                style: i === seriesIndex ? 'color: black; stroke-width: 3;' : ''
+                            }}
+                        }});
+                    }}
+                    var view = new google.visualization.DataView(data);
+                    view.setColumns(columns);
+                    chart.draw(view, options);
+                    highlightedSeries = seriesIndex;
+                }}
+
+                function unhighlightSeries() {{
+                    if (highlightedSeries !== null) {{
+                        chart.draw(data, options);
+                        highlightedSeries = null;
+                    }}
+                }}
+
+                chart.draw(data, options);
+            }}
+        </script>
     </head>
     <body>
         <h1>Supernode Inference Server Benchmark Performance</h1>
-        <div class="plot-container" id="main-plot">
-            {main_plot_html}
-        </div>
+        <div class="plot-container" id="main_chart_div"></div>
         <hr>
         <div class="plot-container" id="summary-plot">
             {summary_plot_html}
@@ -1396,26 +1449,6 @@ async def get_supernode_inference_server_benchmark_plots():
             $(document).ready(function() {{
                 $('table.display').DataTable({{
                     scrollX: true
-                }});
-
-                var mainPlot = document.getElementById('main-plot').getElementsByClassName('plotly')[0];
-                var plotData = mainPlot.data;
-
-                mainPlot.on('plotly_hover', function(data) {{
-                    var curveNumber = data.points[0].curveNumber;
-                    var update = {{
-                        'line.width': plotData.map((_, i) => i === curveNumber ? 4 : 1),
-                        'line.color': plotData.map((_, i) => i === curveNumber ? 'black' : null)
-                    }};
-                    Plotly.restyle(mainPlot, update);
-                }});
-
-                mainPlot.on('plotly_unhover', function() {{
-                    var update = {{
-                        'line.width': plotData.map(() => 1),
-                        'line.color': plotData.map(() => null)
-                    }};
-                    Plotly.restyle(mainPlot, update);
                 }});
             }});
         </script>
