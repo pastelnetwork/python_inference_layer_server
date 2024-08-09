@@ -1266,7 +1266,7 @@ async def get_supernode_inference_server_benchmark_plots():
     data_frames = []
     for timestamp, df in performance_data_history.items():
         df['Timestamp'] = timestamp
-        df['Smoothed Performance Ratio'] = df['Performance Ratio'].rolling(window=20, min_periods=5).mean()  # Smooth the data
+        df['Smoothed Performance Ratio'] = df['Performance Ratio'].rolling(window=60, min_periods=20).mean()  # Smooth the data
         data_frames.append(df)
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
@@ -1284,7 +1284,7 @@ async def get_supernode_inference_server_benchmark_plots():
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        height=750,  # Increased height
+        height=750,
         hovermode="closest",
         hoverdistance=1000,
         spikedistance=1000,
@@ -1303,12 +1303,11 @@ async def get_supernode_inference_server_benchmark_plots():
         ]
     )
     fig_main.update_traces(
-        # Removed the invalid 'shape' property
         hovertemplate='<b>IP Address</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
         customdata=non_summary_df['IP Address']
     )
 
-    # Generate the summary plot (unchanged)
+    # Generate the summary plot
     fig_summary = px.line(summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
                           title="Summary Statistics (Min, Average, Median, Max)",
                           labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
@@ -1318,7 +1317,7 @@ async def get_supernode_inference_server_benchmark_plots():
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        height=600  # Increased height
+        height=600
     )
     fig_summary.update_traces(
         hovertemplate='<b>Statistic</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
@@ -1401,26 +1400,54 @@ async def get_supernode_inference_server_benchmark_plots():
                     scrollX: true
                 }});
 
-                var mainPlot = document.getElementById('main-plot').getElementsByClassName('plotly')[0];
-                var plotData = mainPlot.data;
-                var originalColors = plotData.map(trace => trace.line.color);
+                function setupPlotlyHoverEffects() {{
+                    var mainPlotDiv = document.getElementById('main-plot');
+                    if (!mainPlotDiv) {{
+                        console.error('Main plot div not found');
+                        return;
+                    }}
 
-                mainPlot.on('plotly_hover', function(data) {{
-                    var curveNumber = data.points[0].curveNumber;
-                    var update = {{
-                        'line.width': plotData.map((_, i) => i === curveNumber ? 4 : 1),
-                        'line.color': plotData.map((_, i) => i === curveNumber ? 'black' : originalColors[i])
-                    }};
-                    Plotly.restyle(mainPlot, update);
-                }});
+                    var plotlyInstance = mainPlotDiv.getElementsByClassName('js-plotly-plot')[0];
+                    if (!plotlyInstance) {{
+                        console.error('Plotly instance not found');
+                        return;
+                    }}
 
-                mainPlot.on('plotly_unhover', function() {{
-                    var update = {{
-                        'line.width': plotData.map(() => 1),
-                        'line.color': originalColors
-                    }};
-                    Plotly.restyle(mainPlot, update);
-                }});
+                    var plotData = plotlyInstance.data;
+                    if (!plotData || !Array.isArray(plotData)) {{
+                        console.error('Plot data is not available or is not an array');
+                        return;
+                    }}
+
+                    var originalColors = plotData.map(trace => trace.line ? trace.line.color : null);
+
+                    plotlyInstance.on('plotly_hover', function(data) {{
+                        if (!data.points || data.points.length === 0) return;
+                        
+                        var curveNumber = data.points[0].curveNumber;
+                        var update = {{
+                            'line.width': plotData.map((_, i) => i === curveNumber ? 4 : 1),
+                            'line.color': plotData.map((_, i) => i === curveNumber ? 'black' : originalColors[i])
+                        }};
+                        Plotly.restyle(plotlyInstance, update);
+                    }});
+
+                    plotlyInstance.on('plotly_unhover', function() {{
+                        var update = {{
+                            'line.width': plotData.map(() => 1),
+                            'line.color': originalColors
+                        }};
+                        Plotly.restyle(plotlyInstance, update);
+                    }});
+                }}
+
+                // Wait for Plotly to be fully loaded
+                var checkPlotlyReady = setInterval(function() {{
+                    if (window.Plotly && document.getElementById('main-plot').getElementsByClassName('js-plotly-plot')[0]) {{
+                        clearInterval(checkPlotlyReady);
+                        setupPlotlyHoverEffects();
+                    }}
+                }}, 100);
             }});
         </script>
     </body>
