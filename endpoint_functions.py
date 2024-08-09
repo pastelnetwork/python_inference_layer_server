@@ -1266,7 +1266,7 @@ async def get_supernode_inference_server_benchmark_plots():
     data_frames = []
     for timestamp, df in performance_data_history.items():
         df['Timestamp'] = timestamp
-        df['Smoothed Performance Ratio'] = df['Performance Ratio'].rolling(window=10, min_periods=1).mean()
+        df['Smoothed Performance Ratio'] = df['Performance Ratio'].rolling(window=20, min_periods=5).mean()
         data_frames.append(df)
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
@@ -1276,16 +1276,18 @@ async def get_supernode_inference_server_benchmark_plots():
 
     # Generate the main plot with smoothed line charts for each supernode
     fig_main = px.line(non_summary_df, x='Timestamp', y='Smoothed Performance Ratio', color='IP Address',
-                        title="Supernode Inference Server Benchmark Performance",
-                        labels={'Smoothed Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
-                        template='plotly_white')
+                       title="Supernode Inference Server Benchmark Performance",
+                       labels={'Smoothed Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
+                       template='plotly_white')
     fig_main.update_layout(
         font=dict(family="Montserrat", size=14, color="black"),
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        height=750,  # Increased height
+        height=750, 
         hovermode="closest",
+        hoverdistance=1000,
+        spikedistance=1000,
         updatemenus=[
             dict(
                 type="buttons",
@@ -1301,35 +1303,34 @@ async def get_supernode_inference_server_benchmark_plots():
         ]
     )
     fig_main.update_traces(
-        line=dict(shape='spline', smoothing=2.5),  # Smooth the lines
+        line=dict(shape='spline'),  # Smooth the lines
         hovertemplate='<b>IP Address</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
         customdata=non_summary_df['IP Address']
     )
-    # Add hover functionality to highlight the entire series
-    fig_main.update_layout(
-        hoverdistance=1000,
-        spikedistance=1000,
-    )
+
     # Generate the summary plot (unchanged)
     fig_summary = px.line(summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
-                            title="Summary Statistics (Min, Average, Median, Max)",
-                            labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
-                            template='plotly_white')
+                          title="Summary Statistics (Min, Average, Median, Max)",
+                          labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
+                          template='plotly_white')
     fig_summary.update_layout(
         font=dict(family="Montserrat", size=14, color="black"),
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        height=600  # Increased height
+        height=600 
     )
     fig_summary.update_traces(
         hovertemplate='<b>Statistic</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
         customdata=summary_df['IP Address']
     )
+
     main_plot_html = fig_main.to_html(full_html=False, include_plotlyjs='cdn')
     summary_plot_html = fig_summary.to_html(full_html=False, include_plotlyjs=False)
+
     most_recent_df = non_summary_df.sort_values('Timestamp').groupby('IP Address').tail(1)
     table_html = most_recent_df.to_html(classes='display nowrap', index=False)
+
     html_content = f"""
     <!DOCTYPE html>
     <html lang="en">
