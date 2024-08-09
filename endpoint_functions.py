@@ -1266,7 +1266,7 @@ async def get_supernode_inference_server_benchmark_plots():
     data_frames = []
     for timestamp, df in performance_data_history.items():
         df['Timestamp'] = timestamp
-        df['Smoothed Performance Ratio'] = df['Performance Ratio'].rolling(window=20, min_periods=5).mean()
+        df['Smoothed Performance Ratio'] = df['Performance Ratio'].rolling(window=20, min_periods=5).mean()  # Smooth the data
         data_frames.append(df)
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
@@ -1284,7 +1284,7 @@ async def get_supernode_inference_server_benchmark_plots():
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        height=750, 
+        height=750,  # Increased height
         hovermode="closest",
         hoverdistance=1000,
         spikedistance=1000,
@@ -1303,7 +1303,7 @@ async def get_supernode_inference_server_benchmark_plots():
         ]
     )
     fig_main.update_traces(
-        line=dict(shape='spline'),  # Smooth the lines
+        # Removed the invalid 'shape' property
         hovertemplate='<b>IP Address</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
         customdata=non_summary_df['IP Address']
     )
@@ -1318,7 +1318,7 @@ async def get_supernode_inference_server_benchmark_plots():
         title=dict(font=dict(size=20)),
         xaxis=dict(showgrid=True, gridcolor='LightGray'),
         yaxis=dict(showgrid=True, gridcolor='LightGray'),
-        height=600 
+        height=600  # Increased height
     )
     fig_summary.update_traces(
         hovertemplate='<b>Statistic</b>: %{customdata}<br><b>Performance Ratio</b>: %{y:.2f}<br><b>Timestamp</b>: %{x}<extra></extra>',
