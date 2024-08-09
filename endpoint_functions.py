@@ -1266,7 +1266,7 @@ async def get_supernode_inference_server_benchmark_plots():
     data_frames = []
     for timestamp, df in performance_data_history.items():
         df['Timestamp'] = timestamp
-        df['Smoothed Performance Ratio'] = df['Performance Ratio'].rolling(window=60, min_periods=20).mean()  # Smooth the data
+        df['Smoothed Performance Ratio'] = df['Performance Ratio'].rolling(window=20, min_periods=5).mean()
         data_frames.append(df)
     if not data_frames:
         raise HTTPException(status_code=404, detail="No data available for plotting.")
@@ -1279,6 +1279,11 @@ async def get_supernode_inference_server_benchmark_plots():
                        title="Supernode Inference Server Benchmark Performance",
                        labels={'Smoothed Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
                        template='plotly_white')
+
+    # Set all traces except the first one to be initially invisible
+    for i, trace in enumerate(fig_main.data):
+        trace.visible = True if i == 0 else "legendonly"
+
     fig_main.update_layout(
         font=dict(family="Montserrat", size=14, color="black"),
         title=dict(font=dict(size=20)),
@@ -1307,7 +1312,7 @@ async def get_supernode_inference_server_benchmark_plots():
         customdata=non_summary_df['IP Address']
     )
 
-    # Generate the summary plot
+    # Generate the summary plot (unchanged)
     fig_summary = px.line(summary_df, x='Timestamp', y='Performance Ratio', color='IP Address', markers=True,
                           title="Summary Statistics (Min, Average, Median, Max)",
                           labels={'Performance Ratio': 'Performance Ratio', 'Timestamp': 'Timestamp'},
@@ -1375,6 +1380,14 @@ async def get_supernode_inference_server_benchmark_plots():
             table.dataTable tbody td {{
                 padding: 8px;
             }}
+            #toggleAllBtn {{
+                margin: 10px 0;
+                padding: 10px;
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                cursor: pointer;
+            }}
         </style>
         <script src="https://code.jquery.com/jquery-3.5.1.js"></script>
         <script type="text/javascript" charset="utf8" src="https://cdn.datatables.net/1.10.21/js/jquery.dataTables.js"></script>
@@ -1385,6 +1398,7 @@ async def get_supernode_inference_server_benchmark_plots():
         <div class="plot-container" id="main-plot">
             {main_plot_html}
         </div>
+        <button id="toggleAllBtn">Toggle All Series</button>
         <hr>
         <div class="plot-container" id="summary-plot">
             {summary_plot_html}
@@ -1438,6 +1452,12 @@ async def get_supernode_inference_server_benchmark_plots():
                             'line.color': originalColors
                         }};
                         Plotly.restyle(plotlyInstance, update);
+                    }});
+
+                    // Toggle all series visibility
+                    $('#toggleAllBtn').click(function() {{
+                        var newVisibility = plotData.map(trace => !trace.visible);
+                        Plotly.restyle(plotlyInstance, {{'visible': newVisibility}});
                     }});
                 }}
 
