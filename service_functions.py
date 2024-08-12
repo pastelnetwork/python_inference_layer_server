@@ -1041,12 +1041,10 @@ async def sign_message_with_libpastelid(message: str, pastelid: str, passphrase:
     signed_message = pastel_signer.sign_with_pastel_id(message, pastelid, passphrase)
     return signed_message
 
-async def verify_message_with_pastelid_func(pastelid: str, message_to_verify: str, pastelid_signature_on_message: str, pastelid_override=None) -> str:
-    if use_libpastelid_for_pastelid_sign_verify:
-        return await verify_message_with_libpastelid(pastelid, message_to_verify, pastelid_signature_on_message, pastelid_override)
-    else:
-        verification_result = await rpc_connection.pastelid('verify', message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
-        return verification_result['verification']
+async def verify_message_with_libpastelid(pastelid: str, message: str, signature: str, pastelid_override=None):
+    pastelid_file = get_oldest_pastelid_file(pastel_keys_dir, pastelid_override)
+    is_valid = pastel_signer.verify_with_pastel_id(message, signature, pastelid)
+    return "OK" if is_valid else "Failed"
 
 async def sign_message_with_pastelid_func(pastelid: str, message_to_sign: str, passphrase: str, pastelid_override=None) -> str:
     if use_libpastelid_for_pastelid_sign_verify:
@@ -1055,6 +1053,13 @@ async def sign_message_with_pastelid_func(pastelid: str, message_to_sign: str, p
         results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
         return results_dict['signature']
 
+async def verify_message_with_pastelid_func(pastelid: str, message_to_verify: str, pastelid_signature_on_message: str, pastelid_override=None) -> str:
+    if use_libpastelid_for_pastelid_sign_verify:
+        return await verify_message_with_libpastelid(pastelid, message_to_verify, pastelid_signature_on_message, pastelid_override)
+    else:
+        verification_result = await rpc_connection.pastelid('verify', message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
+        return verification_result['verification']
+    
 async def parse_sn_messages_from_last_k_minutes_func(k=10, message_type='all'):
     messages_list_df = await list_sn_messages_func()
     messages_list_df__recent = messages_list_df[messages_list_df['timestamp'] > (datetime.now(timezone.utc) - timedelta(minutes=k))]
