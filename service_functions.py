@@ -875,6 +875,7 @@ async def generate_supernode_inference_ip_blacklist(max_response_time_in_millise
     )
     # Filter supernodes based on success/failure
     successful_nodes = {supernode['extKey'] for supernode in check_results if supernode is not None}
+    successful_nodes_ip_addresses = {supernode['ipaddress:port']for supernode in check_results if supernode is not None}
     failed_nodes = {supernode['ipaddress:port'] for supernode in full_supernode_list_df.to_dict(orient='records') if supernode['extKey'] not in successful_nodes}
     logger.info(f"There were {len(failed_nodes)} failed Supernodes out of {len(full_supernode_list_df)} total Supernodes, a failure rate of {len(failed_nodes) / len(full_supernode_list_df) * 100:.2f}%")
     # Update performance data
@@ -887,7 +888,7 @@ async def generate_supernode_inference_ip_blacklist(max_response_time_in_millise
             blacklist_file.write(f"{ip_address}\n")
     # Write successful nodes to the valid supernode list
     with valid_supernode_list_path.open('w') as valid_supernode_file:
-        for successful_node in successful_nodes:
+        for successful_node in successful_nodes_ip_addresses:
             ip_address = successful_node.split(':')[0]
             valid_supernode_file.write(f"{ip_address}\n")
     return list(successful_nodes)
