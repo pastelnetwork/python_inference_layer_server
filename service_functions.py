@@ -860,23 +860,37 @@ async def save_performance_data_history(local_performance_data_df):
 async def generate_supernode_inference_ip_blacklist(max_response_time_in_milliseconds=800):
     global performance_data_df, performance_data_history
     blacklist_path = Path('supernode_inference_ip_blacklist.txt')
+    valid_supernode_list_path = Path('valid_supernode_list.txt')
     logger.info("Now compiling Supernode IP blacklist based on Supernode responses to port checks...")
+    # Ensure the blacklist and valid supernode files exist
     if not blacklist_path.exists():
         blacklist_path.touch()
+    if not valid_supernode_list_path.exists():
+        valid_supernode_list_path.touch()
+    # Perform the supernode checks
     full_supernode_list_df, _ = await check_supernode_list_func()
     local_performance_data = []
-    check_results = await asyncio.gather(*(check_inference_port(supernode, max_response_time_in_milliseconds, local_performance_data) for supernode in full_supernode_list_df.to_dict(orient='records')))
-    filtered_supernodes = [supernode['extKey'] for supernode in check_results if supernode is not None]
+    check_results = await asyncio.gather(
+        *(check_inference_port(supernode, max_response_time_in_milliseconds, local_performance_data) for supernode in full_supernode_list_df.to_dict(orient='records'))
+    )
+    # Filter supernodes based on success/failure
     successful_nodes = {supernode['extKey'] for supernode in check_results if supernode is not None}
     failed_nodes = {supernode['ipaddress:port'] for supernode in full_supernode_list_df.to_dict(orient='records') if supernode['extKey'] not in successful_nodes}
     logger.info(f"There were {len(failed_nodes)} failed Supernodes out of {len(full_supernode_list_df)} total Supernodes, a failure rate of {len(failed_nodes) / len(full_supernode_list_df) * 100:.2f}%")
+    # Update performance data
     local_performance_data_df = await update_performance_data_df(local_performance_data)
     await save_performance_data_history(local_performance_data_df)
+    # Write failed nodes to blacklist
     with blacklist_path.open('w') as blacklist_file:
         for failed_node in failed_nodes:
             ip_address = failed_node.split(':')[0]
             blacklist_file.write(f"{ip_address}\n")
-    return filtered_supernodes
+    # Write successful nodes to the valid supernode list
+    with valid_supernode_list_path.open('w') as valid_supernode_file:
+        for successful_node in successful_nodes:
+            ip_address = successful_node.split(':')[0]
+            valid_supernode_file.write(f"{ip_address}\n")
+    return list(successful_nodes)
 
 async def check_supernode_list_func():
     masternode_list_full_command_output = await rpc_connection.masternodelist('full')
