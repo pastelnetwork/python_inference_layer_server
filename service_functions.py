@@ -50,6 +50,7 @@ from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
 from PIL import Image
+import libpastelid
 
 encryption_key = None
 magika = Magika()
@@ -157,6 +158,7 @@ performance_data_df = pd.DataFrame(columns=['IP Address', 'Performance Ratio', '
 performance_data_history = {}
 local_benchmark_csv_file_path = Path('local_sn_micro_benchmark_results.csv')
 pickle_file_path = Path('performance_data_history.pkl')
+use_libpastelid_for_pastelid_sign_verify = 1
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0, cast=int)
@@ -201,6 +203,10 @@ UVICORN_PORT = config.get("UVICORN_PORT", default=7123, cast=int)
 COIN = 100000 # patoshis in 1 PSL
 challenge_store = {}
 file_store = {} # In-memory store for files with expiration times
+
+# Initialize PastelSigner
+pastel_keys_dir = os.path.expanduser("~/.pastel/pastelkeys")
+pastel_signer = libpastelid.PastelSigner(pastel_keys_dir)
 
 def parse_timestamp(timestamp_str):
     try:
@@ -1022,9 +1028,32 @@ async def list_sn_messages_func():
         combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
     return combined_messages_df
 
-async def sign_message_with_pastelid_func(pastelid, message_to_sign, passphrase) -> str:
-    results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
-    return results_dict['signature']
+def get_oldest_pastelid_file(pastel_keys_dir, pastelid_override=None):
+    if pastelid_override:
+        return os.path.join(pastel_keys_dir, pastelid_override)
+    pastel_key_files = [f for f in os.listdir(pastel_keys_dir) if os.path.isfile(os.path.join(pastel_keys_dir, f))]
+    if not pastel_key_files:
+        raise ValueError("No PastelID files found in the specified directory.")
+    return os.path.join(pastel_keys_dir, min(pastel_key_files, key=lambda f: os.path.getctime(os.path.join(pastel_keys_dir, f))))
+
+async def sign_message_with_libpastelid(message: str, pastelid: str, passphrase: str, pastelid_override=None):
+    pastelid_file = get_oldest_pastelid_file(pastel_keys_dir, pastelid_override)
+    signed_message = pastel_signer.sign_with_pastel_id(message, pastelid, passphrase)
+    return signed_message
+
+async def verify_message_with_pastelid_func(pastelid: str, message_to_verify: str, pastelid_signature_on_message: str, pastelid_override=None) -> str:
+    if use_libpastelid_for_pastelid_sign_verify:
+        return await verify_message_with_libpastelid(pastelid, message_to_verify, pastelid_signature_on_message, pastelid_override)
+    else:
+        verification_result = await rpc_connection.pastelid('verify', message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
+        return verification_result['verification']
+
+async def sign_message_with_pastelid_func(pastelid: str, message_to_sign: str, passphrase: str, pastelid_override=None) -> str:
+    if use_libpastelid_for_pastelid_sign_verify:
+        return await sign_message_with_libpastelid(message_to_sign, pastelid, passphrase, pastelid_override)
+    else:
+        results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
+        return results_dict['signature']
 
 async def parse_sn_messages_from_last_k_minutes_func(k=10, message_type='all'):
     messages_list_df = await list_sn_messages_func()

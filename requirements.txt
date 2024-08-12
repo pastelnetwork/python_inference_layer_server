@@ -6,6 +6,7 @@ fastapi
 fuzzywuzzy 
 groq
 httpx[http2]
+libpastelid
 magika
 mistralai
 mutagen
