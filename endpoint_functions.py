@@ -4,7 +4,9 @@ from logger_config import logger
 from fastapi import APIRouter, Depends, Query, Request, Body
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, FileResponse
 from fastapi.exceptions import HTTPException
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from starlette.background import BackgroundTask
+from starlette.status import HTTP_401_UNAUTHORIZED
 from json import JSONEncoder
 from pathlib import Path
 import json
@@ -14,6 +16,7 @@ import tempfile
 import uuid
 import traceback
 import pickle
+import secrets
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -25,7 +28,19 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0)
+SN_PERFORMANCE_STATS_PASSWORD = config.get("SN_PERFORMANCE_STATS_PASSWORD", default="CHANGEME")
 pickle_file_path = Path('performance_data_history.pkl')
+security = HTTPBasic()
+
+def verify_password(credentials: HTTPBasicCredentials = Depends(security)):
+    correct_password = secrets.compare_digest(credentials.password, SN_PERFORMANCE_STATS_PASSWORD)
+    if not correct_password:
+        raise HTTPException(
+            status_code=HTTP_401_UNAUTHORIZED,
+            detail="Incorrect password",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    return credentials.password
 
 # RPC Client Dependency
 async def get_rpc_connection():
@@ -1259,7 +1274,7 @@ async def read_performance_data():
 
 
 @router.get("/get_supernode_inference_server_benchmark_plots")
-async def get_supernode_inference_server_benchmark_plots():
+async def get_supernode_inference_server_benchmark_plots(password: str = Depends(verify_password)):
     performance_data_history = await read_performance_data()
     if not performance_data_history:
         raise HTTPException(status_code=404, detail="No performance data available.")
