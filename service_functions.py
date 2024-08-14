@@ -45,7 +45,7 @@ from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
 import database_code as db_code
-from sqlmodel import select, func, SQLModel
+from sqlmodel import select, delete, func, SQLModel
 from sqlalchemy.exc import IntegrityError
 from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
