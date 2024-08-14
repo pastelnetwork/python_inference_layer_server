@@ -1062,16 +1062,16 @@ async def verify_message_with_libpastelid(pastelid: str, message: str, signature
     is_valid = pastel_signer.verify_with_pastel_id(message, signature, pastelid)
     return "OK" if is_valid else "Failed"
 
-async def sign_message_with_pastelid_func(pastelid: str, message_to_sign: str, passphrase: str, pastelid_override=None) -> str:
+async def sign_message_with_pastelid_func(pastelid: str, message_to_sign: str, passphrase: str) -> str:
     if use_libpastelid_for_pastelid_sign_verify:
-        return await sign_message_with_libpastelid(message_to_sign, pastelid, passphrase, pastelid_override)
+        return await sign_message_with_libpastelid(message_to_sign, pastelid, passphrase)
     else:
         results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
         return results_dict['signature']
 
-async def verify_message_with_pastelid_func(pastelid: str, message_to_verify: str, pastelid_signature_on_message: str, pastelid_override=None) -> str:
+async def verify_message_with_pastelid_func(pastelid: str, message_to_verify: str, pastelid_signature_on_message: str) -> str:
     if use_libpastelid_for_pastelid_sign_verify:
-        return await verify_message_with_libpastelid(pastelid, message_to_verify, pastelid_signature_on_message, pastelid_override)
+        return await verify_message_with_libpastelid(pastelid, message_to_verify, pastelid_signature_on_message)
     else:
         verification_result = await rpc_connection.pastelid('verify', message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
         return verification_result['verification']
