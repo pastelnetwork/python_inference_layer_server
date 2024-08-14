@@ -1273,6 +1273,16 @@ async def read_performance_data():
     raise HTTPException(status_code=500, detail="Could not read performance data.")
 
 
+@router.post("/clear_out_known_bad_credit_pack_table")
+async def clear_out_known_bad_credit_pack_table_endpoint(password: str = Depends(verify_password)):
+    try:
+        await service_functions.clear_out_all_credit_packs_from_known_bad_table()
+        return {"message": "Successfully cleared all credit packs from the known bad table."}
+    except Exception as e:
+        logger.error(f"Error clearing known bad credit pack table: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error clearing known bad credit pack table: {str(e)}")
+
+
 @router.get("/get_supernode_inference_server_benchmark_plots")
 async def get_supernode_inference_server_benchmark_plots(password: str = Depends(verify_password)):
     performance_data_history = await read_performance_data()

@@ -3300,6 +3300,18 @@ async def insert_credit_pack_ticket_txid_into_known_bad_table_in_db(credit_pack_
         await db_session.refresh(known_bad_txid_object)
     return known_bad_txid_object
 
+async def clear_out_all_credit_packs_from_known_bad_table():
+    try:
+        async with db_code.Session() as db_session:
+            # Delete all entries from the CreditPackKnownBadTXID table
+            await db_session.exec(delete(db_code.CreditPackKnownBadTXID))
+            await db_session.commit()
+            logger.info("Successfully cleared all credit packs from the known bad table.")
+    except Exception as e:
+        logger.error(f"Error clearing credit packs from known bad table: {str(e)}")
+        traceback.print_exc()
+        raise
+
 async def get_list_of_all_known_bad_credit_pack_ticket_txids_from_db():
     async with db_code.Session() as db_session:
         known_bad_txids = await db_session.exec(select(db_code.CreditPackKnownBadTXID))
