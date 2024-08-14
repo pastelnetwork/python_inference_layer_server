@@ -52,6 +52,9 @@ from mutagen import File as MutagenFile
 from PIL import Image
 import libpastelid
 
+pastel_keys_dir = os.path.expanduser("/home/ubuntu/.pastel/pastelkeys")
+pastel_signer = libpastelid.PastelSigner(pastel_keys_dir)
+
 encryption_key = None
 magika = Magika()
 
@@ -1043,21 +1046,19 @@ async def list_sn_messages_func():
         combined_messages_df = combined_messages_df.sort_values('timestamp', ascending=False)
     return combined_messages_df
 
-def get_oldest_pastelid_file(pastel_keys_dir, pastelid_override=None):
+def get_oldest_pastelid_file_pubkey(pastel_keys_dir, pastelid_override=None):
     if pastelid_override:
-        return os.path.join(pastel_keys_dir, pastelid_override)
+        return pastelid_override
     pastel_key_files = [f for f in os.listdir(pastel_keys_dir) if os.path.isfile(os.path.join(pastel_keys_dir, f))]
     if not pastel_key_files:
         raise ValueError("No PastelID files found in the specified directory.")
-    return os.path.join(pastel_keys_dir, min(pastel_key_files, key=lambda f: os.path.getctime(os.path.join(pastel_keys_dir, f))))
+    return min(pastel_key_files, key=lambda f: os.path.getctime(os.path.join(pastel_keys_dir, f)))
 
-async def sign_message_with_libpastelid(message: str, pastelid: str, passphrase: str, pastelid_override=None):
-    pastelid_file = get_oldest_pastelid_file(pastel_keys_dir, pastelid_override)
+async def sign_message_with_libpastelid(message: str, pastelid: str, passphrase: str):
     signed_message = pastel_signer.sign_with_pastel_id(message, pastelid, passphrase)
     return signed_message
 
-async def verify_message_with_libpastelid(pastelid: str, message: str, signature: str, pastelid_override=None):
-    pastelid_file = get_oldest_pastelid_file(pastel_keys_dir, pastelid_override)
+async def verify_message_with_libpastelid(pastelid: str, message: str, signature: str):
     is_valid = pastel_signer.verify_with_pastel_id(message, signature, pastelid)
     return "OK" if is_valid else "Failed"
 
