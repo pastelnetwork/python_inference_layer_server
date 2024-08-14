@@ -2247,8 +2247,9 @@ async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_th
 async def periodic_ticket_listing_and_validation():
     while True:
         try:
-            await list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them()
-            await asyncio.sleep(30*60)  # Sleep for 30 minutes
+            starting_block_height = 700000
+            await list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them(starting_block_height=starting_block_height)
+            await asyncio.sleep(5*60)  # Sleep for 5 minutes
         except Exception as e:
             logger.error(f"Error in periodic ticket listing and validation: {str(e)}")
             traceback.print_exc()
