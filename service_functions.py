@@ -2319,7 +2319,7 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain
         logger.error(storage_validation_error_string)
         traceback.print_exc()
         return credit_pack_ticket_txid, storage_validation_error_string
-
+    
 async def check_original_supernode_storage_confirmation(sha3_256_hash_of_credit_pack_purchase_request_response_fields: str) -> bool:
     async with db_code.Session() as db:
         result = await db.exec(
@@ -3712,64 +3712,46 @@ async def validate_selected_agreeing_supernodes(credit_pack_ticket_txid, credit_
 
 async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
     async def process_request_confirmation(request_confirmation):
-        hash_of_request_fields = request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
-        async with db_code.Session() as db_session:
-            txid_mapping = await db_session.exec(
-                select(db_code.CreditPackPurchaseRequestResponseTxidMapping)
-                .where(db_code.CreditPackPurchaseRequestResponseTxidMapping.sha3_256_hash_of_credit_pack_purchase_request_fields == hash_of_request_fields)
-            )
-            txid_mapping = txid_mapping.first()
-        if txid_mapping:
-            txid = txid_mapping.pastel_api_credit_pack_ticket_registration_txid
-            async with db_code.Session() as db_session:
-                existing_data_result = await db_session.exec(
-                    select(db_code.CreditPackCompleteTicketWithBalance)
-                    .where(db_code.CreditPackCompleteTicketWithBalance.credit_pack_ticket_registration_txid == txid)
-                )
-                existing_data = existing_data_result.first()
-            if existing_data:
-                complete_ticket = json.loads(existing_data.complete_credit_pack_data_json)
-                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
-                complete_ticket['credit_pack_current_credit_balance'] = current_credit_balance
-                complete_ticket['balance_as_of_datetime'] = datetime.now(timezone.utc).isoformat()
-                complete_ticket_json = json.dumps(complete_ticket)
-                async with db_code.Session() as db_session:
-                    existing_data.complete_credit_pack_data_json = complete_ticket_json
-                    existing_data.datetime_last_updated = datetime.now(timezone.utc)
-                    db_session.add(existing_data)
-                    await db_session.commit()
+        txid = request_confirmation.txid_of_credit_purchase_burn_transaction
+        credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
+        if not all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
+            logger.warning(f"Incomplete credit pack ticket data in database for TXID {txid}. Fetching from blockchain.")
+            credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(txid)
+            if all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
+                await save_credit_pack_ticket_to_database(credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, txid)
             else:
-                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
-                _, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_using_txid(txid)
-                if all((credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
-                    credit_pack_purchase_request_fields_json = base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')
-                    credit_pack_purchase_request = json.loads(credit_pack_purchase_request_fields_json)
-                    complete_ticket = {
-                        "credit_pack_purchase_request": credit_pack_purchase_request,
-                        "credit_pack_purchase_request_response": credit_pack_purchase_request_response.model_dump(),
-                        "credit_pack_purchase_request_confirmation": credit_pack_purchase_request_confirmation.model_dump(),
-                        "credit_pack_registration_txid": txid,
-                        "credit_pack_current_credit_balance": current_credit_balance,
-                        "balance_as_of_datetime": datetime.now(timezone.utc).isoformat()
-                    }
-                    complete_ticket = convert_uuids_to_strings(complete_ticket)
-                    complete_ticket = normalize_data(complete_ticket)
-                    complete_ticket_json = json.dumps(complete_ticket)
-                    async with db_code.Session() as db_session:
-                        if existing_data:
-                            existing_data.complete_credit_pack_data_json = complete_ticket_json
-                            existing_data.datetime_last_updated = datetime.now(timezone.utc)
-                            db_session.add(existing_data)
-                        else:
-                            new_complete_ticket = db_code.CreditPackCompleteTicketWithBalance(
-                                credit_pack_ticket_registration_txid=txid,
-                                complete_credit_pack_data_json=complete_ticket_json,
-                                datetime_last_updated=datetime.now(timezone.utc)
-                            )
-                            db_session.add(new_complete_ticket)
-                        await db_session.commit()
-            return complete_ticket
-        return None
+                logger.error(f"Failed to retrieve complete credit pack ticket data for TXID {txid} from blockchain")
+                return None
+        current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
+        complete_ticket = {
+            "credit_pack_purchase_request": json.loads(base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')),
+            "credit_pack_purchase_request_response": credit_pack_purchase_request_response.model_dump(),
+            "credit_pack_purchase_request_confirmation": credit_pack_purchase_request_confirmation.model_dump(),
+            "credit_pack_registration_txid": txid,
+            "credit_pack_current_credit_balance": current_credit_balance,
+            "balance_as_of_datetime": datetime.now(timezone.utc).isoformat()
+        }
+        complete_ticket = convert_uuids_to_strings(complete_ticket)
+        complete_ticket = normalize_data(complete_ticket)
+        async with db_code.Session() as db_session:
+            existing_data = await db_session.exec(
+                select(db_code.CreditPackCompleteTicketWithBalance)
+                .where(db_code.CreditPackCompleteTicketWithBalance.credit_pack_ticket_registration_txid == txid)
+            )
+            existing_data = existing_data.first()
+            if existing_data:
+                existing_data.complete_credit_pack_data_json = json.dumps(complete_ticket)
+                existing_data.datetime_last_updated = datetime.now(timezone.utc)
+                db_session.add(existing_data)
+            else:
+                new_complete_ticket = db_code.CreditPackCompleteTicketWithBalance(
+                    credit_pack_ticket_registration_txid=txid,
+                    complete_credit_pack_data_json=json.dumps(complete_ticket),
+                    datetime_last_updated=datetime.now(timezone.utc)
+                )
+                db_session.add(new_complete_ticket)
+            await db_session.commit()
+        return complete_ticket
     try:
         async with db_code.Session() as db_session:
             credit_pack_request_confirmations_results = await db_session.exec(
@@ -3779,13 +3761,54 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
             credit_pack_request_confirmations = credit_pack_request_confirmations_results.all()
         tasks = [process_request_confirmation(request_confirmation) for request_confirmation in credit_pack_request_confirmations]
         complete_tickets = await asyncio.gather(*tasks)
-        # Filter out None values (if any)
         complete_tickets = [ticket for ticket in complete_tickets if ticket]
         return complete_tickets
     except Exception as e:
         logger.error(f"Error retrieving credit pack tickets for PastelID {pastelid}: {str(e)}")
         traceback.print_exc()
         raise
+
+async def save_credit_pack_ticket_to_database(credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, txid):
+    async with db_code.Session() as db_session:
+        try:
+            existing_request = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequest)
+                .where(db_code.CreditPackPurchaseRequest.sha3_256_hash_of_credit_pack_purchase_request_fields == credit_pack_purchase_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
+            )
+            existing_request = existing_request.first()
+            if existing_request:
+                for key, value in credit_pack_purchase_request.dict().items():
+                    setattr(existing_request, key, value)
+            else:
+                db_session.add(credit_pack_purchase_request)
+            existing_response = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestResponse)
+                .where(db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
+            )
+            existing_response = existing_response.first()
+            if existing_response:
+                for key, value in credit_pack_purchase_request_response.dict().items():
+                    setattr(existing_response, key, value)
+            else:
+                db_session.add(credit_pack_purchase_request_response)
+            existing_confirmation = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestConfirmation)
+                .where(db_code.CreditPackPurchaseRequestConfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields == credit_pack_purchase_request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
+            )
+            existing_confirmation = existing_confirmation.first()
+            if existing_confirmation:
+                for key, value in credit_pack_purchase_request_confirmation.dict().items():
+                    setattr(existing_confirmation, key, value)
+            else:
+                db_session.add(credit_pack_purchase_request_confirmation)
+            await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, txid)
+            await db_session.commit()
+            logger.info(f"Successfully saved/updated credit pack ticket data for TXID {txid} to database.")
+        except Exception as e:
+            logger.error(f"Error saving/updating retrieved credit pack ticket to the local database: {str(e)}")
+            await db_session.rollback()
+            raise
+    await db_code.consolidate_wal_data()
 
         
 #________________________________________________________________________________________________________________            
