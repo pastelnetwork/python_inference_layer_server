@@ -711,10 +711,6 @@ async def get_raw_transaction_func(txid):
     raw_transaction_data = await rpc_connection.getrawtransaction(txid, 1) 
     return raw_transaction_data
 
-async def verify_message_with_pastelid_func(pastelid, message_to_verify, pastelid_signature_on_message) -> str:
-    verification_result = await rpc_connection.pastelid('verify', message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
-    return verification_result['verification']
-
 async def generate_challenge(pastelid: str) -> Tuple[str, str]:
     """
     Generates a random challenge string and a unique challenge ID for a given PastelID.
@@ -850,8 +846,8 @@ async def save_performance_data_history(local_performance_data_df):
     # Update the global performance_data_history
     performance_data_history.update(existing_data)
     performance_data_history[current_time_str] = local_performance_data_df
-    # Remove entries older than two weeks
-    cutoff_date = datetime.utcnow() - timedelta(weeks=2)
+    # Remove entries older than 3 days
+    cutoff_date = datetime.utcnow() - timedelta(days=3)
     performance_data_history = {k: v for k, v in performance_data_history.items() if datetime.fromisoformat(k) >= cutoff_date}
     # Save updated data
     try:
@@ -1323,7 +1319,7 @@ async def process_broadcast_messages(message, db_session):
                 await retry_on_database_locked(db_session.refresh, output_result)
             else:
                 logger.info("Skipping insertion as the result record already exists.")
-    except Exception as e:
+    except Exception as e:   # noqa: F841
         traceback.print_exc()
         
 async def monitor_new_messages():
@@ -1340,7 +1336,7 @@ async def monitor_new_messages():
                         last_processed_timestamp = pd.Timestamp(last_processed_timestamp_raw).tz_localize('UTC').tz_convert('UTC')
                 try:
                     new_messages_df = await list_sn_messages_func()
-                except Exception as e:
+                except Exception as e:   # noqa: F841
                     new_messages_df = None
                 if new_messages_df is not None and not new_messages_df.empty:
                     new_messages_df['timestamp'] = pd.to_datetime(new_messages_df['timestamp'], utc=True)

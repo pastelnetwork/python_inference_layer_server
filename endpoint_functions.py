@@ -19,8 +19,6 @@ import pickle
 import secrets
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Union, Dict, Any
 from pydantic import SecretStr, BaseModel
