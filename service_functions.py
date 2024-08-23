@@ -22,13 +22,16 @@ import tempfile
 import warnings
 import pickle
 import pytz
-from pathlib import Path
+from collections import defaultdict
 from collections.abc import Iterable
+from functools import wraps
+import cachetools
+from pathlib import Path
 from urllib.parse import quote_plus, unquote_plus
 from datetime import datetime, timedelta, date, timezone
 import pandas as pd
 import httpx
-from httpx import Timeout
+from httpx import Timeout, TimeoutException, ConnectError
 from urllib.parse import urlparse
 from logger_config import logger
 import zstandard as zstd
@@ -176,15 +179,12 @@ REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_INST
 REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT", default=8087, cast=int)
 REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT", default=8089, cast=int)
 CREDIT_COST_MULTIPLIER_FACTOR = config.get("CREDIT_COST_MULTIPLIER_FACTOR", default=0.1, cast=float)
-BASE_TRANSACTION_AMOUNT = decimal.Decimal(config.get("BASE_TRANSACTION_AMOUNT", default=0.000001, cast=float))
-FEE_PER_KB = decimal.Decimal(config.get("FEE_PER_KB", default=0.0001, cast=float))
 MESSAGING_TIMEOUT_IN_SECONDS = config.get("MESSAGING_TIMEOUT_IN_SECONDS", default=60, cast=int)
 API_KEY_TESTS_FILE = "api_key_tests.json"
 API_KEY_TEST_VALIDITY_HOURS = config.get("API_KEY_TEST_VALIDITY_HOURS", default=72, cast=int)
 TARGET_VALUE_PER_CREDIT_IN_USD = config.get("TARGET_VALUE_PER_CREDIT_IN_USD", default=0.1, cast=float)
 TARGET_PROFIT_MARGIN = config.get("TARGET_PROFIT_MARGIN", default=0.1, cast=float)
 MINIMUM_COST_IN_CREDITS = config.get("MINIMUM_COST_IN_CREDITS", default=0.1, cast=float)
-MINUTES_BETWEEN_REFRESHING_SUPERNODE_PING_AND_PORT_RESPONSE_DATA = config.get("MINUTES_BETWEEN_REFRESHING_SUPERNODE_PING_AND_PORT_RESPONSE_DATA", default=3, cast=int)
 CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER = config.get("CREDIT_USAGE_TO_TRACKING_AMOUNT_MULTIPLIER", default=10, cast=int) # Since we always round inference credits to the nearest 0.1, this gives us enough resolution using Patoshis     
 MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET = config.get("MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET", default=50, cast=int)
 MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING = config.get("MAXIMUM_LOCAL_CREDIT_PRICE_DIFFERENCE_TO_ACCEPT_CREDIT_PRICING", default=0.1, cast=float)
@@ -200,12 +200,27 @@ INDIVIDUAL_SUPERNODE_MODEL_MENU_REQUEST_TIMEOUT_PERIOD_IN_SECONDS = config.get("
 BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS = config.get("BURN_TRANSACTION_MAXIMUM_AGE_IN_DAYS", default=3, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_QUORUM_PERCENTAGE", default=0.51, cast=float)
 SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE = config.get("SUPERNODE_CREDIT_PRICE_AGREEMENT_MAJORITY_PERCENTAGE", default=0.65, cast=float)
+MINIMUM_CREDITS_PER_CREDIT_PACK = config.get("MINIMUM_CREDITS_PER_CREDIT_PACK", default=10, cast=int)
 MAXIMUM_CREDITS_PER_CREDIT_PACK = config.get("MAXIMUM_CREDITS_PER_CREDIT_PACK", default=1000000, cast=int)
+SUPERNODE_DATA_CACHE_EVICTION_TIME_IN_MINUTES = config.get("SUPERNODE_DATA_CACHE_EVICTION_TIME_IN_MINUTES", default=60, cast=int)
 SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK = 1
 UVICORN_PORT = config.get("UVICORN_PORT", default=7123, cast=int)
 COIN = 100000 # patoshis in 1 PSL
+SUPERNODE_DATA_CACHE = TTLCache(maxsize=1, ttl=SUPERNODE_DATA_CACHE_EVICTION_TIME_IN_MINUTES * 60) # Define the cache with a TTL (time to live) in seconds
 challenge_store = {}
 file_store = {} # In-memory store for files with expiration times
+tracking_period_start = datetime.utcnow()
+rpc_call_stats = defaultdict(lambda: {
+    "count": 0,
+    "cumulative_time": 0.0,
+    "average_time": 0.0,
+    "success_count": 0,
+    "total_response_size": 0,
+    "average_response_size": 0.0,
+    "timeout_errors": 0,
+    "connection_errors": 0,
+    "other_errors": 0
+})
 
 # Initialize PastelSigner
 pastel_keys_dir = os.path.expanduser("~/.pastel/pastelkeys")
@@ -624,18 +639,174 @@ class AsyncAuthServiceProxy:
                     'code': -343, 'message': 'missing JSON-RPC result'})
             else:
                 return response_json['result']
-
     async def close(self):
         await self.client.aclose()
-                    
-async def micro_benchmarking_func():
-    baseline_score = 18
-    duration_of_benchmark_in_seconds = 4.0
+
+async def save_stats_to_json():
+    while True:
+        await asyncio.sleep(3600)  # Adjust this value for how often you want to save stats (e.g., every hour)
+        tracking_period_end = datetime.utcnow()
+        stats_snapshot = {
+            "tracking_period_start": tracking_period_start.isoformat() + 'Z',
+            "tracking_period_end": tracking_period_end.isoformat() + 'Z',
+            "rpc_call_stats": dict(rpc_call_stats)
+        }
+        # Append the stats to the JSON file
+        try:
+            with open('rpc_call_stats.json', 'a') as f:
+                f.write(json.dumps(stats_snapshot) + '\n')
+        except Exception as e:
+            print(f"Failed to save stats to JSON: {e}")
+        # Reset tracking for the next period
+        global rpc_call_stats
+        rpc_call_stats = defaultdict(lambda: {
+            "count": 0,
+            "cumulative_time": 0.0,
+            "average_time": 0.0,
+            "success_count": 0,
+            "total_response_size": 0,
+            "average_response_size": 0.0,
+            "timeout_errors": 0,
+            "connection_errors": 0,
+            "other_errors": 0
+        })
+        global tracking_period_start
+        tracking_period_start = tracking_period_end
+
+def track_rpc_call(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        method_name = kwargs.get('method_name', func.__name__)
+        params = tuple(args) + tuple(kwargs.items())
+        rpc_key = (method_name, params)
+        start_time = time.time()
+        try:
+            result = await func(*args, **kwargs)
+            elapsed_time = time.time() - start_time
+            response_size = len(str(result).encode('utf-8'))
+            rpc_call_stats[rpc_key]["count"] += 1
+            rpc_call_stats[rpc_key]["cumulative_time"] += elapsed_time
+            rpc_call_stats[rpc_key]["average_time"] = (
+                rpc_call_stats[rpc_key]["cumulative_time"] / rpc_call_stats[rpc_key]["count"]
+            )
+            rpc_call_stats[rpc_key]["total_response_size"] = rpc_call_stats[rpc_key].get("total_response_size", 0) + response_size
+            rpc_call_stats[rpc_key]["average_response_size"] = (
+                rpc_call_stats[rpc_key]["total_response_size"] / rpc_call_stats[rpc_key]["count"]
+            )
+            rpc_call_stats[rpc_key]["success_count"] = rpc_call_stats[rpc_key].get("success_count", 0) + 1
+            return result
+        except httpx.TimeoutException:
+            rpc_call_stats[rpc_key]["timeout_errors"] = rpc_call_stats[rpc_key].get("timeout_errors", 0) + 1
+            raise
+        except httpx.ConnectError:
+            rpc_call_stats[rpc_key]["connection_errors"] = rpc_call_stats[rpc_key].get("connection_errors", 0) + 1
+            raise
+        except Exception as e:
+            rpc_call_stats[rpc_key]["other_errors"] = rpc_call_stats[rpc_key].get("other_errors", 0) + 1
+            raise e
+    return wrapper
+
+#Wrapped RPC calls so we can track them and log their performance:
+@track_rpc_call
+async def getblockcount(rpc_connection):
+    return rpc_connection.getblockcount()
+
+@track_rpc_call
+async def getblockhash(rpc_connection, block_height):
+    return await rpc_connection.getblockhash(block_height)
+
+@track_rpc_call
+async def getblock(rpc_connection, block_hash):
+    return await rpc_connection.getblock(block_hash)
+
+@track_rpc_call
+async def listaddressamounts(rpc_connection):
+    return await rpc_connection.listaddressamounts()
+
+@track_rpc_call
+async def z_getbalance(rpc_connection, address_to_check):
+    return await rpc_connection.z_getbalance(address_to_check)
+
+@track_rpc_call
+async def getrawtransaction(rpc_connection, txid, verbose=1):
+    return await rpc_connection.getrawtransaction(txid, verbose)
+
+@track_rpc_call
+async def masternode_top(rpc_connection):
+    return await rpc_connection.masternode('top')
+
+@track_rpc_call
+async def masternodelist_full(rpc_connection):
+    return await rpc_connection.masternodelist('full')
+
+@track_rpc_call
+async def masternodelist_rank(rpc_connection):
+    return await rpc_connection.masternodelist('rank')
+
+@track_rpc_call
+async def masternodelist_pubkey(rpc_connection):
+    return await rpc_connection.masternodelist('pubkey')
+
+@track_rpc_call
+async def masternodelist_extra(rpc_connection):
+    return await rpc_connection.masternodelist('extra')
+
+@track_rpc_call
+async def masternode_message_list(rpc_connection):
+    return await rpc_connection.masternode('message', 'list')
+
+@track_rpc_call
+async def pastelid_sign(rpc_connection, message_to_sign, pastelid, passphrase, algorithm='ed448'):
+    return await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, algorithm)
+
+@track_rpc_call
+async def pastelid_verify(rpc_connection, message_to_verify, signature, pastelid, algorithm='ed448'):
+    return await rpc_connection.pastelid('verify', message_to_verify, signature, pastelid, algorithm)
+
+@track_rpc_call
+async def masternode_message_send(rpc_connection, receiving_sn_pubkey, compressed_message_base64):
+    return await rpc_connection.masternode('message', 'send', receiving_sn_pubkey, compressed_message_base64)
+
+@track_rpc_call
+async def tickets_register_contract(rpc_connection, ticket_json_b64, ticket_type_identifier, ticket_input_data_hash):
+    return await rpc_connection.tickets('register', 'contract', ticket_json_b64, ticket_type_identifier, ticket_input_data_hash)
+
+@track_rpc_call
+async def tickets_get(rpc_connection, ticket_txid, verbose=1):
+    return await rpc_connection.tickets('get', ticket_txid, verbose)
+
+@track_rpc_call
+async def tickets_list_contract(rpc_connection, ticket_type_identifier, starting_block_height):
+    return await rpc_connection.tickets('list', 'contract', ticket_type_identifier, starting_block_height)
+
+@track_rpc_call
+async def listsinceblock(rpc_connection, start_block_hash, target_confirmations=1, include_watchonly=True):
+    return await rpc_connection.listsinceblock(start_block_hash, target_confirmations, include_watchonly)
+
+@track_rpc_call
+async def tickets_list_id(rpc_connection, identifier):
+    return await rpc_connection.tickets('list', 'id', identifier)
+
+@track_rpc_call
+async def getaddressutxosextra(rpc_connection, addresses_info):
+    return await rpc_connection.getaddressutxosextra(addresses_info)
+
+@track_rpc_call
+async def decoderawtransaction(rpc_connection, raw_tx_data):
+    return await rpc_connection.decoderawtransaction(raw_tx_data)
+
+@track_rpc_call
+async def gettransaction(rpc_connection, txid, include_watchonly=False):
+    return await rpc_connection.gettransaction(txid, include_watchonly)
+
+async def micro_benchmarking_func(rpc_connection):
+    baseline_score = 14
+    duration_of_benchmark_in_seconds = 3.0
     end_time = time.time() + duration_of_benchmark_in_seconds
     actual_score = 0
     while time.time() < end_time:
         try:
-            info_results = await rpc_connection.getinfo()
+            info_results = await getinfo(rpc_connection)
             if 'blocks' in info_results and isinstance(info_results['blocks'], int):
                 actual_score += 1
         except Exception as e:
@@ -670,29 +841,27 @@ async def schedule_micro_benchmark_periodically():
     await load_benchmark_cache_from_csv()
     while True:
         await micro_benchmarking_func()
-        await asyncio.sleep(30)
+        await asyncio.sleep(180)
         await write_benchmark_cache_to_csv()
-                        
+        
 async def get_current_pastel_block_height_func():
-    best_block_hash = await rpc_connection.getbestblockhash()
-    best_block_details = await rpc_connection.getblock(best_block_hash)
-    curent_block_height = best_block_details['height']
+    curent_block_height = await getblockcount(rpc_connection)
     return curent_block_height
 
 async def get_best_block_hash_and_merkle_root_func():
     best_block_height = await get_current_pastel_block_height_func()
-    best_block_hash = await rpc_connection.getblockhash(best_block_height)
-    best_block_details = await rpc_connection.getblock(best_block_hash)
+    best_block_hash = await getblockhash(rpc_connection, best_block_height)
+    best_block_details = await getblock(rpc_connection, best_block_hash)
     best_block_merkle_root = best_block_details['merkleroot']
     return best_block_hash, best_block_merkle_root, best_block_height
 
 async def get_last_block_data_func():
     current_block_height = await get_current_pastel_block_height_func()
-    block_data = await rpc_connection.getblock(str(current_block_height))
+    block_data = await getblock(rpc_connection, str(current_block_height))
     return block_data
 
 async def check_psl_address_balance_alternative_func(address_to_check):
-    address_amounts_dict = await rpc_connection.listaddressamounts()
+    address_amounts_dict = await listaddressamounts(rpc_connection)
     # Convert the dictionary into a list of dictionaries, each representing a row
     data = [{'address': address, 'amount': amount} for address, amount in address_amounts_dict.items()]
     # Create the DataFrame from the list of dictionaries
@@ -704,11 +873,11 @@ async def check_psl_address_balance_alternative_func(address_to_check):
     return balance_at_address
 
 async def check_psl_address_balance_func(address_to_check):
-    balance_at_address = await rpc_connection.z_getbalance(address_to_check)
+    balance_at_address = await z_getbalance(rpc_connection, address_to_check)
     return balance_at_address
 
 async def get_raw_transaction_func(txid):
-    raw_transaction_data = await rpc_connection.getrawtransaction(txid, 1) 
+    raw_transaction_data = await getrawtransaction(rpc_connection, txid, 1)
     return raw_transaction_data
 
 async def generate_challenge(pastelid: str) -> Tuple[str, str]:
@@ -743,8 +912,8 @@ async def verify_challenge_signature(pastelid: str, signature: str, challenge_id
     if current_time > expiration_time:
         del challenge_store[challenge_id]
         return False
-    verification_result = await rpc_connection.pastelid('verify', challenge_string, signature, pastelid, 'ed448')
-    is_valid_signature = verification_result['verification'] == 'OK'
+    verification_result = verify_message_with_pastelid_func(pastelid=pastelid, message_to_verify=challenge_string, pastelid_signature_on_message=signature) 
+    is_valid_signature = verification_result == 'OK'
     if is_valid_signature:
         del challenge_store[challenge_id]
         return True
@@ -766,7 +935,7 @@ async def verify_challenge_signature_from_inference_request_id(inference_request
         return False
 
 async def check_masternode_top_func():
-    masternode_top_command_output = await rpc_connection.masternode('top')
+    masternode_top_command_output = await masternode_top(rpc_connection)
     return masternode_top_command_output
 
 async def check_inference_port(supernode, max_response_time_in_milliseconds, local_performance_data):
@@ -892,11 +1061,11 @@ async def generate_supernode_inference_ip_blacklist(max_response_time_in_millise
             valid_supernode_file.write(f"{ip_address}\n")
     return list(successful_nodes)
 
-async def check_supernode_list_func():
-    masternode_list_full_command_output = await rpc_connection.masternodelist('full')
-    masternode_list_rank_command_output = await rpc_connection.masternodelist('rank')
-    masternode_list_pubkey_command_output = await rpc_connection.masternodelist('pubkey')
-    masternode_list_extra_command_output = await rpc_connection.masternodelist('extra')
+async def fetch_supernode_list_data():
+    masternode_list_full_command_output = await masternodelist_full(rpc_connection)
+    masternode_list_rank_command_output = await masternodelist_rank(rpc_connection)
+    masternode_list_pubkey_command_output = await masternodelist_pubkey(rpc_connection)
+    masternode_list_extra_command_output = await masternodelist_extra(rpc_connection)
     if masternode_list_full_command_output:
         masternode_list_full_df = pd.DataFrame([masternode_list_full_command_output[x].split() for x in masternode_list_full_command_output])
         masternode_list_full_df['txid_vout'] = [x for x in masternode_list_full_command_output]
@@ -926,8 +1095,13 @@ async def check_supernode_list_func():
     else:
         error_message = "Masternode list command returning nothing-- pasteld probably just started and hasn't yet finished the mnsync process!"
         logger.error(error_message)
-        raise ValueError(error_message) 
-    
+        raise ValueError(error_message)
+
+async def check_supernode_list_func():
+    if 'supernode_data' not in SUPERNODE_DATA_CACHE:
+        SUPERNODE_DATA_CACHE['supernode_data'] = await fetch_supernode_list_data()
+    return SUPERNODE_DATA_CACHE['supernode_data']
+
 async def get_local_machine_supernode_data_func():
     local_machine_ip = get_external_ip_func()
     supernode_list_full_df, _ = await check_supernode_list_func()
@@ -996,7 +1170,7 @@ async def list_sn_messages_func():
         db_messages = query.all()
         existing_messages = {(message.sending_sn_pastelid, message.receiving_sn_pastelid, message.timestamp) for message in db_messages}
     # Retrieve new messages from the RPC interface
-    new_messages = await rpc_connection.masternode('message', 'list')
+    new_messages = await masternode_message_list(rpc_connection)
     new_messages_data = []
     for message in new_messages:
         message_key = list(message.keys())[0]
@@ -1062,14 +1236,14 @@ async def sign_message_with_pastelid_func(pastelid: str, message_to_sign: str, p
     if use_libpastelid_for_pastelid_sign_verify:
         return await sign_message_with_libpastelid(message_to_sign, pastelid, passphrase)
     else:
-        results_dict = await rpc_connection.pastelid('sign', message_to_sign, pastelid, passphrase, 'ed448')
+        results_dict = await pastelid_sign(rpc_connection, message_to_sign, pastelid, passphrase, 'ed448')
         return results_dict['signature']
 
 async def verify_message_with_pastelid_func(pastelid: str, message_to_verify: str, pastelid_signature_on_message: str) -> str:
     if use_libpastelid_for_pastelid_sign_verify:
         return await verify_message_with_libpastelid(pastelid, message_to_verify, pastelid_signature_on_message)
     else:
-        verification_result = await rpc_connection.pastelid('verify', message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
+        verification_result = await pastelid_verify(rpc_connection, message_to_verify, pastelid_signature_on_message, pastelid, 'ed448')
         return verification_result['verification']
     
 async def parse_sn_messages_from_last_k_minutes_func(k=10, message_type='all'):
@@ -1120,7 +1294,7 @@ async def send_message_to_sn_using_pastelid_func(message_to_send, message_type, 
     specified_machine_supernode_data = await get_sn_data_from_pastelid_func(receiving_sn_pastelid)
     receiving_sn_pubkey = specified_machine_supernode_data['pubkey'].values.tolist()[0]
     logger.info(f"Now sending message to SN with PastelID: {receiving_sn_pastelid} and SN pubkey: {receiving_sn_pubkey}: {message_to_send}")
-    await rpc_connection.masternode('message','send', receiving_sn_pubkey, compressed_message_base64)
+    await masternode_message_send(rpc_connection, receiving_sn_pubkey, compressed_message_base64)
     return signed_message_to_send, pastelid_signature_on_message
 
 async def broadcast_message_to_list_of_sns_using_pastelid_func(message_to_send, message_type, list_of_receiving_sn_pastelids, pastelid_passphrase, verbose=0):
@@ -1140,7 +1314,7 @@ async def broadcast_message_to_list_of_sns_using_pastelid_func(message_to_send, 
         logger.info(f"Now sending message to list of {len(list_of_receiving_sn_pastelids)} SNs: `{message_to_send}`")        
     async def send_message(receiving_sn_pastelid):
         current_receiving_sn_pubkey = (await get_sn_data_from_pastelid_func(receiving_sn_pastelid))['pubkey'].values.tolist()[0]
-        await rpc_connection.masternode('message','send', current_receiving_sn_pubkey, compressed_message_base64)
+        await masternode_message_send(rpc_connection, current_receiving_sn_pubkey, compressed_message_base64)
     await asyncio.gather(*[send_message(pastelid) for pastelid in list_of_receiving_sn_pastelids])
     return signed_message_to_send
 
@@ -1162,7 +1336,7 @@ async def broadcast_message_to_all_sns_using_pastelid_func(message_to_send, mess
         logger.info(f"Now sending message to ALL {len(list_of_receiving_sn_pastelids)} SNs: `{message_to_send}`")        
     async def send_message(receiving_sn_pastelid):
         current_receiving_sn_pubkey = (await get_sn_data_from_pastelid_func(receiving_sn_pastelid))['pubkey'].values.tolist()[0]
-        await rpc_connection.masternode('message','send', current_receiving_sn_pubkey, compressed_message_base64)
+        await masternode_message_send(rpc_connection, current_receiving_sn_pubkey, compressed_message_base64)
     await asyncio.gather(*[send_message(pastelid) for pastelid in list_of_receiving_sn_pastelids])
     return signed_message_to_send
 
@@ -2156,13 +2330,14 @@ async def store_generic_ticket_data_in_blockchain(ticket_input_data_json: str, t
         ticket_json_b64 = base64.b64encode(ticket_json.encode('utf-8')).decode('utf-8')
         ticket_txid = ""
         logger.info("Now attempting to write data to blockchain using 'tickets register contract' command...")
-        ticket_register_command_response = await rpc_connection.tickets('register', 'contract', ticket_json_b64, ticket_type_identifier, ticket_input_data_fully_parsed_sha3_256_hash)
+        ticket_register_command_response = await tickets_register_contract(
+            rpc_connection, ticket_json_b64, ticket_type_identifier, ticket_input_data_fully_parsed_sha3_256_hash)
         logger.info("Done with 'tickets register contract' command!")
         asyncio.sleep(2)
         if len(ticket_register_command_response) > 0:
             if 'txid' in ticket_register_command_response.keys():
                 ticket_txid = ticket_register_command_response['txid']
-                ticket_get_command_response = await rpc_connection.tickets('get', ticket_txid , 1)
+                ticket_get_command_response = await tickets_get(rpc_connection, ticket_txid , 1)
                 retrieved_ticket_data = ticket_get_command_response['ticket']['contract_ticket']
                 ticket_tx_info = ticket_get_command_response['tx_info']
                 if ticket_tx_info is None:
@@ -2187,8 +2362,8 @@ async def store_generic_ticket_data_in_blockchain(ticket_input_data_json: str, t
         return None
 
 async def retrieve_generic_ticket_data_from_blockchain(ticket_txid: str):
-    try:    
-        ticket_get_command_response = await rpc_connection.tickets('get', ticket_txid , 1)
+    try:
+        ticket_get_command_response = await tickets_get(rpc_connection, ticket_txid, 1)
         retrieved_ticket_data = ticket_get_command_response['ticket']['contract_ticket']
         if retrieved_ticket_data is None:
             logger.error(f"Error: no ticket data returned for TXID {ticket_txid}")
@@ -2197,7 +2372,7 @@ async def retrieve_generic_ticket_data_from_blockchain(ticket_txid: str):
         retrieved_ticket_input_data_dict = retrieved_ticket_data['ticket_input_data_dict']
         retrieved_ticket_input_data_dict_json = json.dumps(retrieved_ticket_input_data_dict)
         computed_fully_parsed_json_sha3_256_hash, concatenated_data = compute_fully_parsed_json_sha3_256_hash(retrieved_ticket_input_data_dict_json)
-        assert(computed_fully_parsed_json_sha3_256_hash==retrieved_ticket_input_data_fully_parsed_sha3_256_hash)
+        assert(computed_fully_parsed_json_sha3_256_hash == retrieved_ticket_input_data_fully_parsed_sha3_256_hash)
         credit_pack_combined_blockchain_ticket_data_json = json.dumps(retrieved_ticket_input_data_dict)
         return credit_pack_combined_blockchain_ticket_data_json
     except Exception as e:
@@ -2216,15 +2391,15 @@ async def get_list_of_credit_pack_ticket_txids_already_in_db():
         else:
             return []
 
-async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them(ticket_type_identifier: str = "INFERENCE_API_CREDIT_PACK_TICKET",  starting_block_height: int = 0, force_revalidate_all_tickets: int = 0):
+async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them(ticket_type_identifier: str = "INFERENCE_API_CREDIT_PACK_TICKET", starting_block_height: int = 0, force_revalidate_all_tickets: int = 0):
     try:
         if not isinstance(ticket_type_identifier, str):
             error_message = "Ticket type identifier data must be a valid string!"
             logger.error(error_message)
             raise ValueError(error_message)
-        ticket_type_identifier = ticket_type_identifier.upper()    
+        ticket_type_identifier = ticket_type_identifier.upper()
         logger.info(f"Getting all blockchain tickets of type {ticket_type_identifier} starting from block height {starting_block_height:,}...")
-        list_of_ticket_data_dicts = await rpc_connection.tickets('list', 'contract', ticket_type_identifier, starting_block_height)
+        list_of_ticket_data_dicts = await tickets_list_contract(rpc_connection, ticket_type_identifier, starting_block_height)
         list_of_ticket_internal_data_dicts = [x['ticket']['contract_ticket'] for x in list_of_ticket_data_dicts]
         logger.info(f"Found {len(list_of_ticket_internal_data_dicts):,} total tickets in the blockchain since block height {starting_block_height:,} of type {ticket_type_identifier}; Now checking if they are internally consistent...")
         list_of_retrieved_ticket_input_data_fully_parsed_sha3_256_hashes = [x['ticket_input_data_fully_parsed_sha3_256_hash'] for x in list_of_ticket_internal_data_dicts]
@@ -2267,7 +2442,7 @@ async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_th
     except Exception as e:
         logger.error(f"Error occurred while listing generic blockchain tickets of type {str(ticket_type_identifier)}: {e}")
         traceback.print_exc()
-        return None    
+        return None
     
 async def periodic_ticket_listing_and_validation():
     while True:
@@ -2278,8 +2453,7 @@ async def periodic_ticket_listing_and_validation():
         except Exception as e:
             logger.error(f"Error in periodic ticket listing and validation: {str(e)}")
             traceback.print_exc()
-                
-async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str) -> str:
+                async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str) -> str:
     try:
         logger.info("Now attempting to write the ticket data to the blockchain...")
         ticket_type_identifier = "INFERENCE_API_CREDIT_PACK_TICKET"
@@ -2292,8 +2466,8 @@ async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain
         num_confirmations = 0
         storage_validation_error_string = ""
         while try_count < max_retries and num_confirmations == 0:
-            # Retrieve the transaction details using gettransaction RPC method
-            tx_info = await rpc_connection.gettransaction(credit_pack_ticket_txid)
+            # Retrieve the transaction details using the wrapped gettransaction function
+            tx_info = await gettransaction(rpc_connection, credit_pack_ticket_txid)
             if tx_info:
                 num_confirmations = tx_info.get("confirmations", 0)
                 if (num_confirmations > 0) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK:
@@ -2374,6 +2548,10 @@ async def process_credit_purchase_initial_request(credit_pack_purchase_request: 
             return rejection_message
         if credit_pack_purchase_request.requested_initial_credits_in_credit_pack > MAXIMUM_CREDITS_PER_CREDIT_PACK:
             rejection_message = f"Requested initial credits in credit pack exceeds the maximum of {MAXIMUM_CREDITS_PER_CREDIT_PACK} credits allowed in a single credit pack!"
+            logger.error(rejection_message)
+            return rejection_message
+        if credit_pack_purchase_request.requested_initial_credits_in_credit_pack < MINIMUM_CREDITS_PER_CREDIT_PACK:
+            rejection_message = f"Requested initial credits in credit pack must be greater than or equal to {MINIMUM_CREDITS_PER_CREDIT_PACK} credits!"
             logger.error(rejection_message)
             return rejection_message
         # Check if credit_usage_tracking_psl_address has already been used for an existing credit pack at any time:
@@ -2966,11 +3144,10 @@ async def get_block_height_for_credit_pack_purchase_request_confirmation(sha3_25
         raise
     
 async def get_block_height_from_block_hash(pastel_block_hash: str):
-    global rpc_connection
     if not pastel_block_hash:
         raise ValueError("Invalid block hash provided.")
     try:
-        block_details = await rpc_connection.getblock(pastel_block_hash)
+        block_details = await getblock(rpc_connection, pastel_block_hash)
         block_height = block_details.get('height')
         if block_height is not None:
             return block_height
@@ -3360,8 +3537,8 @@ async def check_if_credit_pack_ticket_txid_in_list_of_known_bad_txids_in_db(cred
         return known_bad_txid is not None
     
 async def validate_merkle_root_at_block_height(merkle_root_to_check: str, block_height: int) -> bool:
-    block_hash = await rpc_connection.getblockhash(block_height)
-    block_details = await rpc_connection.getblock(block_hash)
+    block_hash = await getblockhash(rpc_connection, block_height)
+    block_details = await getblock(rpc_connection, block_hash)
     if block_details['merkleroot'] == merkle_root_to_check:
         return True
     else:
@@ -4739,30 +4916,29 @@ async def check_burn_address_for_tracking_transaction(
     max_retries: int = 10,
     initial_retry_delay: int = 25
 ) -> Tuple[bool, int, int]:
-    global rpc_connection
     global burn_address
     try_count = 0
     retry_delay = initial_retry_delay
     total_amount_to_burn_address = 0.0
     while try_count < max_retries:
-        if txid is None: # If txid is not provided, search for transactions using listsinceblock RPC method
-            start_block_hash = await rpc_connection.getblockhash(0)
-            listsinceblock_output = await rpc_connection.listsinceblock(start_block_hash, 1, True)
+        if txid is None:  # If txid is not provided, search for transactions using listsinceblock RPC method
+            start_block_hash = await getblockhash(rpc_connection, 0)
+            listsinceblock_output = await listsinceblock(rpc_connection, start_block_hash, 1, True)
             all_transactions = listsinceblock_output["transactions"]
             all_burn_transactions = [
                 tx for tx in all_transactions
                 if tx.get("address") == burn_address and tx.get("category") == "receive"
             ]
             all_burn_transactions_df = pd.DataFrame.from_records(all_burn_transactions)
-            all_burn_transactions_df_filtered = all_burn_transactions_df[all_burn_transactions_df['amount']==expected_amount]
-            if len(all_burn_transactions_df_filtered)==1:
+            all_burn_transactions_df_filtered = all_burn_transactions_df[all_burn_transactions_df['amount'] == expected_amount]
+            if len(all_burn_transactions_df_filtered) == 1:
                 txid = all_burn_transactions_df_filtered['txid'].values[0]
             else:
                 latest_block_height = await get_current_pastel_block_height_func()
                 min_confirmations = latest_block_height - max_block_height
                 max_confirmations = latest_block_height - (max_block_height - MAXIMUM_NUMBER_OF_PASTEL_BLOCKS_FOR_USER_TO_SEND_BURN_AMOUNT_FOR_CREDIT_TICKET)
-                all_burn_transactions_df_filtered2 = all_burn_transactions_df_filtered[all_burn_transactions_df_filtered['confirmations']<=max_confirmations]
-                all_burn_transactions_df_filtered3 = all_burn_transactions_df_filtered2[all_burn_transactions_df_filtered2['confirmations']>=min_confirmations]
+                all_burn_transactions_df_filtered2 = all_burn_transactions_df_filtered[all_burn_transactions_df_filtered['confirmations'] <= max_confirmations]
+                all_burn_transactions_df_filtered3 = all_burn_transactions_df_filtered2[all_burn_transactions_df_filtered2['confirmations'] >= min_confirmations]
                 if len(all_burn_transactions_df_filtered3) > 1:
                     logger.warning(f"Multiple transactions found with the same amount and confirmations, but the most recent one is {all_burn_transactions_df_filtered3['txid'].values[0]}")
                 txid = all_burn_transactions_df_filtered3['txid'].values[0]
@@ -4777,7 +4953,7 @@ async def check_burn_address_for_tracking_transaction(
                 )
                 if total_amount_to_burn_address == expected_amount:
                     # Retrieve the transaction details using gettransaction RPC method
-                    tx_info = await rpc_connection.gettransaction(txid)
+                    tx_info = await gettransaction(rpc_connection, txid)
                     if tx_info:
                         num_confirmations = tx_info.get("confirmations", 0)
                         transaction_block_hash = tx_info.get("blockhash", None)
@@ -4796,20 +4972,20 @@ async def check_burn_address_for_tracking_transaction(
                             return True, False, transaction_block_height, num_confirmations, total_amount_to_burn_address
                 elif total_amount_to_burn_address >= expected_amount:
                     # Retrieve the transaction details using gettransaction RPC method
-                    tx_info = await rpc_connection.gettransaction(txid)
+                    tx_info = await gettransaction(rpc_connection, txid)
                     if tx_info:
                         num_confirmations = tx_info.get("confirmations", 0)
                         transaction_block_hash = tx_info.get("blockhash", None)
                         if transaction_block_hash:
                             transaction_block_height = await get_block_height_from_block_hash(transaction_block_hash)
                         else:
-                            transaction_block_height = 0                                                            
+                            transaction_block_height = 0
                         if ((num_confirmations >= MINIMUM_CONFIRMATION_BLOCKS_FOR_CREDIT_PACK_BURN_TRANSACTION) or SKIP_BURN_TRANSACTION_BLOCK_CONFIRMATION_CHECK) and transaction_block_height <= max_block_height:
                             logger.info(f"Matching confirmed transaction was not found, but we did find a confirmed (with {num_confirmations} confirmation blocks) burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
                             return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address
                         else:
                             logger.info(f"Matching unconfirmed transaction was not found, but we did find an unconfirmed burn transaction with more than the expected amount ({total_amount_to_burn_address} sent versus the expected amount of {expected_amount})")
-                            return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address                        
+                            return False, True, transaction_block_height, num_confirmations, total_amount_to_burn_address
                 else:
                     logger.warning(f"Transaction {txid} found, but the amount sent to the burn address ({total_amount_to_burn_address}) is less than the expected amount ({expected_amount})")
             else:
@@ -5745,7 +5921,7 @@ async def get_inference_output_results_and_verify_authorization(inference_respon
         return inference_output_result
 
 async def fetch_all_mnid_tickets_details():
-    mnid_response = await rpc_connection.tickets('list', 'id', 'mn')
+    mnid_response = await tickets_list_id(rpc_connection, 'mn')
     if mnid_response is None or len(mnid_response) == 0:
         return []
     tickets_data = {ticket['txid']: ticket for ticket in mnid_response}
@@ -5775,7 +5951,7 @@ async def fetch_all_mnid_tickets_details():
                     await session.rollback()
                     logger.error(f"Error inserting new tickets due to a unique constraint failure: {e}")
     return new_tickets_to_insert
-                    
+
 async def fetch_active_supernodes_count_and_details(block_height: int):
     async with db_code.Session() as session:
         async with session.begin():  # Fetch all mnid tickets created up to the specified block height
@@ -5794,7 +5970,7 @@ async def fetch_active_supernodes_count_and_details(block_height: int):
                         if not vout_str.isdigit():
                             continue
                         vout = int(vout_str)
-                        tx_info = await rpc_connection.getrawtransaction(txid, 1)
+                        tx_info = await getrawtransaction(rpc_connection, txid, 1)
                         # Ensure tx_info is a dictionary and contains 'vout'
                         if tx_info and isinstance(tx_info, dict) and 'vout' in tx_info:
                             # Ensure vout is within the valid range of tx_info['vout']
@@ -5835,7 +6011,7 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     min_height_for_credit_pack_tickets = 700000
     try:
         logger.info(f"Now scanning blockchain for burn transactions sent from address {credit_usage_tracking_psl_address}...")
-        burn_transactions = await rpc_connection.getaddressutxosextra({
+        burn_transactions = await getaddressutxosextra(rpc_connection, {
             "addresses": [burn_address],
             "mempool": True,
             "minHeight": min_height_for_credit_pack_tickets,
@@ -5947,70 +6123,7 @@ async def get_df_json_from_tickets_list_rpc_response_func(rpc_response):
     tickets_df_json = tickets_df.to_json(orient='index')
     return tickets_df_json
 
-async def get_pastel_blockchain_ticket_func(txid):
-    global rpc_connection
-    response_json = await rpc_connection.tickets('get', txid )
-    if len(response_json) > 0:
-        ticket_type_string = response_json['ticket']['type']
-        corresponding_reg_ticket_block_height = response_json['height']
-        latest_block_height = await get_current_pastel_block_height_func()
-        if int(corresponding_reg_ticket_block_height) < 0:
-            logger.warning(f'The corresponding reg ticket block height of {corresponding_reg_ticket_block_height} is less than 0!')
-        if int(corresponding_reg_ticket_block_height) > int(latest_block_height):
-            logger.info(f'The corresponding reg ticket block height of {corresponding_reg_ticket_block_height} is greater than the latest block height of {latest_block_height}!')
-        corresponding_reg_ticket_block_info = await rpc_connection.getblock(str(corresponding_reg_ticket_block_height))
-        corresponding_reg_ticket_block_timestamp = corresponding_reg_ticket_block_info['time']
-        corresponding_reg_ticket_block_timestamp_utc_iso = datetime.utcfromtimestamp(corresponding_reg_ticket_block_timestamp).isoformat()
-        response_json['reg_ticket_block_timestamp_utc_iso'] = corresponding_reg_ticket_block_timestamp_utc_iso
-        if ticket_type_string == 'nft-reg':
-            activation_response_json = await rpc_connection.tickets('find', 'act', txid )
-        elif ticket_type_string == 'action-reg':
-            activation_response_json = await rpc_connection.tickets('find', 'action-act', txid )
-        elif ticket_type_string == 'collection-reg':
-            activation_response_json = await rpc_connection.tickets('find', 'collection-act', txid )
-        else:
-            activation_response_json = f'No activation ticket needed for this ticket type ({ticket_type_string})'
-        if len(activation_response_json) > 0:
-            response_json['activation_ticket'] = activation_response_json
-        else:
-            response_json['activation_ticket'] = 'No activation ticket found for this ticket-- check again soon'
-        return response_json
-    else:
-        response_json = 'No ticket found for this txid'
-    return response_json
-
-async def get_all_pastel_blockchain_tickets_func(verbose=0):
-    if verbose:
-        logger.info('Now retrieving all Pastel blockchain tickets...')
-    tickets_obj = {}
-    list_of_ticket_types = ['id', 'nft', 'offer', 'accept', 'transfer', 'royalty', 'username', 'ethereumaddress', 'action', 'action-act'] # 'collection', 'collection-act'
-    for current_ticket_type in list_of_ticket_types:
-        if verbose:
-            logger.info('Getting ' + current_ticket_type + ' tickets...')
-        response = await rpc_connection.tickets('list', current_ticket_type)
-        if response is not None and len(response) > 0:
-            tickets_obj[current_ticket_type] = await get_df_json_from_tickets_list_rpc_response_func(response)
-    return tickets_obj
-
 async def import_address_func(address: str, label: str = "", rescan: bool = False) -> None:
-    """
-    Import an address or script (in hex) that can be watched as if it were in your wallet but cannot be used to spend.
-
-    Args:
-        address (str): The address to import.
-        label (str, optional): An optional label for the address. Defaults to an empty string.
-        rescan (bool, optional): Rescan the wallet for transactions. Defaults to False.
-
-    Returns:
-        None
-
-    Raises:
-        RPCError: If an error occurs during the RPC call.
-
-    Example:
-        import_address_func("myaddress", "testing", False)
-    """
-    global rpc_connection
     try:
         await rpc_connection.importaddress(address, label, rescan)
         logger.info(f"Imported address: {address}")
@@ -6018,8 +6131,7 @@ async def import_address_func(address: str, label: str = "", rescan: bool = Fals
         logger.error(f"Error importing address: {address}. Error: {e}")
 
 async def check_if_address_is_already_imported_in_local_wallet(address_to_check):
-    global rpc_connection
-    address_amounts_dict = await rpc_connection.listaddressamounts()
+    address_amounts_dict = await listaddressamounts(rpc_connection)
     # Convert the dictionary into a list of dictionaries, each representing a row
     data = [{'address': address, 'amount': amount} for address, amount in address_amounts_dict.items()]
     # Create the DataFrame from the list of dictionaries
@@ -6031,26 +6143,14 @@ async def check_if_address_is_already_imported_in_local_wallet(address_to_check)
     return True
 
 async def get_and_decode_raw_transaction(txid: str) -> dict:
-    """
-    Retrieves and decodes detailed information about a specified transaction
-    from the Pastel network using the RPC calls.
-
-    Args:
-        txid (str): The transaction id to fetch and decode.
-        blockhash (str, optional): The block hash to specify which block to search for the transaction.
-
-    Returns:
-        dict: A dictionary containing detailed decoded information about the transaction.
-    """
-    global rpc_connection
     try:
         # Retrieve the raw transaction data
-        raw_tx_data = await rpc_connection.getrawtransaction(txid)
+        raw_tx_data = await getrawtransaction(rpc_connection, txid)
         if not raw_tx_data:
             logger.error(f"Failed to retrieve raw transaction data for {txid}")
             return {}
         # Decode the raw transaction data
-        decoded_tx_data = await rpc_connection.decoderawtransaction(raw_tx_data)
+        decoded_tx_data = await decoderawtransaction(rpc_connection, raw_tx_data)
         if not decoded_tx_data:
             logger.error(f"Failed to decode raw transaction data for {txid}")
             return {}
@@ -6060,20 +6160,9 @@ async def get_and_decode_raw_transaction(txid: str) -> dict:
         return {}
 
 async def get_transaction_details(txid: str, include_watchonly: bool = False) -> dict:
-    """
-    Fetches detailed information about a specified transaction from the Pastel network using the RPC call.
-
-    Args:
-        txid (str): The transaction id to fetch details for.
-        include_watchonly (bool, optional): Whether to include watchonly addresses in the details. Defaults to False.
-
-    Returns:
-        dict: A dictionary containing detailed information about the transaction.
-    """
-    global rpc_connection
     try:
         # Call the 'gettransaction' RPC method with the provided txid and includeWatchonly flag
-        transaction_details = await rpc_connection.gettransaction(txid, include_watchonly)
+        transaction_details = await gettransaction(rpc_connection, txid, include_watchonly)
         # Log the retrieved transaction details
         logger.info(f"Retrieved transaction details for {txid}: {transaction_details}")
         return transaction_details

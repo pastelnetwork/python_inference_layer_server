@@ -1,6 +1,7 @@
 aiosqlite
 anthropic
 asyncio
+cachetools 
 cryptography
 fastapi
 fuzzywuzzy 
@@ -20,9 +21,9 @@ python-decouple
 python-Levenshtein
 pytz
 ruff
-sshtunnel
 sqlalchemy
 sqlmodel
+sshtunnel
 starlette
 tiktoken
 torch
