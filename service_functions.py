@@ -645,6 +645,7 @@ class AsyncAuthServiceProxy:
         await self.client.aclose()
 
 async def save_stats_to_json():
+    global rpc_call_stats, tracking_period_start  # Move both global declarations here
     while True:
         await asyncio.sleep(3600)  # Adjust this value for how often you want to save stats (e.g., every hour)
         tracking_period_end = datetime.utcnow()
@@ -660,7 +661,6 @@ async def save_stats_to_json():
         except Exception as e:
             print(f"Failed to save stats to JSON: {e}")
         # Reset tracking for the next period
-        global rpc_call_stats
         rpc_call_stats = defaultdict(lambda: {
             "count": 0,
             "cumulative_time": 0.0,
@@ -672,7 +672,6 @@ async def save_stats_to_json():
             "connection_errors": 0,
             "other_errors": 0
         })
-        global tracking_period_start
         tracking_period_start = tracking_period_end
 
 def track_rpc_call(func):
