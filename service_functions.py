@@ -25,13 +25,13 @@ import pytz
 from collections import defaultdict
 from collections.abc import Iterable
 from functools import wraps
-import cachetools
+from cachetools import TTLCache
 from pathlib import Path
 from urllib.parse import quote_plus, unquote_plus
 from datetime import datetime, timedelta, date, timezone
 import pandas as pd
 import httpx
-from httpx import Timeout, TimeoutException, ConnectError
+from httpx import Timeout
 from urllib.parse import urlparse
 from logger_config import logger
 import zstandard as zstd
@@ -707,6 +707,10 @@ def track_rpc_call(func):
     return wrapper
 
 #Wrapped RPC calls so we can track them and log their performance:
+@track_rpc_call
+async def getinfo(rpc_connection):
+    return rpc_connection.getinfo()
+
 @track_rpc_call
 async def getblockcount(rpc_connection):
     return rpc_connection.getblockcount()
@@ -2453,7 +2457,8 @@ async def periodic_ticket_listing_and_validation():
         except Exception as e:
             logger.error(f"Error in periodic ticket listing and validation: {str(e)}")
             traceback.print_exc()
-                async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str) -> str:
+
+async def store_credit_pack_ticket_in_blockchain(credit_pack_combined_blockchain_ticket_data_json: str) -> str:
     try:
         logger.info("Now attempting to write the ticket data to the blockchain...")
         ticket_type_identifier = "INFERENCE_API_CREDIT_PACK_TICKET"
