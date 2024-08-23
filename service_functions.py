@@ -710,11 +710,11 @@ def track_rpc_call(func):
 #Wrapped RPC calls so we can track them and log their performance:
 @track_rpc_call
 async def getinfo(rpc_connection):
-    return rpc_connection.getinfo()
+    return await rpc_connection.getinfo()
 
 @track_rpc_call
 async def getblockcount(rpc_connection):
-    return rpc_connection.getblockcount()
+    return await rpc_connection.getblockcount()
 
 @track_rpc_call
 async def getblockhash(rpc_connection, block_height):
