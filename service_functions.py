@@ -811,7 +811,7 @@ async def micro_benchmarking_func():
     actual_score = 0
     while time.time() < end_time:
         try:
-            info_results = await getinfo(rpc_connection)
+            info_results = await getinfo(rpc_connection)  # Await the coroutine
             if 'blocks' in info_results and isinstance(info_results['blocks'], int):
                 actual_score += 1
         except Exception as e:
