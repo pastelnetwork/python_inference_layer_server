@@ -55,6 +55,19 @@ from mutagen import File as MutagenFile
 from PIL import Image
 import libpastelid
 
+tracking_period_start = datetime.utcnow()
+rpc_call_stats = defaultdict(lambda: {
+    "count": 0,
+    "cumulative_time": 0.0,
+    "average_time": 0.0,
+    "success_count": 0,
+    "total_response_size": 0,
+    "average_response_size": 0.0,
+    "timeout_errors": 0,
+    "connection_errors": 0,
+    "other_errors": 0
+})
+
 pastel_keys_dir = os.path.expanduser("/home/ubuntu/.pastel/pastelkeys")
 pastel_signer = libpastelid.PastelSigner(pastel_keys_dir)
 
@@ -209,18 +222,7 @@ COIN = 100000 # patoshis in 1 PSL
 SUPERNODE_DATA_CACHE = TTLCache(maxsize=1, ttl=SUPERNODE_DATA_CACHE_EVICTION_TIME_IN_MINUTES * 60) # Define the cache with a TTL (time to live) in seconds
 challenge_store = {}
 file_store = {} # In-memory store for files with expiration times
-tracking_period_start = datetime.utcnow()
-rpc_call_stats = defaultdict(lambda: {
-    "count": 0,
-    "cumulative_time": 0.0,
-    "average_time": 0.0,
-    "success_count": 0,
-    "total_response_size": 0,
-    "average_response_size": 0.0,
-    "timeout_errors": 0,
-    "connection_errors": 0,
-    "other_errors": 0
-})
+
 
 # Initialize PastelSigner
 pastel_keys_dir = os.path.expanduser("~/.pastel/pastelkeys")
