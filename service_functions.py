@@ -6155,12 +6155,7 @@ async def get_and_decode_raw_transaction(txid: str) -> dict:
         if not raw_tx_data:
             logger.error(f"Failed to retrieve raw transaction data for {txid}")
             return {}
-        # Decode the raw transaction data
-        decoded_tx_data = await decoderawtransaction(rpc_connection, raw_tx_data)
-        if not decoded_tx_data:
-            logger.error(f"Failed to decode raw transaction data for {txid}")
-            return {}
-        return decoded_tx_data
+        return raw_tx_data
     except Exception as e:
         logger.error(f"Error in get_and_decode_transaction for {txid}: {e}")
         return {}
