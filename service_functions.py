@@ -804,7 +804,7 @@ async def decoderawtransaction(rpc_connection, raw_tx_data):
 async def gettransaction(rpc_connection, txid, include_watchonly=False):
     return await rpc_connection.gettransaction(txid, include_watchonly)
 
-async def micro_benchmarking_func(rpc_connection):
+async def micro_benchmarking_func():
     baseline_score = 14
     duration_of_benchmark_in_seconds = 3.0
     end_time = time.time() + duration_of_benchmark_in_seconds
