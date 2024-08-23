@@ -917,7 +917,7 @@ async def verify_challenge_signature(pastelid: str, signature: str, challenge_id
     if current_time > expiration_time:
         del challenge_store[challenge_id]
         return False
-    verification_result = verify_message_with_pastelid_func(pastelid=pastelid, message_to_verify=challenge_string, pastelid_signature_on_message=signature) 
+    verification_result = await verify_message_with_pastelid_func(pastelid=pastelid, message_to_verify=challenge_string, pastelid_signature_on_message=signature) 
     is_valid_signature = verification_result == 'OK'
     if is_valid_signature:
         del challenge_store[challenge_id]
@@ -2157,6 +2157,8 @@ async def retrieve_credit_pack_ticket_from_purchase_burn_txid(purchase_burn_txid
                 select(db_code.CreditPackPurchaseRequestConfirmation).where(db_code.CreditPackPurchaseRequestConfirmation.txid_of_credit_purchase_burn_transaction == purchase_burn_txid)
             )
             credit_pack_request_confirmation = result.one_or_none()
+            if credit_pack_request_confirmation is None:
+                return None, None, None
             sha3_256_hash_of_credit_pack_purchase_request_fields = credit_pack_request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_fields
         # Try to retrieve the credit pack ticket from the local database using the txid mapping
         async with db_code.Session() as db_session:
