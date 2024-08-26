@@ -2201,7 +2201,7 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> Tuple[Optional[db
             await save_or_update_credit_pack_ticket(credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, txid)
         else:
             logger.error(f"Failed to retrieve credit pack ticket from blockchain for TXID: {txid}")
-            raise ValueError(f"Credit pack ticket not found for txid: {txid}")
+            return None, None, None
         return credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation
     except Exception as e:
         logger.error(f"Error retrieving credit pack ticket for TXID {txid}: {str(e)}")
