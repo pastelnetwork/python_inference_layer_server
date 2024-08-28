@@ -805,8 +805,8 @@ async def gettransaction(rpc_connection, txid, include_watchonly=False):
     return await rpc_connection.gettransaction(txid, include_watchonly)
 
 async def micro_benchmarking_func():
-    baseline_score = 14
-    duration_of_benchmark_in_seconds = 3.0
+    baseline_score = 16
+    duration_of_benchmark_in_seconds = 4.0
     end_time = time.time() + duration_of_benchmark_in_seconds
     actual_score = 0
     while time.time() < end_time:
@@ -846,7 +846,7 @@ async def schedule_micro_benchmark_periodically():
     await load_benchmark_cache_from_csv()
     while True:
         await micro_benchmarking_func()
-        await asyncio.sleep(180)
+        await asyncio.sleep(60)
         await write_benchmark_cache_to_csv()
         
 async def get_current_pastel_block_height_func():
