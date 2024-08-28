@@ -2253,23 +2253,24 @@ async def save_or_update_credit_pack_ticket(credit_pack_purchase_request, credit
 async def save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse, txid: str) -> None:
     logger.info(f"Attempting to save credit pack purchase request response TXID mapping for TXID: {txid}")
     try:
-        existing_mapping = await db_session.exec(
-            select(db_code.CreditPackPurchaseRequestResponseTxidMapping).where(
-                db_code.CreditPackPurchaseRequestResponseTxidMapping.sha3_256_hash_of_credit_pack_purchase_request_fields == credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_fields
+        async with db_code.Session() as db_session:        
+            existing_mapping = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestResponseTxidMapping).where(
+                    db_code.CreditPackPurchaseRequestResponseTxidMapping.sha3_256_hash_of_credit_pack_purchase_request_fields == credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_fields
+                )
             )
-        )
-        existing_mapping = existing_mapping.one_or_none()
-        if existing_mapping is None:
-            logger.info(f"Creating new TXID mapping for credit pack ticket with TXID: {txid}")
-            mapping = db_code.CreditPackPurchaseRequestResponseTxidMapping(
-                sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
-                pastel_api_credit_pack_ticket_registration_txid=txid
-            )
-            db_session.add(mapping)
-        else:
-            logger.info(f"Updating existing TXID mapping for credit pack ticket with TXID: {txid}")
-            existing_mapping.pastel_api_credit_pack_ticket_registration_txid = txid
-        logger.info(f"Successfully saved credit pack purchase request response TXID mapping for TXID: {txid}")
+            existing_mapping = existing_mapping.one_or_none()
+            if existing_mapping is None:
+                logger.info(f"Creating new TXID mapping for credit pack ticket with TXID: {txid}")
+                mapping = db_code.CreditPackPurchaseRequestResponseTxidMapping(
+                    sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
+                    pastel_api_credit_pack_ticket_registration_txid=txid
+                )
+                db_session.add(mapping)
+            else:
+                logger.info(f"Updating existing TXID mapping for credit pack ticket with TXID: {txid}")
+                existing_mapping.pastel_api_credit_pack_ticket_registration_txid = txid
+            logger.info(f"Successfully saved credit pack purchase request response TXID mapping for TXID: {txid}")
     except Exception as e:
         logger.error(f"Error saving credit pack purchase request response TXID mapping for TXID {txid}: {str(e)}")
         raise
