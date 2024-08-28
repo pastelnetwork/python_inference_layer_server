@@ -2242,7 +2242,7 @@ async def save_or_update_credit_pack_ticket(credit_pack_purchase_request, credit
                     logger.info(f"Adding new credit pack purchase request confirmation for TXID: {txid}")
                     db_session.add(credit_pack_purchase_request_confirmation)
                 logger.info(f"Updating TXID mapping for credit pack ticket with TXID: {txid}")
-                await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, txid, db_session)
+                await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, txid)
             logger.info(f"Successfully saved or updated credit pack ticket data for TXID: {txid}")
         except Exception as e:
             logger.error(f"Error saving or updating credit pack ticket data for TXID {txid}: {str(e)}")
@@ -2250,7 +2250,7 @@ async def save_or_update_credit_pack_ticket(credit_pack_purchase_request, credit
     logger.info(f"Consolidating WAL data for credit pack ticket with TXID: {txid}")
     await db_code.consolidate_wal_data()
 
-async def save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse, txid: str, db_session: db_code.Session) -> None:
+async def save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response: db_code.CreditPackPurchaseRequestResponse, txid: str) -> None:
     logger.info(f"Attempting to save credit pack purchase request response TXID mapping for TXID: {txid}")
     try:
         existing_mapping = await db_session.exec(
