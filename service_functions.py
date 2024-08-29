@@ -2116,8 +2116,15 @@ def parse_sqlmodel_strings_into_lists_and_dicts_func(model_instance: SQLModel) -
         
 async def retrieve_credit_pack_ticket_from_blockchain_using_txid(txid: str) -> db_code.CreditPackPurchaseRequestResponse:
     try:
+        if not txid:
+            logger.error(f"Error retrieving credit pack ticket from blockchain: No TXID provided")
+            return None, None, None
         credit_pack_combined_blockchain_ticket_data_json = await retrieve_generic_ticket_data_from_blockchain(txid)
-        credit_pack_combined_blockchain_ticket_data_dict = json.loads(credit_pack_combined_blockchain_ticket_data_json)
+        if credit_pack_combined_blockchain_ticket_data_json:
+            credit_pack_combined_blockchain_ticket_data_dict = json.loads(credit_pack_combined_blockchain_ticket_data_json)
+        else:
+            logger.error(f"Error retrieving credit pack ticket from blockchain for txid {txid}: No data found")
+            return None, None, None
         if credit_pack_combined_blockchain_ticket_data_dict is None:
             return None, None, None
         credit_pack_purchase_request_dict = credit_pack_combined_blockchain_ticket_data_dict['credit_pack_purchase_request_dict']
@@ -2160,6 +2167,14 @@ async def retrieve_credit_pack_ticket_from_purchase_burn_txid(purchase_burn_txid
     
 async def retrieve_credit_pack_ticket_using_txid(txid: str) -> Tuple[Optional[db_code.CreditPackPurchaseRequest], Optional[db_code.CreditPackPurchaseRequestResponse], Optional[db_code.CreditPackPurchaseRequestConfirmation]]:
     logger.info(f"Attempting to retrieve credit pack ticket for TXID: {txid}")
+    max_retries = 10  # Maximum retries with backoff
+    base_delay = 1  # Starting delay in seconds
+    max_delay = 60  # Maximum delay in seconds for backoff
+    total_wait_time = 0  # Total wait time across retries
+    jitter_max = 1  # Max jitter in seconds
+    if txid is None:
+        logger.error(f"Error: TXID is None")
+        return None, None, None
     try:
         async with db_code.Session() as db_session:
             mapping = await db_session.exec(
@@ -2175,16 +2190,22 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> Tuple[Optional[db
                 return credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation
         logger.info(f"Ticket not found in local database for TXID {txid}, attempting retrieval from blockchain")
         credit_pack_purchase_request = credit_pack_purchase_request_response = credit_pack_purchase_request_confirmation = None
-        # First, try to retrieve the ticket assuming txid is a ticket registration TXID
-        try:
-            logger.info(f"Attempting to retrieve ticket from blockchain using registration TXID: {txid}")
-            credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(txid)
-            if all((credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
-                logger.info(f"Successfully retrieved credit pack ticket from blockchain using registration TXID: {txid}")
-            else:
-                logger.info(f"No ticket found for registration TXID: {txid}, will try as burn transaction TXID")
-        except Exception as e:
-            logger.error(f"Error retrieving ticket using registration TXID {txid}: {str(e)}")
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Attempting to retrieve ticket from blockchain using registration TXID: {txid}")
+                credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(txid)
+                if all((credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
+                    logger.info(f"Successfully retrieved credit pack ticket from blockchain using registration TXID: {txid}")
+                    break
+            except Exception as e:
+                logger.error(f"Error retrieving ticket using registration TXID {txid} on attempt {attempt + 1}: {str(e)}")
+                delay = min(base_delay * 2 ** attempt + random.uniform(0, jitter_max), max_delay)
+                total_wait_time += delay
+                if total_wait_time >= 300:  # 5 minutes
+                    logger.error(f"Failed to retrieve credit pack ticket from blockchain after {attempt + 1} attempts in 5 minutes")
+                    break
+                logger.info(f"Waiting for {delay:.2f} seconds before retrying...")
+                await asyncio.sleep(delay)
         # If not found, try to retrieve the ticket assuming txid is a purchase burn transaction TXID
         if not all((credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
             try:
@@ -2310,7 +2331,7 @@ async def get_credit_pack_ticket_registration_txid_from_corresponding_burn_trans
             )
             mapping = mapping_result.one_or_none()
             if mapping is None:
-                raise ValueError(f"No TXID mapping found for purchase request hash: {sha3_256_hash_of_credit_pack_purchase_request_fields}")
+                raise ValueError(f"No TXID mapping found for purchase burn txid: {purchase_burn_txid}")
             # Return the TXID of the credit pack ticket registration
             return mapping.pastel_api_credit_pack_ticket_registration_txid
     except Exception as e:
@@ -2417,6 +2438,9 @@ async def store_generic_ticket_data_in_blockchain(ticket_input_data_json: str, t
 
 async def retrieve_generic_ticket_data_from_blockchain(ticket_txid: str):
     try:
+        if ticket_txid is None:
+            logger.error("No ticket TXID provided!")
+            return None
         ticket_get_command_response = await tickets_get(rpc_connection, ticket_txid, 1)
         retrieved_ticket_data = ticket_get_command_response['ticket']['contract_ticket']
         if retrieved_ticket_data is None:
