@@ -781,6 +781,10 @@ async def tickets_get(rpc_connection, ticket_txid, verbose=1):
     return await rpc_connection.tickets('get', ticket_txid, verbose)
 
 @track_rpc_call
+async def generic_tickets_find(rpc_connection, credit_ticket_secondary_key):
+    return await rpc_connection.tickets('find', 'contract', credit_ticket_secondary_key)
+
+@track_rpc_call
 async def tickets_list_contract(rpc_connection, ticket_type_identifier, starting_block_height):
     return await rpc_connection.tickets('list', 'contract', ticket_type_identifier, starting_block_height)
 
@@ -1645,6 +1649,20 @@ async def monitor_new_messages():
         finally:
             await asyncio.sleep(5)
             
+async def get_list_of_credit_pack_ticket_txids_from_pastelid(pastelid: str) -> list:
+    ticket_type_identifier = "INFERENCE_API_CREDIT_PACK_TICKET"
+    starting_block_height = 700000
+    list_of_ticket_data_dicts = await tickets_list_contract(rpc_connection, ticket_type_identifier, starting_block_height)
+    list_of_ticket_internal_data_dicts = [x['ticket']['contract_ticket'] for x in list_of_ticket_data_dicts]
+    list_of_ticket_input_data_json_strings_for_tickets_where_given_pastelid_is_in_list_of_allowed_users = [json.dumps(x['ticket_input_data_dict']) for x in list_of_ticket_internal_data_dicts if pastelid in x['ticket_input_data_dict']['credit_pack_purchase_request_dict']['list_of_authorized_pastelids_allowed_to_use_credit_pack']] 
+    list_of_ticket_input_data_fully_parsed_sha3_256_hashes = [compute_fully_parsed_json_sha3_256_hash(x)[0] for x in list_of_ticket_input_data_json_strings_for_tickets_where_given_pastelid_is_in_list_of_allowed_users]
+    list_of_credit_pack_ticket_data = [None] * len(list_of_ticket_input_data_fully_parsed_sha3_256_hashes)
+    async def fetch_and_store_ticket_data(index, hash):
+        list_of_credit_pack_ticket_data[index] = await generic_tickets_find(rpc_connection, hash)
+    await asyncio.gather( *[fetch_and_store_ticket_data(i, hash) for i, hash in enumerate(list_of_ticket_input_data_fully_parsed_sha3_256_hashes)])
+    list_of_credit_pack_ticket_registration_txids = [x['txid'] for x in list_of_credit_pack_ticket_data if x is not None]
+    return list_of_credit_pack_ticket_registration_txids, list_of_credit_pack_ticket_data
+
 async def create_user_message(from_pastelid: str, to_pastelid: str, message_body: str, message_signature: str) -> dict:
     async with db_code.Session() as db:
         user_message = db_code.UserMessage(from_pastelid=from_pastelid, to_pastelid=to_pastelid, message_body=message_body, message_signature=message_signature)
@@ -3994,6 +4012,7 @@ async def validate_selected_agreeing_supernodes(credit_pack_ticket_txid, credit_
 async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
     async def process_request_confirmation(request_confirmation):
         txid = request_confirmation.txid_of_credit_purchase_burn_transaction
+        await get_psl_tracking_address_from_burn_transaction_txid(txid)     
         logger.info(f'Getting credit pack registration txid for ticket with burn txid of {txid}...')
         registration_txid = await get_credit_pack_ticket_registration_txid_from_corresponding_burn_transaction_txid(txid)
         logger.info(f'Got credit pack registration txid for ticket with burn txid of {txid}: {registration_txid}')        
@@ -4043,6 +4062,7 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                 .where(db_code.CreditPackPurchaseRequestConfirmation.requesting_end_user_pastelid == pastelid)
             )
             credit_pack_request_confirmations = credit_pack_request_confirmations_results.all()
+        await get_list_of_credit_pack_ticket_txids_from_pastelid(pastelid)            
         tasks = [process_request_confirmation(request_confirmation) for request_confirmation in credit_pack_request_confirmations]
         complete_tickets = await asyncio.gather(*tasks)
         complete_tickets = [ticket for ticket in complete_tickets if ticket]
