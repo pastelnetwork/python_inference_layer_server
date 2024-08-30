@@ -187,7 +187,7 @@ CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS = 5 * 60  # 5 minutes
 # Initialize the cache
 credit_pack_cache = Cache(CACHE_DIR)
 
-use_purge_all_caches = 1
+use_purge_all_caches = 0
 if use_purge_all_caches:
     logger.info("Purging all caches...")
     credit_pack_cache.clear()
@@ -240,8 +240,9 @@ def async_disk_cached(cache, ttl=None):
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            key = str(args) + str(kwargs)
-            cached_result = cache.get(key, default=None, expire_time=True)
+            # Create a unique cache key based on the function name and arguments
+            cache_key = f"{func.__name__}:{str(args)}:{str(kwargs)}"
+            cached_result = cache.get(cache_key, default=None, expire_time=True)
             # Check if cached_result is a valid, non-None value
             if cached_result is not None and not (isinstance(cached_result, tuple) and all(v is None for v in cached_result)):
                 if isinstance(cached_result, tuple) and len(cached_result) == 2:
@@ -258,7 +259,7 @@ def async_disk_cached(cache, ttl=None):
                 logger.error(f"Exception details: {traceback.format_exc()}")
                 raise
             if value is not None:
-                cache.set(key, value, expire=ttl)
+                cache.set(cache_key, value, expire=ttl)
             else:
                 logger.warning(f"Not caching None value for {func.__name__}")
             return value
@@ -3777,16 +3778,6 @@ async def get_credit_pack_ticket_data(credit_pack_ticket_registration_txid: str,
         traceback.print_exc()
         raise
     
-@async_disk_cached(credit_pack_cache, ttl=CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS)
-async def get_credit_pack_current_balance(credit_pack_ticket_registration_txid: str) -> float:
-    try:
-        current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_registration_txid)
-        return current_credit_balance, number_of_confirmation_transactions
-    except Exception as e:
-        logger.error(f"Error getting current balance for credit pack ticket with TXID {credit_pack_ticket_registration_txid}: {str(e)}")
-        traceback.print_exc()
-        raise
-    
 @async_disk_cached(credit_pack_cache)
 async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> dict:
     try:
@@ -4073,23 +4064,44 @@ async def get_valid_credit_pack_tickets_for_pastelid_cacheable(pastelid: str) ->
         logger.error(f"Error retrieving credit pack tickets for PastelID {pastelid}: {str(e)}")
         traceback.print_exc()
         raise
-    
+
+@async_disk_cached(credit_pack_cache, ttl=CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS)
+async def get_credit_pack_current_balance(credit_pack_ticket_registration_txid: str) -> Tuple[float, int]:
+    @retry_on_database_locked
+    async def get_balance():
+        return await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_registration_txid)
+    try:
+        current_credit_balance, number_of_confirmation_transactions = await get_balance()
+        return current_credit_balance, number_of_confirmation_transactions
+    except Exception as e:
+        logger.error(f"Error getting current balance for credit pack ticket with TXID {credit_pack_ticket_registration_txid}: {str(e)}")
+        traceback.print_exc()
+        raise
+
 @async_disk_cached(credit_pack_cache, ttl=CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS)
 async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
     try:
         complete_validated_tickets_list = await get_valid_credit_pack_tickets_for_pastelid_cacheable(pastelid)
-        for current_credit_pack_ticket in complete_validated_tickets_list:
-            logger.info(f"Determining current credit balance for credit pack ticket with txid {current_credit_pack_ticket['credit_pack_registration_txid']} for PastelID {pastelid} (results will be cached for {round(CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS/60.0,2)} minutes)...")
+        async def update_ticket_balance(current_credit_pack_ticket):
             current_credit_pack_ticket_registration_txid = current_credit_pack_ticket['credit_pack_registration_txid']
-            current_credit_balance, number_of_confirmation_transactions, *_ = await get_credit_pack_current_balance(current_credit_pack_ticket_registration_txid)
-            current_credit_pack_ticket['credit_pack_current_credit_balance'] = current_credit_balance
-            current_credit_pack_ticket['number_of_confirmation_transactions'] = number_of_confirmation_transactions
-            current_credit_pack_ticket['balance_as_of_datetime'] = datetime.now(timezone.utc).isoformat()
-        return complete_validated_tickets_list            
+            logger.info(f"Determining current credit balance for credit pack ticket with txid {current_credit_pack_ticket_registration_txid} for PastelID {pastelid} (results will be cached for {round(CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS/60.0,2)} minutes)...")
+            try:
+                current_credit_balance, number_of_confirmation_transactions = await get_credit_pack_current_balance(current_credit_pack_ticket_registration_txid)
+                current_credit_pack_ticket['credit_pack_current_credit_balance'] = current_credit_balance
+                current_credit_pack_ticket['number_of_confirmation_transactions'] = number_of_confirmation_transactions
+                current_credit_pack_ticket['balance_as_of_datetime'] = datetime.now(timezone.utc).isoformat()
+            except Exception as e:
+                logger.error(f"Error updating balance for ticket {current_credit_pack_ticket_registration_txid}: {str(e)}")
+                current_credit_pack_ticket['credit_pack_current_credit_balance'] = None
+                current_credit_pack_ticket['number_of_confirmation_transactions'] = None
+                current_credit_pack_ticket['balance_as_of_datetime'] = None
+            return current_credit_pack_ticket
+        updated_tickets = await asyncio.gather(*[update_ticket_balance(ticket) for ticket in complete_validated_tickets_list])
+        return updated_tickets
     except Exception as e:
-        logger.error(f"Error determining credit balance for credit pack ticket with txid {current_credit_pack_ticket_registration_txid} for PastelID {pastelid}: {str(e)}")
+        logger.error(f"Error determining credit balance for credit pack tickets for PastelID {pastelid}: {str(e)}")
         traceback.print_exc()
-        raise    
+        raise
         
 async def save_credit_pack_ticket_to_database(credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, txid):
     async with db_code.Session() as db_session:
