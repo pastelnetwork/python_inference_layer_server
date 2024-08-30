@@ -1547,32 +1547,6 @@ async def retry_on_database_locked(func, *args, max_retries=5, initial_delay=1, 
             else:
                 raise
             
-def retry_on_database_locked_decorator(max_retries=5, initial_delay=1, backoff_factor=2, jitter_factor=0.1):
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            delay = initial_delay
-            for attempt in range(max_retries):
-                try:
-                    return await func(*args, **kwargs)
-                except OperationalError as e:
-                    if "database is locked" in str(e) and attempt < max_retries - 1:
-                        jitter = random.uniform(1 - jitter_factor, 1 + jitter_factor)
-                        delay *= backoff_factor * jitter
-                        logger.warning(f"Database locked. Retrying in {delay:.2f} second(s)...")
-                        await asyncio.sleep(delay)
-                    else:
-                        raise
-                except InvalidRequestError as e:
-                    if "This Session's transaction has been rolled back due to a previous exception during flush" in str(e):
-                        logger.warning("Session transaction has been rolled back. Retrying...")
-                        db_session = args[0]  # Assuming the first argument is the db_session
-                        await db_session.rollback()
-                    else:
-                        raise
-        return wrapper
-    return decorator            
-            
 async def check_if_record_exists(db_session, model, **kwargs):
     existing_record = await db_session.execute(
         select(model).filter_by(**kwargs)
@@ -4093,11 +4067,11 @@ async def get_valid_credit_pack_tickets_for_pastelid_cacheable(pastelid: str) ->
 
 @async_disk_cached(credit_pack_cache, ttl=CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS)
 async def get_credit_pack_current_balance(credit_pack_ticket_registration_txid: str) -> Tuple[float, int]:
-    @retry_on_database_locked_decorator
     async def get_balance():
         return await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_registration_txid)
     try:
-        current_credit_balance, number_of_confirmation_transactions = await get_balance()
+        # Pass the function `get_balance` directly without any arguments
+        current_credit_balance, number_of_confirmation_transactions = await retry_on_database_locked(get_balance)
         return current_credit_balance, number_of_confirmation_transactions
     except Exception as e:
         logger.error(f"Error getting current balance for credit pack ticket with TXID {credit_pack_ticket_registration_txid}: {str(e)}")
