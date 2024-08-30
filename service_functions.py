@@ -25,7 +25,8 @@ import pytz
 from collections import defaultdict
 from collections.abc import Iterable
 from functools import wraps
-from cachetools import TTLCache
+from cachetools import Cache, TTLCache, cached
+from functools import lru_cache
 from pathlib import Path
 from urllib.parse import quote_plus, unquote_plus
 from datetime import datetime, timedelta, date, timezone
@@ -178,6 +179,14 @@ performance_data_history = {}
 local_benchmark_csv_file_path = Path('local_sn_micro_benchmark_results.csv')
 pickle_file_path = Path('performance_data_history.pkl')
 use_libpastelid_for_pastelid_sign_verify = 1
+
+cacheable_cache = Cache(maxsize=100000)  # Cache for get_valid_credit_pack_tickets_for_pastelid_cacheable ;Adjust maxsize as needed
+# Cache for get_valid_credit_pack_tickets_for_pastelid
+CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_MINUTES = 10
+credit_balance_cache = TTLCache(
+    maxsize=100000,  # Adjust maxsize as needed
+    ttl=CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_MINUTES * 60  # Convert minutes to seconds
+)
 
 config = DecoupleConfig(RepositoryEnv('.env'))
 TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0, cast=int)
@@ -972,7 +981,7 @@ async def check_inference_port(supernode, max_response_time_in_milliseconds, loc
             last_updated = (datetime.now(timezone.utc) - timestamp).total_seconds()
             local_performance_data.append({'IP Address': ip_address, 'Performance Ratio': performance_ratio, 'Actual Score': actual_score, 'Seconds Since Last Updated': last_updated})
             return supernode
-    except (httpx.RequestError, httpx.ConnectTimeout):
+    except (httpx.RequestError, httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout) as e:
         return None
 
 async def update_performance_data_df(local_performance_data):
@@ -4009,10 +4018,9 @@ async def validate_selected_agreeing_supernodes(credit_pack_ticket_txid, credit_
         validation_results["credit_pack_ticket_is_valid"] = False
         validation_results["validation_failure_reasons_list"].append("Required field 'best_block_merkle_root' is missing in credit pack purchase request response")
 
-async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
+async def get_valid_credit_pack_tickets_for_pastelid_old(pastelid: str) -> List[dict]:
     async def process_request_confirmation(request_confirmation):
         txid = request_confirmation.txid_of_credit_purchase_burn_transaction
-        await get_psl_tracking_address_from_burn_transaction_txid(txid)     
         logger.info(f'Getting credit pack registration txid for ticket with burn txid of {txid}...')
         registration_txid = await get_credit_pack_ticket_registration_txid_from_corresponding_burn_transaction_txid(txid)
         logger.info(f'Got credit pack registration txid for ticket with burn txid of {txid}: {registration_txid}')        
@@ -4062,7 +4070,6 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
                 .where(db_code.CreditPackPurchaseRequestConfirmation.requesting_end_user_pastelid == pastelid)
             )
             credit_pack_request_confirmations = credit_pack_request_confirmations_results.all()
-        await get_list_of_credit_pack_ticket_txids_from_pastelid(pastelid)            
         tasks = [process_request_confirmation(request_confirmation) for request_confirmation in credit_pack_request_confirmations]
         complete_tickets = await asyncio.gather(*tasks)
         complete_tickets = [ticket for ticket in complete_tickets if ticket]
@@ -4072,6 +4079,60 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
         traceback.print_exc()
         raise
 
+@cached(cache=cacheable_cache)
+async def get_valid_credit_pack_tickets_for_pastelid_cacheable(pastelid: str) -> List[dict]:
+    try:
+        list_of_credit_pack_ticket_registration_txids, list_of_credit_pack_ticket_data = await get_list_of_credit_pack_ticket_txids_from_pastelid(pastelid)
+        complete_validated_tickets_list = []
+        for idx, current_credit_pack_ticket_registration_txid in enumerate(list_of_credit_pack_ticket_registration_txids):
+            logger.info(f"Attempting to Validate credit pack ticket {idx+1} of {len(list_of_credit_pack_ticket_registration_txids)} for PastelID {pastelid} for the first time (results will be cached indefinitely)...")
+            validation_results = await validate_existing_credit_pack_ticket(current_credit_pack_ticket_registration_txid)
+            if validation_results:
+                if len(validation_results['validation_failure_reasons_list'])==0:
+                    try:
+                        current_credit_pack_ticket_data = list_of_credit_pack_ticket_data[idx]
+                        current_credit_pack_ticket_data_json = base64.b64decode(current_credit_pack_ticket_data['ticket']['contract_ticket']).decode('utf-8')
+                        current_credit_pack_ticket_data_dict = json.loads(current_credit_pack_ticket_data_json)
+                        current_complete_valid_ticket = { 
+                            'credit_pack_registration_txid': current_credit_pack_ticket_registration_txid,
+                            'credit_purchase_request_confirmation_pastel_block_height': current_credit_pack_ticket_data_dict['ticket_input_data_dict']['credit_pack_purchase_request_confirmation_dict']['credit_purchase_request_confirmation_pastel_block_height'],
+                            'requesting_end_user_pastelid': current_credit_pack_ticket_data_dict['ticket_input_data_dict']['credit_pack_purchase_request_confirmation_dict']['requesting_end_user_pastelid'],
+                            'ticket_input_data_fully_parsed_sha3_256_hash': current_credit_pack_ticket_data_dict['ticket_input_data_fully_parsed_sha3_256_hash'],
+                            'txid_of_credit_purchase_burn_transaction': current_credit_pack_ticket_data_dict['ticket_input_data_dict']['credit_pack_purchase_request_confirmation_dict']['txid_of_credit_purchase_burn_transaction'],
+                            'credit_usage_tracking_psl_address': current_credit_pack_ticket_data_dict['ticket_input_data_dict']['credit_pack_purchase_request_response_dict']['credit_usage_tracking_psl_address'],
+                            'psl_cost_per_credit': current_credit_pack_ticket_data_dict['ticket_input_data_dict']['credit_pack_purchase_request_response_dict']['psl_cost_per_credit'],
+                            'requested_initial_credits_in_credit_pack': current_credit_pack_ticket_data_dict['ticket_input_data_dict']['credit_pack_purchase_request_dict']['requested_initial_credits_in_credit_pack'],
+                            'complete_credit_pack_data_json': current_credit_pack_ticket_data_json,
+                        }
+                        logger.info(f"Finished validating and parsing credit pack ticket data for PastelID {pastelid} with txid {current_credit_pack_ticket_registration_txid}!")
+                        complete_validated_tickets_list.append(current_complete_valid_ticket)
+                    except Exception as e:
+                        logger.error(f"Error processing credit pack ticket data for PastelID {pastelid}: {str(e)}")
+                        traceback.print_exc()
+                        pass
+        return complete_validated_tickets_list
+    except Exception as e:
+        logger.error(f"Error retrieving credit pack tickets for PastelID {pastelid}: {str(e)}")
+        traceback.print_exc()
+        raise
+    
+@cached(cache=credit_balance_cache)
+async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
+    try:
+        complete_validated_tickets_list = await get_valid_credit_pack_tickets_for_pastelid_cacheable(pastelid)
+        for current_credit_pack_ticket in complete_validated_tickets_list:
+            logger.info(f"Determining current credit balance for credit pack ticket with txid {current_credit_pack_ticket['credit_pack_registration_txid']} for PastelID {pastelid} (results will be cached for {CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_MINUTES} minutes)...")
+            current_credit_pack_ticket_registration_txid = current_credit_pack_ticket['credit_pack_registration_txid']
+            current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(current_credit_pack_ticket_registration_txid)
+            current_credit_pack_ticket['credit_pack_current_credit_balance'] = current_credit_balance
+            current_credit_pack_ticket['number_of_confirmation_transactions'] = number_of_confirmation_transactions
+            current_credit_pack_ticket['balance_as_of_datetime'] = datetime.now(timezone.utc).isoformat()
+        return complete_validated_tickets_list            
+    except Exception as e:
+        logger.error(f"Error determining credit balance for credit pack ticket with txid {current_credit_pack_ticket_registration_txid} for PastelID {pastelid}: {str(e)}")
+        traceback.print_exc()
+        raise
+        
 async def save_credit_pack_ticket_to_database(credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, txid):
     async with db_code.Session() as db_session:
         try:
