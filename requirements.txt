@@ -3,6 +3,7 @@ anthropic
 asyncio
 cachetools 
 cryptography
+diskcache
 fastapi
 fuzzywuzzy 
 groq

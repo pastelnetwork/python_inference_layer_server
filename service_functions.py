@@ -25,8 +25,8 @@ import pytz
 from collections import defaultdict
 from collections.abc import Iterable
 from functools import wraps
-from cachetools import Cache, TTLCache, cached
-from functools import lru_cache
+from cachetools import TTLCache
+from diskcache import Cache
 from pathlib import Path
 from urllib.parse import quote_plus, unquote_plus
 from datetime import datetime, timedelta, date, timezone
@@ -180,14 +180,30 @@ local_benchmark_csv_file_path = Path('local_sn_micro_benchmark_results.csv')
 pickle_file_path = Path('performance_data_history.pkl')
 use_libpastelid_for_pastelid_sign_verify = 1
 
-cacheable_cache = Cache(maxsize=100000)  # Cache for get_valid_credit_pack_tickets_for_pastelid_cacheable ;Adjust maxsize as needed
-# Cache for get_valid_credit_pack_tickets_for_pastelid
-CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_MINUTES = 10
-credit_balance_cache = TTLCache(
-    maxsize=100000,  # Adjust maxsize as needed
-    ttl=CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_MINUTES * 60  # Convert minutes to seconds
-)
+ticket_validation_cache = Cache(maxsize=100000)
+credit_pack_cache = Cache(maxsize=100000)
+credit_balance_cache = Cache(maxsize=100000)
+# Define the cache directories
+TICKET_VALIDATION_CACHE_DIR = './local_ticket_validation_cache'
+CREDIT_PACK_CACHE_DIR = './local_credit_pack_cache'
+CREDIT_BALANCE_CACHE_DIR = './local_credit_balance_cache'
 
+# Create the caches
+ticket_validation_cache = Cache(TICKET_VALIDATION_CACHE_DIR)
+credit_pack_cache = Cache(CREDIT_PACK_CACHE_DIR)
+credit_balance_cache = Cache(CREDIT_BALANCE_CACHE_DIR)
+
+# Define the TTL for credit pack and balance caches (in seconds)
+CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS = 5 * 60  # 5 minutes
+
+use_purge_all_caches = 1
+if use_purge_all_caches:
+    logger.info("Purging all caches...")
+    ticket_validation_cache.clear()
+    credit_pack_cache.clear()
+    credit_balance_cache.clear()
+    logger.info("Cleared all caches")
+    
 config = DecoupleConfig(RepositoryEnv('.env'))
 TEMP_OVERRIDE_LOCALHOST_ONLY = config.get("TEMP_OVERRIDE_LOCALHOST_ONLY", default=0, cast=int)
 NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE = config.get("NUMBER_OF_DAYS_BEFORE_MESSAGES_ARE_CONSIDERED_OBSOLETE", default=3, cast=int)
@@ -232,6 +248,36 @@ SUPERNODE_DATA_CACHE = TTLCache(maxsize=1, ttl=SUPERNODE_DATA_CACHE_EVICTION_TIM
 challenge_store = {}
 file_store = {} # In-memory store for files with expiration times
 
+def async_disk_cached(cache, ttl=None):
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            key = str(args) + str(kwargs)
+            cached_result = cache.get(key, default=None, expire_time=True)
+            # Check if cached_result is a valid, non-None value
+            if cached_result is not None and not (isinstance(cached_result, tuple) and all(v is None for v in cached_result)):
+                if isinstance(cached_result, tuple) and len(cached_result) == 2:
+                    value, expire_time = cached_result
+                    if value is not None and (ttl is None or expire_time is None or expire_time > 0):
+                        logger.info(f"Returning valid cached value: {value}")
+                        return value
+                elif cached_result is not None:
+                    logger.info(f"Returning valid cached value: {cached_result}")
+                    return cached_result
+            try:
+                value = await func(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"Exception in {func.__name__}: {str(e)}")
+                logger.error(f"Exception type: {type(e).__name__}")
+                logger.error(f"Exception details: {traceback.format_exc()}")
+                raise
+            if value is not None:
+                cache.set(key, value, expire=ttl)
+            else:
+                logger.warning(f"Not caching None value for {func.__name__}")
+            return value
+        return wrapper
+    return decorator
 
 # Initialize PastelSigner
 pastel_keys_dir = os.path.expanduser("~/.pastel/pastelkeys")
@@ -687,31 +733,64 @@ def track_rpc_call(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
         method_name = kwargs.get('method_name', func.__name__)
-        params = tuple(args) + tuple(kwargs.items())
-        rpc_key = (method_name, params)
+        
+        def make_hashable(obj):
+            if isinstance(obj, (list, tuple)):
+                return tuple(make_hashable(e) for e in obj)
+            elif isinstance(obj, dict):
+                return tuple(sorted((k, make_hashable(v)) for k, v in obj.items()))
+            elif isinstance(obj, set):
+                return frozenset(make_hashable(e) for e in obj)
+            return obj
+
+        hashable_args = make_hashable(args)
+        hashable_kwargs = make_hashable(kwargs)
+        
+        rpc_key = (method_name, hashable_args, hashable_kwargs)
+        
         start_time = time.time()
         try:
             result = await func(*args, **kwargs)
             elapsed_time = time.time() - start_time
             response_size = len(str(result).encode('utf-8'))
+            
+            if rpc_key not in rpc_call_stats:
+                rpc_call_stats[rpc_key] = {
+                    "count": 0,
+                    "cumulative_time": 0.0,
+                    "average_time": 0.0,
+                    "success_count": 0,
+                    "total_response_size": 0,
+                    "average_response_size": 0.0,
+                    "timeout_errors": 0,
+                    "connection_errors": 0,
+                    "other_errors": 0
+                }
+            
             rpc_call_stats[rpc_key]["count"] += 1
             rpc_call_stats[rpc_key]["cumulative_time"] += elapsed_time
             rpc_call_stats[rpc_key]["average_time"] = (
                 rpc_call_stats[rpc_key]["cumulative_time"] / rpc_call_stats[rpc_key]["count"]
             )
-            rpc_call_stats[rpc_key]["total_response_size"] = rpc_call_stats[rpc_key].get("total_response_size", 0) + response_size
+            rpc_call_stats[rpc_key]["total_response_size"] += response_size
             rpc_call_stats[rpc_key]["average_response_size"] = (
                 rpc_call_stats[rpc_key]["total_response_size"] / rpc_call_stats[rpc_key]["count"]
             )
-            rpc_call_stats[rpc_key]["success_count"] = rpc_call_stats[rpc_key].get("success_count", 0) + 1
+            rpc_call_stats[rpc_key]["success_count"] += 1
             return result
         except httpx.TimeoutException:
+            if rpc_key not in rpc_call_stats:
+                rpc_call_stats[rpc_key] = {"timeout_errors": 0}
             rpc_call_stats[rpc_key]["timeout_errors"] = rpc_call_stats[rpc_key].get("timeout_errors", 0) + 1
             raise
         except httpx.ConnectError:
+            if rpc_key not in rpc_call_stats:
+                rpc_call_stats[rpc_key] = {"connection_errors": 0}
             rpc_call_stats[rpc_key]["connection_errors"] = rpc_call_stats[rpc_key].get("connection_errors", 0) + 1
             raise
         except Exception as e:
+            if rpc_key not in rpc_call_stats:
+                rpc_call_stats[rpc_key] = {"other_errors": 0}
             rpc_call_stats[rpc_key]["other_errors"] = rpc_call_stats[rpc_key].get("other_errors", 0) + 1
             raise e
     return wrapper
@@ -806,8 +885,22 @@ async def tickets_list_id(rpc_connection, identifier):
     return await rpc_connection.tickets('list', 'id', identifier)
 
 @track_rpc_call
-async def getaddressutxosextra(rpc_connection, addresses_info):
-    return await rpc_connection.getaddressutxosextra(addresses_info)
+async def getaddressutxosextra(rpc_connection, params):
+    try:
+        formatted_params = {
+            "addresses": params.get('addresses', []),
+            "simple": False,  # We want full info
+            "minHeight": params.get('minHeight', 0),
+            "sender": params.get('sender', ''),
+            "mempool": params.get('mempool', True)
+        }
+        result = await rpc_connection.getaddressutxosextra(formatted_params)
+        return result
+    except Exception as e:
+        logger.error(f"Error in getaddressutxosextra RPC call: {str(e)}")
+        logger.error(f"Error type: {type(e)}")
+        logger.error(f"Error details: {traceback.format_exc()}")
+        return None  # Return None explicitly on error
 
 @track_rpc_call
 async def decoderawtransaction(rpc_connection, raw_tx_data):
@@ -981,7 +1074,7 @@ async def check_inference_port(supernode, max_response_time_in_milliseconds, loc
             last_updated = (datetime.now(timezone.utc) - timestamp).total_seconds()
             local_performance_data.append({'IP Address': ip_address, 'Performance Ratio': performance_ratio, 'Actual Score': actual_score, 'Seconds Since Last Updated': last_updated})
             return supernode
-    except (httpx.RequestError, httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout) as e:
+    except (httpx.RequestError, httpx.ConnectTimeout, httpx.ConnectError, httpx.ReadTimeout, OSError) as e:  # noqa: F841
         return None
 
 async def update_performance_data_df(local_performance_data):
@@ -1203,7 +1296,7 @@ async def list_sn_messages_func():
         message_timestamp = pd.to_datetime(datetime.fromtimestamp(message['Timestamp']).isoformat(), utc=True)
         # Check if the message already exists in the database
         if (sending_pastelid, receiving_pastelid, message_timestamp) in existing_messages:
-            logger.debug("Message already exists in the database. Skipping...")
+            logger.info("Message already exists in the database. Skipping...")
             continue
         message_body = base64.b64decode(message['Message'].encode('utf-8'))
         verification_status = await verify_received_message_using_pastelid_func(message_body, sending_pastelid)
@@ -2144,7 +2237,7 @@ def parse_sqlmodel_strings_into_lists_and_dicts_func(model_instance: SQLModel) -
 async def retrieve_credit_pack_ticket_from_blockchain_using_txid(txid: str) -> db_code.CreditPackPurchaseRequestResponse:
     try:
         if not txid:
-            logger.error(f"Error retrieving credit pack ticket from blockchain: No TXID provided")
+            logger.error("Error retrieving credit pack ticket from blockchain: No TXID provided")
             return None, None, None
         credit_pack_combined_blockchain_ticket_data_json = await retrieve_generic_ticket_data_from_blockchain(txid)
         if credit_pack_combined_blockchain_ticket_data_json:
@@ -2200,7 +2293,7 @@ async def retrieve_credit_pack_ticket_using_txid(txid: str) -> Tuple[Optional[db
     total_wait_time = 0  # Total wait time across retries
     jitter_max = 1  # Max jitter in seconds
     if txid is None:
-        logger.error(f"Error: TXID is None")
+        logger.error("Error: TXID is None")
         return None, None, None
     try:
         async with db_code.Session() as db_session:
@@ -2496,7 +2589,7 @@ async def get_list_of_credit_pack_ticket_txids_already_in_db():
         else:
             return []
 
-async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them(ticket_type_identifier: str = "INFERENCE_API_CREDIT_PACK_TICKET", starting_block_height: int = 0, force_revalidate_all_tickets: int = 0):
+async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them(ticket_type_identifier: str = "INFERENCE_API_CREDIT_PACK_TICKET", starting_block_height: int = 700000, force_revalidate_all_tickets: int = 0):
     try:
         if not isinstance(ticket_type_identifier, str):
             error_message = "Ticket type identifier data must be a valid string!"
@@ -2511,10 +2604,8 @@ async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_th
         list_of_retrieved_ticket_input_data_dicts = [x['ticket_input_data_dict'] for x in list_of_ticket_internal_data_dicts]
         list_of_retrieved_ticket_input_data_dicts_json = [json.dumps(x) for x in list_of_retrieved_ticket_input_data_dicts]
         list_of_computed_fully_parsed_json_sha3_256_hashes = [compute_fully_parsed_json_sha3_256_hash(x)[0] for x in list_of_retrieved_ticket_input_data_dicts_json]
-        # Sort hashes before comparison to handle differences in order
         list_of_computed_fully_parsed_json_sha3_256_hashes_sorted = sorted(list_of_computed_fully_parsed_json_sha3_256_hashes)
         list_of_retrieved_ticket_input_data_fully_parsed_sha3_256_hashes_sorted = sorted(list_of_retrieved_ticket_input_data_fully_parsed_sha3_256_hashes)
-        # Collect mismatches instead of asserting
         mismatches = [(i, x) for i, x in enumerate(list_of_retrieved_ticket_input_data_fully_parsed_sha3_256_hashes_sorted) if list_of_computed_fully_parsed_json_sha3_256_hashes_sorted[i] != x]
         if mismatches:
             logger.error(f"Mismatches found in hashes: {mismatches}")
@@ -2530,22 +2621,37 @@ async def list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_th
         else:
             list_of_ticket_txids_not_already_stored = [x for x in list_of_ticket_txids if x not in list_of_already_stored_credit_pack_txids and x not in list_of_known_bad_credit_pack_txids]
             if len(list_of_ticket_txids_not_already_stored) > 0:
-                logger.info(f"Now attempting to perform in-depth validation of all aspects of the {len(list_of_ticket_txids_not_already_stored):,} retrieved {ticket_type_identifier} tickets that are not already in the database or in already in the known bad list of TXIDs...")
+                logger.info(f"Now attempting to perform in-depth validation of all aspects of the {len(list_of_ticket_txids_not_already_stored):,} retrieved {ticket_type_identifier} tickets that are not already in the database or in the known bad list of TXIDs...")
         list_of_fully_validated_ticket_txids = []
         for idx, current_txid in enumerate(list_of_ticket_txids_not_already_stored):
-            validation_results = await validate_existing_credit_pack_ticket(current_txid)
-            asyncio.sleep(0.5)
-            if not validation_results["credit_pack_ticket_is_valid"]:
-                logger.warning(f"[Ticket {idx+1}/{len(list_of_ticket_txids_not_already_stored)}] Blockchain ticket of type {ticket_type_identifier} and TXID {current_txid} was unable to be fully validated, so skipping it! Reasons for validation failure:\n{validation_results['validation_failure_reasons_list']}")
-            else:
-                logger.info(f"[Ticket {idx+1}/{len(list_of_ticket_txids_not_already_stored)}] Blockchain ticket of type {ticket_type_identifier} and TXID {current_txid} was fully validated! Now saving to database if not already there...")
-                list_of_fully_validated_ticket_txids.append(current_txid)
-                _ = await retrieve_credit_pack_ticket_using_txid(current_txid) # This will save the valid tickets to the database automatically for future reference
+            logger.info(f"Validating ticket {idx+1}/{len(list_of_ticket_txids_not_already_stored)}: {current_txid}")
+            try:
+                validation_results = await validate_existing_credit_pack_ticket(current_txid)
+                if validation_results is None:
+                    logger.error(f"[Ticket {idx+1}/{len(list_of_ticket_txids_not_already_stored)}] Validation for TXID {current_txid} returned None. Skipping this ticket.")
+                    continue
+                asyncio.sleep(0.5)
+                if not validation_results["credit_pack_ticket_is_valid"]:
+                    logger.warning(f"[Ticket {idx+1}/{len(list_of_ticket_txids_not_already_stored)}] Blockchain ticket of type {ticket_type_identifier} and TXID {current_txid} was unable to be fully validated, so skipping it! Reasons for validation failure:\n{validation_results['validation_failure_reasons_list']}")
+                else:
+                    logger.info(f"[Ticket {idx+1}/{len(list_of_ticket_txids_not_already_stored)}] Blockchain ticket of type {ticket_type_identifier} and TXID {current_txid} was fully validated! Now saving to database...")
+                    list_of_fully_validated_ticket_txids.append(current_txid)
+                    credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(current_txid)
+                    if all((credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation)):
+                        await save_credit_pack_ticket_to_database(credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, current_txid)
+                        logger.info(f"Successfully saved credit pack ticket with TXID {current_txid} to database.")
+                    else:
+                        logger.error(f"Failed to retrieve complete credit pack ticket data for TXID {current_txid} from blockchain.")
+            except Exception as e:
+                logger.error(f"Exception occurred while validating TXID {current_txid}: {str(e)}")
+                logger.error(f"Exception type: {type(e).__name__}")
+                logger.error(f"Exception details: {traceback.format_exc()}")
+                continue                    
         if len(list_of_ticket_txids_not_already_stored) > 0:
             logger.info(f"We were able to fully validate {len(list_of_fully_validated_ticket_txids):,} of the {len(list_of_ticket_txids_not_already_stored):,} retrieved {ticket_type_identifier} tickets!")
         return list_of_retrieved_ticket_input_data_dicts_json, list_of_fully_validated_ticket_txids
     except Exception as e:
-        logger.error(f"Error occurred while listing generic blockchain tickets of type {str(ticket_type_identifier)}: {e}")
+        logger.error(f"Error occurred while listing generic blockchain tickets of type {ticket_type_identifier}: {e}")
         traceback.print_exc()
         return None
     
@@ -3656,7 +3762,8 @@ async def validate_existing_credit_pack_ticket_old(credit_pack_ticket_txid: str)
         logger.info(f"Validating credit pack ticket with TXID: {credit_pack_ticket_txid}")
         # Retrieve the credit pack ticket data from the blockchain
         credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(credit_pack_ticket_txid)
-        logger.info(f"Credit pack ticket data for credit pack with TXID {credit_pack_ticket_txid}:\n\nTicket Request Response:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_response.model_dump())} \n\nTicket Request Confirmation:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_confirmation.model_dump())}")
+        if use_verbose_validation:
+            logger.info(f"Credit pack ticket data for credit pack with TXID {credit_pack_ticket_txid}:\n\nTicket Request Response:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_response.model_dump())} \n\nTicket Request Confirmation:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_confirmation.model_dump())}")
         validation_results = {
             "credit_pack_ticket_is_valid": True,
             "validation_checks": [],
@@ -3824,13 +3931,15 @@ async def validate_existing_credit_pack_ticket_old(credit_pack_ticket_txid: str)
         traceback.print_exc()
         raise
 
+@async_disk_cached(ticket_validation_cache)
 async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> dict:
     try:
         use_verbose_validation = 0
         logger.info(f"Validating credit pack ticket with TXID: {credit_pack_ticket_txid}")
         # Retrieve the credit pack ticket data from the blockchain
         credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation = await retrieve_credit_pack_ticket_from_blockchain_using_txid(credit_pack_ticket_txid)
-        logger.info(f"Credit pack ticket data for credit pack with TXID {credit_pack_ticket_txid}:\n\nTicket Request Response:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_response.model_dump())} \n\nTicket Request Confirmation:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_confirmation.model_dump())}")
+        if use_verbose_validation:
+            logger.info(f"Credit pack ticket data for credit pack with TXID {credit_pack_ticket_txid}:\n\nTicket Request Response:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_response.model_dump())} \n\nTicket Request Confirmation:\n\n {abbreviated_pretty_json_func(credit_pack_purchase_request_confirmation.model_dump())}")
         validation_results = {
             "credit_pack_ticket_is_valid": True,
             "validation_checks": [],
@@ -3856,11 +3965,17 @@ async def validate_existing_credit_pack_ticket(credit_pack_ticket_txid: str) -> 
                 logger.info(f"Added invalid credit pack ticket TXID {credit_pack_ticket_txid} to known bad list in database!")
         # Sort validation_failure_reasons_list alphabetically
         validation_results["validation_failure_reasons_list"].sort()
+        logger.info(f"Validation completed successfully for TXID: {credit_pack_ticket_txid}")
         return validation_results
     except Exception as e:
         logger.error(f"Error validating credit pack ticket with TXID {credit_pack_ticket_txid}: {str(e)}")
-        traceback.print_exc()
-        raise
+        logger.error(f"Exception type: {type(e).__name__}")
+        logger.error(f"Exception details: {traceback.format_exc()}")
+        return {
+            "credit_pack_ticket_is_valid": False,
+            "validation_checks": [],
+            "validation_failure_reasons_list": [f"Exception during validation: {str(e)}"]
+        }
 
 async def validate_payment(credit_pack_ticket_txid, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, validation_results):
     matching_transaction_found, exceeding_transaction_found, transaction_block_height, num_confirmations, amount_received_at_burn_address = await check_burn_transaction(
@@ -4079,13 +4194,13 @@ async def get_valid_credit_pack_tickets_for_pastelid_old(pastelid: str) -> List[
         traceback.print_exc()
         raise
 
-@cached(cache=cacheable_cache)
+@async_disk_cached(credit_pack_cache, ttl=CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS)
 async def get_valid_credit_pack_tickets_for_pastelid_cacheable(pastelid: str) -> List[dict]:
     try:
         list_of_credit_pack_ticket_registration_txids, list_of_credit_pack_ticket_data = await get_list_of_credit_pack_ticket_txids_from_pastelid(pastelid)
         complete_validated_tickets_list = []
         for idx, current_credit_pack_ticket_registration_txid in enumerate(list_of_credit_pack_ticket_registration_txids):
-            logger.info(f"Attempting to Validate credit pack ticket {idx+1} of {len(list_of_credit_pack_ticket_registration_txids)} for PastelID {pastelid} for the first time (results will be cached indefinitely)...")
+            logger.info(f"Attempting to validate credit pack ticket {idx+1} of {len(list_of_credit_pack_ticket_registration_txids)} for PastelID {pastelid}...")
             validation_results = await validate_existing_credit_pack_ticket(current_credit_pack_ticket_registration_txid)
             if validation_results:
                 if len(validation_results['validation_failure_reasons_list'])==0:
@@ -4116,12 +4231,12 @@ async def get_valid_credit_pack_tickets_for_pastelid_cacheable(pastelid: str) ->
         traceback.print_exc()
         raise
     
-@cached(cache=credit_balance_cache)
+@async_disk_cached(credit_pack_cache, ttl=CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS)
 async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict]:
     try:
         complete_validated_tickets_list = await get_valid_credit_pack_tickets_for_pastelid_cacheable(pastelid)
         for current_credit_pack_ticket in complete_validated_tickets_list:
-            logger.info(f"Determining current credit balance for credit pack ticket with txid {current_credit_pack_ticket['credit_pack_registration_txid']} for PastelID {pastelid} (results will be cached for {CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_MINUTES} minutes)...")
+            logger.info(f"Determining current credit balance for credit pack ticket with txid {current_credit_pack_ticket['credit_pack_registration_txid']} for PastelID {pastelid} (results will be cached for {round(CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS/60.0,2)} minutes)...")
             current_credit_pack_ticket_registration_txid = current_credit_pack_ticket['credit_pack_registration_txid']
             current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(current_credit_pack_ticket_registration_txid)
             current_credit_pack_ticket['credit_pack_current_credit_balance'] = current_credit_balance
@@ -4136,43 +4251,70 @@ async def get_valid_credit_pack_tickets_for_pastelid(pastelid: str) -> List[dict
 async def save_credit_pack_ticket_to_database(credit_pack_purchase_request, credit_pack_purchase_request_response, credit_pack_purchase_request_confirmation, txid):
     async with db_code.Session() as db_session:
         try:
-            existing_request = await db_session.exec(
-                select(db_code.CreditPackPurchaseRequest)
-                .where(db_code.CreditPackPurchaseRequest.sha3_256_hash_of_credit_pack_purchase_request_fields == credit_pack_purchase_request.sha3_256_hash_of_credit_pack_purchase_request_fields)
+            # First, check if we already have this ticket in our database
+            existing_mapping = await db_session.exec(
+                select(db_code.CreditPackPurchaseRequestResponseTxidMapping)
+                .where(db_code.CreditPackPurchaseRequestResponseTxidMapping.pastel_api_credit_pack_ticket_registration_txid == txid)
             )
-            existing_request = existing_request.first()
-            if existing_request:
-                for key, value in credit_pack_purchase_request.dict().items():
-                    setattr(existing_request, key, value)
+            existing_mapping = existing_mapping.one_or_none()
+
+            if existing_mapping:
+                # If we have this ticket, update the existing data
+                existing_data = await db_session.exec(
+                    select(db_code.CreditPackCompleteTicketWithBalance)
+                    .where(db_code.CreditPackCompleteTicketWithBalance.credit_pack_ticket_registration_txid == txid)
+                )
+                existing_data = existing_data.one_or_none()
+
+                if existing_data:
+                    complete_ticket = json.loads(existing_data.complete_credit_pack_data_json)
+                    current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
+                    complete_ticket['credit_pack_current_credit_balance'] = current_credit_balance
+                    complete_ticket['balance_as_of_datetime'] = datetime.now(timezone.utc).isoformat()
+                    complete_ticket_json = json.dumps(complete_ticket)
+
+                    existing_data.complete_credit_pack_data_json = complete_ticket_json
+                    existing_data.datetime_last_updated = datetime.now(timezone.utc)
+                    db_session.add(existing_data)
             else:
-                db_session.add(credit_pack_purchase_request)
-            existing_response = await db_session.exec(
-                select(db_code.CreditPackPurchaseRequestResponse)
-                .where(db_code.CreditPackPurchaseRequestResponse.sha3_256_hash_of_credit_pack_purchase_request_response_fields == credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_response_fields)
-            )
-            existing_response = existing_response.first()
-            if existing_response:
-                for key, value in credit_pack_purchase_request_response.dict().items():
-                    setattr(existing_response, key, value)
-            else:
-                db_session.add(credit_pack_purchase_request_response)
-            existing_confirmation = await db_session.exec(
-                select(db_code.CreditPackPurchaseRequestConfirmation)
-                .where(db_code.CreditPackPurchaseRequestConfirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields == credit_pack_purchase_request_confirmation.sha3_256_hash_of_credit_pack_purchase_request_confirmation_fields)
-            )
-            existing_confirmation = existing_confirmation.first()
-            if existing_confirmation:
-                for key, value in credit_pack_purchase_request_confirmation.dict().items():
-                    setattr(existing_confirmation, key, value)
-            else:
-                db_session.add(credit_pack_purchase_request_confirmation)
-            await save_credit_pack_purchase_request_response_txid_mapping(credit_pack_purchase_request_response, txid)
+                # If we don't have this ticket, create new entries
+                current_credit_balance, number_of_confirmation_transactions = await determine_current_credit_pack_balance_based_on_tracking_transactions(txid)
+                
+                complete_ticket = {
+                    "credit_pack_purchase_request": json.loads(base64.b64decode(credit_pack_purchase_request_response.credit_pack_purchase_request_fields_json_b64).decode('utf-8')),
+                    "credit_pack_purchase_request_response": credit_pack_purchase_request_response.model_dump(),
+                    "credit_pack_purchase_request_confirmation": credit_pack_purchase_request_confirmation.model_dump(),
+                    "credit_pack_registration_txid": txid,
+                    "credit_pack_current_credit_balance": current_credit_balance,
+                    "balance_as_of_datetime": datetime.now(timezone.utc).isoformat()
+                }
+                complete_ticket = convert_uuids_to_strings(complete_ticket)
+                complete_ticket = normalize_data(complete_ticket)
+                complete_ticket_json = json.dumps(complete_ticket)
+
+                new_complete_ticket = db_code.CreditPackCompleteTicketWithBalance(
+                    credit_pack_ticket_registration_txid=txid,
+                    complete_credit_pack_data_json=complete_ticket_json,
+                    datetime_last_updated=datetime.now(timezone.utc)
+                )
+                db_session.add(new_complete_ticket)
+
+                # Create new mapping
+                new_mapping = db_code.CreditPackPurchaseRequestResponseTxidMapping(
+                    sha3_256_hash_of_credit_pack_purchase_request_fields=credit_pack_purchase_request_response.sha3_256_hash_of_credit_pack_purchase_request_fields,
+                    pastel_api_credit_pack_ticket_registration_txid=txid
+                )
+                db_session.add(new_mapping)
+
+            # Commit the changes
             await db_session.commit()
             logger.info(f"Successfully saved/updated credit pack ticket data for TXID {txid} to database.")
+
         except Exception as e:
             logger.error(f"Error saving/updating retrieved credit pack ticket to the local database: {str(e)}")
             await db_session.rollback()
             raise
+
     await db_code.consolidate_wal_data()
 
         
@@ -6171,12 +6313,13 @@ async def determine_current_credit_pack_balance_based_on_tracking_transactions(c
     min_height_for_credit_pack_tickets = 700000
     try:
         logger.info(f"Now scanning blockchain for burn transactions sent from address {credit_usage_tracking_psl_address}...")
-        burn_transactions = await getaddressutxosextra(rpc_connection, {
+        params = {
             "addresses": [burn_address],
             "mempool": True,
             "minHeight": min_height_for_credit_pack_tickets,
             "sender": credit_usage_tracking_psl_address
-        })
+        }
+        burn_transactions = await getaddressutxosextra(rpc_connection, params)
         # Check if the result is valid
         if not burn_transactions:
             logger.info(f"No transactions found for address {credit_usage_tracking_psl_address}. Returning initial balance.")

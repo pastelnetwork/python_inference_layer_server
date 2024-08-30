@@ -13,22 +13,20 @@ def setup_logger():
     if not os.path.exists(old_logs_dir):
         os.makedirs(old_logs_dir)
     logger.setLevel(logging.INFO)
-    # Custom formatter for correct date-time formatting
-    formatter = logging.Formatter(fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S,%f')
+    formatter = logging.Formatter(fmt='%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
     log_file_path = 'pastel_supernode_inference_layer.log'
-    log_queue = queue.Queue(-1)  # Create a queue for the handlers
+    log_queue = queue.Queue(-1)
     fh = RotatingFileHandler(log_file_path, maxBytes=10*1024*1024, backupCount=5)
     fh.setFormatter(formatter)
-    def namer(default_log_name):  # Function to move rotated logs to the old_logs directory
+    def namer(default_log_name):
         return os.path.join(old_logs_dir, os.path.basename(default_log_name))
     def rotator(source, dest):
         shutil.move(source, dest)
     fh.namer = namer
     fh.rotator = rotator
-    queue_handler = QueueHandler(log_queue)  # Create QueueHandler
-    queue_handler.setFormatter(formatter)
+    queue_handler = QueueHandler(log_queue)
     logger.addHandler(queue_handler)
-    listener = QueueListener(log_queue, fh)  # Create QueueListener with only the file handler
+    listener = QueueListener(log_queue, fh)
     listener.start()
-    logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)  # Configure SQLalchemy logging
+    logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
     return logger
