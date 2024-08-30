@@ -1067,7 +1067,8 @@ async def check_inference_port(supernode, max_response_time_in_milliseconds, loc
 async def update_performance_data_df(local_performance_data):
     global performance_data_df
     local_performance_data_df = pd.DataFrame(local_performance_data)
-    local_performance_data_df.sort_values(by='IP Address', inplace=True)
+    if not local_performance_data_df.empty and 'IP Address' in local_performance_data_df.columns:
+        local_performance_data_df.sort_values(by='IP Address', inplace=True)
     # Replace "N/A" with NaN for numerical operations
     local_performance_data_df.replace("N/A", pd.NA, inplace=True)
     summary_statistics = {
@@ -1139,6 +1140,8 @@ async def generate_supernode_inference_ip_blacklist(max_response_time_in_millise
     check_results = await asyncio.gather(
         *(check_inference_port(supernode, max_response_time_in_milliseconds, local_performance_data) for supernode in full_supernode_list_df.to_dict(orient='records'))
     )
+    logger.info(f"Gathered check results. Number of results: {len(check_results)}")
+    logger.info(f"Local performance data entries: {len(local_performance_data)}")
     # Filter supernodes based on success/failure
     successful_nodes = {supernode['extKey'] for supernode in check_results if supernode is not None}
     successful_nodes_ip_addresses = {supernode['ipaddress:port']for supernode in check_results if supernode is not None}
