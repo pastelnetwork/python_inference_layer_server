@@ -5253,136 +5253,167 @@ def get_claude3_model_name(model_name: str) -> str:
     return model_mapping.get(model_name, "")
 
 async def submit_inference_request_to_stability_api(inference_request):
-    # Integrate with the Stability API to perform the image generation task
+    model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
     if inference_request.model_inference_type_string == "text_to_image":
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
         if "stability-core" in inference_request.requested_model_canonical_string:
-            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 3)) as client:
-                data = {
-                    "prompt": prompt,
-                    "aspect_ratio": model_parameters.get("aspect_ratio", "1:1"),
-                    "output_format": model_parameters.get("output_format", "jpeg")
-                }
-                if model_parameters.get("negative_prompt"):
-                    data["negative_prompt"] = model_parameters["negative_prompt"]
-                if model_parameters.get("seed") is not None:
-                    data["seed"] = model_parameters["seed"]
-                if model_parameters.get("style_preset"):
-                    data["style_preset"] = model_parameters["style_preset"]
-                response = await client.post(
-                    "https://api.stability.ai/v2beta/stable-image/generate/core",
+            return await _handle_stability_core_request(prompt, model_parameters)
+        elif "sd3" in inference_request.requested_model_canonical_string:
+            return await _handle_sd3_request(prompt, model_parameters, inference_request.requested_model_canonical_string)
+        else:
+            logger.error(f"Unsupported model for text-to-image: {inference_request.requested_model_canonical_string}")
+            return None, None
+    elif inference_request.model_inference_type_string in ["conservative_upscale", "creative_upscale"]:
+        input_image = base64.b64decode(inference_request.model_input_data_json_b64)
+        prompt = model_parameters.get("prompt", "")
+        if inference_request.model_inference_type_string == "conservative_upscale":
+            return await _handle_conservative_upscale_request(input_image, prompt, model_parameters)
+        else:
+            return await _handle_creative_upscale_request(input_image, prompt, model_parameters)
+    else:
+        logger.error(f"Unsupported inference type: {inference_request.model_inference_type_string}")
+        return None, None
+
+async def _handle_stability_core_request(prompt, model_parameters):
+    async with httpx.AsyncClient(timeout=httpx.Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+        data = {
+            "prompt": prompt,
+            "aspect_ratio": model_parameters.get("aspect_ratio", "1:1"),
+            "output_format": model_parameters.get("output_format", "png")
+        }
+        if model_parameters.get("negative_prompt"):
+            data["negative_prompt"] = model_parameters["negative_prompt"]
+        if model_parameters.get("seed") is not None:
+            data["seed"] = model_parameters["seed"]
+        if model_parameters.get("style_preset"):
+            data["style_preset"] = model_parameters["style_preset"]
+        response = await client.post(
+            "https://api.stability.ai/v2beta/stable-image/generate/core",
+            headers={
+                "Authorization": f"Bearer {STABILITY_API_KEY}",
+                "Accept": "application/json"
+            },
+            files={"none": ''},
+            data=data,
+        )
+        if response.status_code == 200:
+            output_results = response.json()
+            output_results_file_type_strings = {
+                "output_text": "base64_image",
+                "output_files": ["NA"]
+            }
+            return output_results, output_results_file_type_strings
+        else:
+            logger.error(f"Error generating image from Stability Core API: {response.text}")
+            return None, None
+
+async def _handle_sd3_request(prompt, model_parameters, model_name):
+    async with httpx.AsyncClient(timeout=httpx.Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+        data = {
+            "prompt": prompt,
+            "output_format": model_parameters.get("output_format", "png"),
+            "model": model_name.replace("stability-", "")
+        }
+        if model_parameters.get("aspect_ratio"):
+            data["aspect_ratio"] = model_parameters["aspect_ratio"]
+        if model_parameters.get("seed") is not None:
+            data["seed"] = model_parameters["seed"]
+        if model_parameters.get("negative_prompt") and "turbo" not in model_name:
+            data["negative_prompt"] = model_parameters["negative_prompt"]
+        response = await client.post(
+            "https://api.stability.ai/v2beta/stable-image/generate/sd3",
+            headers={
+                "Authorization": f"Bearer {STABILITY_API_KEY}",
+                "Accept": "application/json"
+            },
+            files={"none": ''},
+            data=data,
+        )
+        if response.status_code == 200:
+            output_results = response.json()
+            output_results_file_type_strings = {
+                "output_text": "base64_image",
+                "output_files": ["NA"]
+            }
+            return output_results, output_results_file_type_strings
+        else:
+            logger.error(f"Error generating image from SD3 API: {response.text}")
+            return None, None
+
+async def _handle_conservative_upscale_request(input_image, prompt, model_parameters):
+    async with httpx.AsyncClient(timeout=httpx.Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+        data = {
+            "prompt": prompt,
+            "output_format": model_parameters.get("output_format", "png"),
+        }
+        if model_parameters.get("negative_prompt"):
+            data["negative_prompt"] = model_parameters["negative_prompt"]
+        if model_parameters.get("seed") is not None:
+            data["seed"] = model_parameters["seed"]
+        response = await client.post(
+            "https://api.stability.ai/v2beta/stable-image/upscale/conservative",
+            headers={
+                "Authorization": f"Bearer {STABILITY_API_KEY}",
+                "Accept": "application/json"
+            },
+            files={"image": input_image},
+            data=data,
+        )
+        if response.status_code == 200:
+            output_results = base64.b64encode(response.content).decode("utf-8")
+            output_results_file_type_strings = {
+                "output_text": "base64_image",
+                "output_files": ["NA"]
+            }
+            return output_results, output_results_file_type_strings
+        else:
+            logger.error(f"Error upscaling image with conservative method: {response.text}")
+            return None, None
+
+async def _handle_creative_upscale_request(input_image, prompt, model_parameters):
+    async with httpx.AsyncClient(timeout=httpx.Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
+        data = {
+            "prompt": prompt,
+            "output_format": model_parameters.get("output_format", "png"),
+            "creativity": model_parameters.get("creativity", 0.3),
+        }
+        if model_parameters.get("negative_prompt"):
+            data["negative_prompt"] = model_parameters["negative_prompt"]
+        if model_parameters.get("seed") is not None:
+            data["seed"] = model_parameters["seed"]
+        response = await client.post(
+            "https://api.stability.ai/v2beta/stable-image/upscale/creative",
+            headers={
+                "Authorization": f"Bearer {STABILITY_API_KEY}",
+                "Accept": "application/json"
+            },
+            files={"image": input_image},
+            data=data,
+        )
+        if response.status_code == 200:
+            generation_id = response.json().get("id")
+            while True:
+                await asyncio.sleep(10)  # Wait for 10 seconds before polling for result
+                result_response = await client.get(
+                    f"https://api.stability.ai/v2beta/stable-image/upscale/creative/result/{generation_id}",
                     headers={
-                        "authorization": f"Bearer {STABILITY_API_KEY}",
-                        "accept": "application/json"
+                        "Authorization": f"Bearer {STABILITY_API_KEY}",
+                        "Accept": "image/*"
                     },
-                    files={"none": ''},
-                    data=data,
                 )
-                if response.status_code == 200:
-                    response_json = response.content
-                    output_results = json.loads(response_json)
+                if result_response.status_code == 200:
+                    output_results = base64.b64encode(result_response.content).decode("utf-8")
                     output_results_file_type_strings = {
                         "output_text": "base64_image",
                         "output_files": ["NA"]
                     }
                     return output_results, output_results_file_type_strings
-                else:
-                    logger.error(f"Error generating image from Stability API: {response.text}")
+                elif result_response.status_code != 202:
+                    logger.error(f"Error retrieving creatively upscaled image: {result_response.text}")
                     return None, None
         else:
-            engine_id = inference_request.requested_model_canonical_string
-            api_host = "https://api.stability.ai"
-            async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 3)) as client:
-                json_data = {
-                    "text_prompts": [{"text": prompt}],
-                    "cfg_scale": model_parameters.get("cfg_scale", 7),
-                    "height": model_parameters.get("height", 512),
-                    "width": model_parameters.get("width", 512),
-                    "samples": model_parameters.get("num_samples", 1),
-                    "steps": model_parameters.get("steps", 50),
-                }
-                if model_parameters.get("style_preset"):
-                    json_data["style_preset"] = model_parameters["style_preset"]
-                response = await client.post(
-                    f"{api_host}/v1/generation/{engine_id}/text-to-image",
-                    headers={
-                        "Content-Type": "application/json",
-                        "Accept": "application/json",
-                        "Authorization": f"Bearer {STABILITY_API_KEY}"
-                    },
-                    json=json_data,
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    if "artifacts" in data and len(data["artifacts"]) > 0:
-                        for artifact in data["artifacts"]:
-                            if artifact.get("finishReason") == "SUCCESS":
-                                output_results = artifact["base64"]
-                                output_results_file_type_strings = {
-                                    "output_text": "base64_image",
-                                    "output_files": ["NA"]
-                                }
-                                return output_results, output_results_file_type_strings
-                        else:
-                            logger.warning("No successful artifact found in the Stability API response.")
-                            return None, None
-                    else:
-                        logger.error("No artifacts found in the Stability API response.")
-                        return None, None
-                else:
-                    logger.error(f"Error generating image from Stability API: {response.text}")
-                    return None, None
-    elif inference_request.model_inference_type_string == "creative_upscale" and "stability-core" in inference_request.requested_model_canonical_string:
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
-        input_image = base64.b64decode(inference_request.model_input_data_json_b64)
-        prompt = model_parameters.get("prompt", "")
-        async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 3)) as client:
-            data = {
-                "prompt": prompt,
-                "output_format": model_parameters.get("output_format", "png"),
-                "creativity": model_parameters.get("creativity", 0.3),
-            }
-            if model_parameters.get("seed") is not None:
-                data["seed"] = model_parameters["seed"]
-            if model_parameters.get("negative_prompt"):
-                data["negative_prompt"] = model_parameters["negative_prompt"]
-            response = await client.post(
-                "https://api.stability.ai/v2beta/stable-image/upscale/creative",
-                headers={
-                    "authorization": f"Bearer {STABILITY_API_KEY}",
-                    "accept": "application/json"
-                },
-                files={"image": input_image},
-                data=data,
-            )
-            if response.status_code == 200:
-                generation_id = response.json().get("id")
-                while True:
-                    await asyncio.sleep(10)  # Wait for 10 seconds before polling for result
-                    result_response = await client.get(
-                        f"https://api.stability.ai/v2beta/stable-image/upscale/creative/result/{generation_id}",
-                        headers={
-                            "authorization": f"Bearer {STABILITY_API_KEY}",
-                            "accept": "image/*"
-                        },
-                    )
-                    if result_response.status_code == 200:
-                        output_results = base64.b64encode(result_response.content).decode("utf-8")
-                        output_results_file_type_strings = {
-                            "output_text": "base64_image",
-                            "output_files": ["NA"]
-                        }
-                        return output_results, output_results_file_type_strings
-                    elif result_response.status_code != 202:
-                        logger.error(f"Error retrieving upscaled image: {result_response.text}")
-                        return None, None
-            else:
-                logger.error(f"Error initiating upscale request: {response.text}")
-                return None, None
-    else:
-        logger.warning(f"Unsupported inference type for Stability model: {inference_request.model_inference_type_string}")
-        return None, None
+            logger.error(f"Error initiating creative upscale request: {response.text}")
+            return None, None
 
 async def submit_inference_request_to_openai_api(inference_request):
     logger.info("Now accessing OpenAI API...")

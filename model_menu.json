@@ -429,7 +429,7 @@
     {
       "model_name": "openai-gpt-4o",
       "model_url": "",
-      "description": "GPT-4o is OpenAI's most advanced multimodal model that\u2019s faster and cheaper than GPT-4 Turbo with stronger vision capabilities. The model has 128K context and an October 2023 knowledge cutoff.",
+      "description": "GPT-4o is OpenAI's most advanced multimodal model that is faster and cheaper than GPT-4 Turbo with stronger vision capabilities. The model has 128K context and an October 2023 knowledge cutoff.",
       "supported_inference_type_strings": ["text_completion"],
       "input_fields": [
         {
@@ -1150,7 +1150,9 @@
       "model_name": "stability-core",
       "model_url": "",
       "description": "Stable Image Core is the best quality achievable at high speed for text-to-image generation.",
-      "supported_inference_type_strings": ["text_to_image", "creative_upscale"],
+      "supported_inference_type_strings": [
+        "text_to_image"
+      ],
       "input_fields": [
         {
           "name": "prompt",
@@ -1177,10 +1179,7 @@
           "name": "seed",
           "type": "int",
           "default": 0,
-          "inference_types_parameter_applies_to": [
-            "text_to_image",
-            "creative_upscale"
-          ],
+          "inference_types_parameter_applies_to": ["text_to_image"],
           "description": "Random seed to use for generation [Optional]"
         },
         {
@@ -1194,28 +1193,185 @@
           "name": "output_format",
           "type": "string",
           "default": "png",
-          "inference_types_parameter_applies_to": [
-            "text_to_image",
-            "creative_upscale"
-          ],
+          "inference_types_parameter_applies_to": ["text_to_image"],
           "description": "The format of the generated image (e.g., 'png', 'jpeg', 'webp') [Optional]"
         },
         {
           "name": "negative_prompt",
           "type": "string",
           "default": null,
-          "inference_types_parameter_applies_to": [
-            "text_to_image",
-            "creative_upscale"
-          ],
+          "inference_types_parameter_applies_to": ["text_to_image"],
           "description": "Negative Prompt: A blurb of text describing what you do not wish to see in the output image [Optional]"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "stability-sd3-large",
+      "model_url": "",
+      "description": "Stable Diffusion 3 Large model for high-quality image generation.",
+      "supported_inference_type_strings": [
+        "text_to_image"
+      ],
+      "input_fields": [
+        {
+          "name": "prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_image",
+          "file_type": "base64_image",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "aspect_ratio",
+          "type": "string",
+          "default": "1:1",
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "The aspect ratio of the generated image [Optional]"
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "default": 0,
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "Random seed to use for generation [Optional]"
+        },
+        {
+          "name": "output_format",
+          "type": "string",
+          "default": "png",
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "The format of the generated image (e.g., 'png', 'jpeg') [Optional]"
+        },
+        {
+          "name": "negative_prompt",
+          "type": "string",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "Negative Prompt: A blurb of text describing what you do not wish to see in the output image [Optional]"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "stability-conservative-upscale",
+      "model_url": "",
+      "description": "Conservative upscaling model that preserves image details.",
+      "supported_inference_type_strings": [
+        "conservative_upscale"
+      ],
+      "input_fields": [
+        {
+          "name": "image",
+          "file_type": "image",
+          "optional": false
+        },
+        {
+          "name": "prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "upscaled_image",
+          "file_type": "base64_image",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "output_format",
+          "type": "string",
+          "default": "png",
+          "inference_types_parameter_applies_to": ["conservative_upscale"],
+          "description": "The format of the upscaled image (e.g., 'png', 'jpeg', 'webp') [Optional]"
+        },
+        {
+          "name": "negative_prompt",
+          "type": "string",
+          "default": null,
+          "inference_types_parameter_applies_to": ["conservative_upscale"],
+          "description": "Negative Prompt: A blurb of text describing what you do not wish to see in the output image [Optional]"
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "default": 0,
+          "inference_types_parameter_applies_to": ["conservative_upscale"],
+          "description": "Random seed to use for upscaling [Optional]"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "stability-creative-upscale",
+      "model_url": "",
+      "description": "Creative upscaling model that can enhance and add details to images.",
+      "supported_inference_type_strings": [
+        "creative_upscale"
+      ],
+      "input_fields": [
+        {
+          "name": "image",
+          "file_type": "image",
+          "optional": false
+        },
+        {
+          "name": "prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "upscaled_image",
+          "file_type": "base64_image",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "output_format",
+          "type": "string",
+          "default": "png",
+          "inference_types_parameter_applies_to": ["creative_upscale"],
+          "description": "The format of the upscaled image (e.g., 'png', 'jpeg', 'webp') [Optional]"
+        },
+        {
+          "name": "negative_prompt",
+          "type": "string",
+          "default": null,
+          "inference_types_parameter_applies_to": ["creative_upscale"],
+          "description": "Negative Prompt: A blurb of text describing what you do not wish to see in the output image [Optional]"
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "default": 0,
+          "inference_types_parameter_applies_to": ["creative_upscale"],
+          "description": "Random seed to use for upscaling [Optional]"
         },
         {
           "name": "creativity",
           "type": "float",
           "default": 0.3,
+          "min": 0,
+          "max": 0.35,
           "inference_types_parameter_applies_to": ["creative_upscale"],
-          "description": "Controls how creative the upscaling process should be [Optional]"
+          "description": "Controls the creativity level of the upscaling process [Optional]"
         }
       ],
       "credit_costs": {
@@ -1223,10 +1379,12 @@
       }
     },
     {
-      "model_name": "stable-diffusion-xl-1024-v1-0",
+      "model_name": "stability-sd3-medium",
       "model_url": "",
-      "description": "Stable Diffusion XL 1.0, the standard base model for high-quality image generation from Stability AI.",
-      "supported_inference_type_strings": ["text_to_image"],
+      "description": "Stable Diffusion 3 Medium model for balanced performance and quality in image generation.",
+      "supported_inference_type_strings": [
+        "text_to_image"
+      ],
       "input_fields": [
         {
           "name": "prompt",
@@ -1243,53 +1401,32 @@
       ],
       "model_parameters": [
         {
-          "name": "height",
-          "type": "int",
-          "default": 1024,
+          "name": "aspect_ratio",
+          "type": "string",
+          "default": "1:1",
           "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "The height of the generated image in pixels [Optional]"
-        },
-        {
-          "name": "width",
-          "type": "int",
-          "default": 1024,
-          "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "The width of the generated image in pixels [Optional]"
-        },
-        {
-          "name": "cfg_scale",
-          "type": "float",
-          "default": 7,
-          "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "How strictly the diffusion process adheres to the prompt text (higher values keep your image closer to your prompt) [Optional]"
-        },
-        {
-          "name": "samples",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "Number of images to generate [Optional]"
-        },
-        {
-          "name": "steps",
-          "type": "int",
-          "default": 30,
-          "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "Number of diffusion steps to run [Optional]"
+          "description": "The aspect ratio of the generated image [Optional]"
         },
         {
           "name": "seed",
           "type": "int",
           "default": 0,
           "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "Random seed. Use `0` for a random seed [Optional]"
+          "description": "Random seed to use for generation [Optional]"
         },
         {
-          "name": "style_preset",
+          "name": "output_format",
+          "type": "string",
+          "default": "png",
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "The format of the generated image (e.g., 'png', 'jpeg') [Optional]"
+        },
+        {
+          "name": "negative_prompt",
           "type": "string",
           "default": null,
           "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "Style Preset: Pass in a style preset to guide the image model towards a particular style [Optional]"
+          "description": "Negative Prompt: A blurb of text describing what you do not wish to see in the output image [Optional]"
         }
       ],
       "credit_costs": {
@@ -1297,10 +1434,12 @@
       }
     },
     {
-      "model_name": "stable-diffusion-v1-6",
+      "model_name": "stability-sd3-large-turbo",
       "model_url": "",
-      "description": "Stable Diffusion 1.6, a flexible-resolution base model for image generation from Stability AI.",
-      "supported_inference_type_strings": ["text_to_image"],
+      "description": "Stable Diffusion 3 Large Turbo model for faster inference with high-quality results.",
+      "supported_inference_type_strings": [
+        "text_to_image"
+      ],
       "input_fields": [
         {
           "name": "prompt",
@@ -1317,53 +1456,25 @@
       ],
       "model_parameters": [
         {
-          "name": "height",
-          "type": "int",
-          "default": 512,
+          "name": "aspect_ratio",
+          "type": "string",
+          "default": "1:1",
           "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "The height of the generated image in pixels [Optional]"
-        },
-        {
-          "name": "width",
-          "type": "int",
-          "default": 512,
-          "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "The width of the generated image in pixels [Optional]"
-        },
-        {
-          "name": "cfg_scale",
-          "type": "float",
-          "default": 7,
-          "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "How strictly the diffusion process adheres to the prompt text (higher values keep your image closer to your prompt) [Optional]"
-        },
-        {
-          "name": "samples",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "Number of images to generate [Optional]"
-        },
-        {
-          "name": "steps",
-          "type": "int",
-          "default": 30,
-          "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "Number of diffusion steps to run [Optional]"
+          "description": "The aspect ratio of the generated image [Optional]"
         },
         {
           "name": "seed",
           "type": "int",
           "default": 0,
           "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "Random seed. Use `0` for a random seed [Optional]"
+          "description": "Random seed to use for generation [Optional]"
         },
         {
-          "name": "style_preset",
+          "name": "output_format",
           "type": "string",
-          "default": null,
+          "default": "png",
           "inference_types_parameter_applies_to": ["text_to_image"],
-          "description": "Style Preset: Pass in a style preset to guide the image model towards a particular style [Optional]"
+          "description": "The format of the generated image (e.g., 'png', 'jpeg') [Optional]"
         }
       ],
       "credit_costs": {
