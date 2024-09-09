@@ -268,9 +268,7 @@
       "model_name": "swiss_army_llama-llava-llama-3-8b-v1_1-int4",
       "model_url": "https://huggingface.co/xtuner/llava-llama-3-8b-v1_1-gguf/resolve/main/llava-llama-3-8b-v1_1-int4.gguf",
       "description": "The LLaVA-LLaMA-3-8B-v1.1 model is a powerful language model developed by XTuner; it allows you to ask questions about images and get answers in a conversational manner.",
-      "supported_inference_type_strings": [
-        "ask_question_about_an_image"
-      ],
+      "supported_inference_type_strings": ["ask_question_about_an_image"],
       "input_fields": [
         {
           "name": "image_data",
@@ -427,14 +425,12 @@
           "memory_cost": 0.4
         }
       }
-    },    
+    },
     {
       "model_name": "openai-gpt-4o",
       "model_url": "",
       "description": "GPT-4o is OpenAI's most advanced multimodal model that\u2019s faster and cheaper than GPT-4 Turbo with stronger vision capabilities. The model has 128K context and an October 2023 knowledge cutoff.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
+      "supported_inference_type_strings": ["text_completion"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -480,9 +476,7 @@
       "model_name": "openai-gpt-4o-vision",
       "model_url": "",
       "description": "GPT-4o is OpenAI's most advanced multimodal model that\u2019s faster and cheaper than GPT-4 Turbo with stronger vision capabilities. The model has 128K context and an October 2023 knowledge cutoff.",
-      "supported_inference_type_strings": [
-        "ask_question_about_an_image"
-      ],
+      "supported_inference_type_strings": ["ask_question_about_an_image"],
       "input_fields": [
         {
           "name": "image_data",
@@ -533,9 +527,7 @@
       "model_name": "openai-gpt-4-turbo",
       "model_url": "",
       "description": "GPT-4 Turbo is offered at 128K context with an April 2023 knowledge cutoff and basic support for vision.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
+      "supported_inference_type_strings": ["text_completion"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -578,108 +570,10 @@
       }
     },
     {
-      "model_name": "openai-gpt-3.5-turbo-0125",
-      "model_url": "",
-      "description": "GPT-3.5 Turbo is our fast and inexpensive model for simpler tasks. gpt-3.5-turbo-0125 is the flagship model of this family, supports a 16K context window and is optimized for dialog.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
-        },
-        {
-          "name": "number_of_completions_to_generate [Optional]",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "openai-gpt-3.5-turbo-instruct",
-      "model_url": "",
-      "description": "GPT-3.5 Turbo is OpenAI's fast and inexpensive model for simpler tasks. gpt-3.5-turbo-instruct is an Instruct model and only supports a 4K context window.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
-        },
-        {
-          "name": "number_of_completions_to_generate [Optional]",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
       "model_name": "openai-text-embedding-ada-002",
       "model_url": "",
       "description": "OpenAI's text embedding model. Provides high-quality embeddings for semantic search and clustering tasks.",
-      "supported_inference_type_strings": [
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["embedding"],
       "input_fields": [
         {
           "name": "input_text",
@@ -703,10 +597,7 @@
       "model_name": "claude3-haiku",
       "model_url": "",
       "description": "The Claude3 Haiku model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -753,10 +644,7 @@
       "model_name": "claude3-opus",
       "model_url": "",
       "description": "The Claude3 Opus model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -802,59 +690,7 @@
       "model_name": "claude3.5-sonnet",
       "model_url": "",
       "description": "The Claude3.5 Sonnet model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
-        },
-        {
-          "name": "number_of_completions_to_generate [Optional]",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "groq-llama-3.1-405b-reasoning",
-      "model_url": "",
-      "description": "LLaMA3.1 405b reasoning is a powerful language model developed by Meta with a context window of 131,072 tokens.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -900,10 +736,7 @@
       "model_name": "groq-llama-3.1-70b-versatile",
       "model_url": "",
       "description": "LLaMA3.1 70b versatile is a powerful language model developed by Meta with a context window of 131,072 tokens.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -949,10 +782,7 @@
       "model_name": "groq-llama-3.1-8b-instant",
       "model_url": "",
       "description": "LLaMA3.1 8b instant is a powerful language model developed by Meta with a context window of 131,072 tokens.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -998,10 +828,7 @@
       "model_name": "groq-llama3-70b-8192",
       "model_url": "",
       "description": "LLaMA3 70b is a powerful language model developed by Meta with a context window of 8,192 tokens.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -1047,10 +874,7 @@
       "model_name": "groq-llama3-8b-8192",
       "model_url": "",
       "description": "LLaMA3 8b is a powerful but compact language model developed by Meta with a context window of 8,192 tokens.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -1096,10 +920,7 @@
       "model_name": "groq-mixtral-8x7b-32768",
       "model_url": "",
       "description": "Mixtral 8x7b is a powerful language model developed by Mistral with a context window of 32,768 tokens.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -1145,10 +966,7 @@
       "model_name": "groq-gemma2-9b-it",
       "model_url": "",
       "description": "Gemma 2 9b is an LLM developed by Google with a context window of 8,192 tokens.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -1189,15 +1007,12 @@
       "credit_costs": {
         "api_based_pricing": 1
       }
-    },    
+    },
     {
       "model_name": "mistralapi-mistral-small-latest",
       "model_url": "",
       "description": "Mistral small is a powerful language model developed by Mistral AI.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -1243,10 +1058,7 @@
       "model_name": "mistralapi-mistral-medium-latest",
       "model_url": "",
       "description": "Mistral medium is a powerful language model developed by Mistral AI.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -1292,10 +1104,7 @@
       "model_name": "mistralapi-mistral-large-latest",
       "model_url": "",
       "description": "Mistral large is a powerful language model developed by Mistral AI.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding"
-      ],
+      "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -1341,10 +1150,7 @@
       "model_name": "stability-core",
       "model_url": "",
       "description": "Stable Image Core is the best quality achievable at high speed for text-to-image generation.",
-      "supported_inference_type_strings": [
-        "text_to_image",
-        "creative_upscale"
-      ],
+      "supported_inference_type_strings": ["text_to_image", "creative_upscale"],
       "input_fields": [
         {
           "name": "prompt",
@@ -1364,36 +1170,52 @@
           "name": "aspect_ratio",
           "type": "string",
           "default": "1:1",
-          "inference_types_parameter_applies_to": "['text_to_image']",
+          "inference_types_parameter_applies_to": ["text_to_image"],
           "description": "The aspect ratio of the generated image [Optional]"
         },
         {
           "name": "seed",
           "type": "int",
           "default": 0,
-          "inference_types_parameter_applies_to": "['text_to_image']",
+          "inference_types_parameter_applies_to": [
+            "text_to_image",
+            "creative_upscale"
+          ],
           "description": "Random seed to use for generation [Optional]"
         },
         {
           "name": "style_preset",
           "type": "string",
           "default": null,
-          "inference_types_parameter_applies_to": "['text_to_image']",
+          "inference_types_parameter_applies_to": ["text_to_image"],
           "description": "Style Preset: Guides the image model towards a particular style (e.g., '3d-model', 'analog-film', 'anime', etc.) [Optional]"
         },
         {
           "name": "output_format",
           "type": "string",
-          "default": "jpeg",
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "The format of the generated image (e.g., 'png', 'jpeg', 'webp', etc.) [Optional]"
+          "default": "png",
+          "inference_types_parameter_applies_to": [
+            "text_to_image",
+            "creative_upscale"
+          ],
+          "description": "The format of the generated image (e.g., 'png', 'jpeg', 'webp') [Optional]"
         },
         {
           "name": "negative_prompt",
           "type": "string",
           "default": null,
-          "inference_types_parameter_applies_to": "['text_to_image']",
+          "inference_types_parameter_applies_to": [
+            "text_to_image",
+            "creative_upscale"
+          ],
           "description": "Negative Prompt: A blurb of text describing what you do not wish to see in the output image [Optional]"
+        },
+        {
+          "name": "creativity",
+          "type": "float",
+          "default": 0.3,
+          "inference_types_parameter_applies_to": ["creative_upscale"],
+          "description": "Controls how creative the upscaling process should be [Optional]"
         }
       ],
       "credit_costs": {
@@ -1401,12 +1223,84 @@
       }
     },
     {
-      "model_name": "stability-sdxl-1.0",
+      "model_name": "stable-diffusion-xl-1024-v1-0",
       "model_url": "",
-      "description": "The standard base model for image generation from Stability AI.",
-      "supported_inference_type_strings": [
-        "text_to_image"
+      "description": "Stable Diffusion XL 1.0, the standard base model for high-quality image generation from Stability AI.",
+      "supported_inference_type_strings": ["text_to_image"],
+      "input_fields": [
+        {
+          "name": "prompt",
+          "file_type": "text",
+          "optional": false
+        }
       ],
+      "output_fields": [
+        {
+          "name": "generated_image",
+          "file_type": "base64_image",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "height",
+          "type": "int",
+          "default": 1024,
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "The height of the generated image in pixels [Optional]"
+        },
+        {
+          "name": "width",
+          "type": "int",
+          "default": 1024,
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "The width of the generated image in pixels [Optional]"
+        },
+        {
+          "name": "cfg_scale",
+          "type": "float",
+          "default": 7,
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "How strictly the diffusion process adheres to the prompt text (higher values keep your image closer to your prompt) [Optional]"
+        },
+        {
+          "name": "samples",
+          "type": "int",
+          "default": 1,
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "Number of images to generate [Optional]"
+        },
+        {
+          "name": "steps",
+          "type": "int",
+          "default": 30,
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "Number of diffusion steps to run [Optional]"
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "default": 0,
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "Random seed. Use `0` for a random seed [Optional]"
+        },
+        {
+          "name": "style_preset",
+          "type": "string",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "Style Preset: Pass in a style preset to guide the image model towards a particular style [Optional]"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "stable-diffusion-v1-6",
+      "model_url": "",
+      "description": "Stable Diffusion 1.6, a flexible-resolution base model for image generation from Stability AI.",
+      "supported_inference_type_strings": ["text_to_image"],
       "input_fields": [
         {
           "name": "prompt",
@@ -1426,153 +1320,50 @@
           "name": "height",
           "type": "int",
           "default": 512,
-          "inference_types_parameter_applies_to": "['text_to_image']",
+          "inference_types_parameter_applies_to": ["text_to_image"],
           "description": "The height of the generated image in pixels [Optional]"
         },
         {
           "name": "width",
           "type": "int",
           "default": 512,
-          "inference_types_parameter_applies_to": "['text_to_image']",
+          "inference_types_parameter_applies_to": ["text_to_image"],
           "description": "The width of the generated image in pixels [Optional]"
         },
         {
           "name": "cfg_scale",
           "type": "float",
           "default": 7,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "CFG scale factor [Optional]"
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "How strictly the diffusion process adheres to the prompt text (higher values keep your image closer to your prompt) [Optional]"
         },
         {
-          "name": "sampler",
-          "type": "string",
-          "default": "k_euler",
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc. Default is 'k_euler') [Optional]"
+          "name": "samples",
+          "type": "int",
+          "default": 1,
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "Number of images to generate [Optional]"
         },
         {
           "name": "steps",
           "type": "int",
-          "default": 50,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Number of steps for generation [Optional]"
+          "default": 30,
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "Number of diffusion steps to run [Optional]"
         },
         {
           "name": "seed",
           "type": "int",
           "default": 0,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Random seed to use for generation [Optional]"
-        },
-        {
-          "name": "num_samples",
-          "type": "int",
-          "default": 1,
-          "description": "Number of samples to generate [Optional]"
-        },
-        {
-          "name": "negative_prompt",
-          "type": "string",
-          "default": "",
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Negative Prompt: A blurb of text describing what you do not wish to see in the output image [Optional]"
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "Random seed. Use `0` for a random seed [Optional]"
         },
         {
           "name": "style_preset",
           "type": "string",
           "default": null,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Style Preset: Guides the image model towards a particular style (e.g., '3d-model', 'analog-film', 'anime', etc.) [Optional]"
-        }
-      ],
-      "credit_costs": {
-        "api_based_pricing": 1
-      }
-    },
-    {
-      "model_name": "stability-sd-1.6",
-      "model_url": "",
-      "description": "Flexible-resolution base model for image generation from Stability AI.",
-      "supported_inference_type_strings": [
-        "text_to_image"
-      ],
-      "input_fields": [
-        {
-          "name": "prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_image",
-          "file_type": "base64_image",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "height",
-          "type": "int",
-          "default": 512,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "The height of the generated image in pixels [Optional]"
-        },
-        {
-          "name": "width",
-          "type": "int",
-          "default": 512,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "The width of the generated image in pixels [Optional]"
-        },
-        {
-          "name": "cfg_scale",
-          "type": "float",
-          "default": 7,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "CFG scale factor [Optional]"
-        },
-        {
-          "name": "sampler",
-          "type": "string",
-          "default": null,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Sampler to use for generation (e.g., ddim, plms, k_euler, etc.) [Optional]"
-        },
-        {
-          "name": "steps",
-          "type": "int",
-          "default": 50,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Number of steps for generation [Optional]"
-        },
-        {
-          "name": "seed",
-          "type": "int",
-          "default": 0,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Random seed to use for generation [Optional]"
-        },
-        {
-          "name": "num_samples",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Number of samples to generate [Optional]"
-        },
-        {
-          "name": "negative_prompt",
-          "type": "string",
-          "default": null,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "A blurb of text describing what you do not wish to see in the output image"
-        },
-        {
-          "name": "style_preset",
-          "type": "string",
-          "default": null,
-          "inference_types_parameter_applies_to": "['text_to_image']",
-          "description": "Negative Prompt: Guides the image model towards a particular style (e.g., '3d-model', 'analog-film', 'anime', etc.) [Optional]"
+          "inference_types_parameter_applies_to": ["text_to_image"],
+          "description": "Style Preset: Pass in a style preset to guide the image model towards a particular style [Optional]"
         }
       ],
       "credit_costs": {
@@ -1583,9 +1374,7 @@
       "model_name": "openrouter/auto",
       "model_url": "",
       "description": "OpenRouter's auto-routing model that automatically selects the best available model for the given task.",
-      "supported_inference_type_strings": [
-        "text_completion"
-      ],
+      "supported_inference_type_strings": ["text_completion"],
       "input_fields": [
         {
           "name": "input_prompt",
