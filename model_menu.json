@@ -1,6 +1,94 @@
 {
   "models": [
     {
+      "model_name": "swiss_army_llama-Llama-3.1-8B-Lexi-Uncensored_V2_Q5",
+      "model_url": "https://huggingface.co/Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2-GGUF/blob/main/Llama-3.1-8B-Lexi-Uncensored_V2_Q5.gguf",
+      "description": "The Llama-3.1-8B-Lexi-Uncensored V2, based on the powerful Meta Llama-3.1-8B model, is designed for uncensored text generation with a focus on creative and innovative content.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding",
+        "embedding_document",
+        "embedding_audio"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The maximum number of tokens to generate [Optional]"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The temperature for sampling [Optional]"
+        },
+        {
+          "name": "number_of_completions_to_generate [Optional]",
+          "type": "int",
+          "default": 1,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The number of completions to generate"
+        },
+        {
+          "name": "grammar_file_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "Grammar File String: The grammar file used to restrict text generation [Optional] (Default is to not use any grammar file. Examples: `json`, `list`)"
+        },
+        {
+          "name": "corpus_identifier_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
+          "description": "Corpus Identifier String: Identifies the subset of the stored embeddings to use in the semantic search [Optional] (Default is to use just the embeddings from the uploaded document or audio file transcript)."
+        }
+      ],
+      "credit_costs": {
+        "text_completion": {
+          "input_tokens": 1.6,
+          "output_tokens": 1.2,
+          "compute_cost": 0.9,
+          "memory_cost": 0.8
+        },
+        "embedding": {
+          "input_tokens": 0.6,
+          "compute_cost": 0.7,
+          "memory_cost": 0.5
+        },
+        "embedding_document": {
+          "average_tokens_per_sentence": 0.15,
+          "total_sentences": 0.08,
+          "query_string_included": 0.35,
+          "compute_cost": 1.0,
+          "memory_cost": 0.7
+        },
+        "embedding_audio": {
+          "audio_file_length_in_seconds": 0.03,
+          "query_string_included": 0.35,
+          "compute_cost": 1.1,
+          "memory_cost": 0.9
+        }
+      }
+    },
+    {
       "model_name": "swiss_army_llama-Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M",
       "model_url": "https://huggingface.co/NousResearch/Hermes-2-Theta-Llama-3-8B-GGUF/resolve/main/Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M.gguf",
       "description": "Hermes 2 Pro is an upgraded, retrained version of Nous Hermes 2, consisting of an updated and cleaned version of the OpenHermes 2.5 Dataset, as well as a newly introduced Function Calling and JSON Mode dataset developed in-house. This version excels at Function Calling, JSON Structured Outputs, and has improved on several other metrics, scoring 90% on function calling evaluation and 84% on structured JSON Output evaluation.",
@@ -173,94 +261,6 @@
           "query_string_included": 0.3,
           "compute_cost": 1.0,
           "memory_cost": 0.8
-        }
-      }
-    },
-    {
-      "model_name": "swiss_army_llama-Llama-3.1-8B-Lexi-Uncensored_Q5_fixedrope",
-      "model_url": "https://huggingface.co/Orenguteng/Llama-3.1-8B-Lexi-Uncensored-GGUF/resolve/main/Llama-3.1-8B-Lexi-Uncensored_Q5_fixedrope.gguf",
-      "description": "The Llama-3.1-8B-Lexi-Uncensored, based on the powerful Meta Llama-3.1-8B model, is designed for uncensored text generation with a focus on creative and innovative content.",
-      "supported_inference_type_strings": [
-        "text_completion",
-        "embedding",
-        "embedding_document",
-        "embedding_audio"
-      ],
-      "input_fields": [
-        {
-          "name": "input_prompt",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "output_fields": [
-        {
-          "name": "generated_text",
-          "file_type": "text",
-          "optional": false
-        }
-      ],
-      "model_parameters": [
-        {
-          "name": "number_of_tokens_to_generate",
-          "type": "int",
-          "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
-        },
-        {
-          "name": "number_of_completions_to_generate [Optional]",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
-        },
-        {
-          "name": "grammar_file_string",
-          "type": "string",
-          "default": "",
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "Grammar File String: The grammar file used to restrict text generation [Optional] (Default is to not use any grammar file. Examples: `json`, `list`)"
-        },
-        {
-          "name": "corpus_identifier_string",
-          "type": "string",
-          "default": "",
-          "inference_types_parameter_applies_to": "['embedding_document', 'embedding_audio']",
-          "description": "Corpus Identifier String: Identifies the subset of the stored embeddings to use in the semantic search [Optional] (Default is to use just the embeddings from the uploaded document or audio file transcript)."
-        }
-      ],
-      "credit_costs": {
-        "text_completion": {
-          "input_tokens": 1.6,
-          "output_tokens": 1.2,
-          "compute_cost": 0.9,
-          "memory_cost": 0.8
-        },
-        "embedding": {
-          "input_tokens": 0.6,
-          "compute_cost": 0.7,
-          "memory_cost": 0.5
-        },
-        "embedding_document": {
-          "average_tokens_per_sentence": 0.15,
-          "total_sentences": 0.08,
-          "query_string_included": 0.35,
-          "compute_cost": 1.0,
-          "memory_cost": 0.7
-        },
-        "embedding_audio": {
-          "audio_file_length_in_seconds": 0.03,
-          "query_string_included": 0.35,
-          "compute_cost": 1.1,
-          "memory_cost": 0.9
         }
       }
     },
