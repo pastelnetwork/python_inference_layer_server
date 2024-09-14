@@ -1,33 +1,5 @@
-Note that this project is NOT focused on decentralized art/collectibles; it represents a fundamental pivot/reorientation for the Pastel Network project towards decentralized AI inference across model types and modalities, including LLMs, image generation from diffusion models, asking questions about images, document embedding and semantic search, and more. The key benefits are: * True decentralization: doesn't require users to provide an email address, google account login, credit card, address, api key, etc. * Can be used pseudonymously and paid for using crypto-currency (pastel's native PSL token). * Full access to completely uncensored models, such as Llama 3.1 8b that has had all censorship removes, so that it won't refuse any requests. * Can be integrated via our APIs with other decentralized blockchain projects to provide performant and cost-effective access to a wide array of useful AI models to power intelligent services, such as dynamic decentralized/algorithmic content moderation, classification/categorization/tagging, summarization and other metadata generation, etc-- all without those other projects compromising on their commitments to true decentralization (hence why these projects can't easily use something like the OpenAI or Anthropic APIs, since those require API keys and are completely decentralized).
+# Pastel Network Inference Layer Frequently Asked Questions
 
----
-
-The sources provided offer a detailed overview of the Pastel Network's transition to decentralized AI inference, aligning with the key benefits listed in your query. Here’s how the sources elaborate on this transition and its advantages:
-
-*   **True Decentralization**: The sources emphasize the decentralized nature of the Pastel Inference Layer, achieved through a system of Supernodes and the absence of centralized API keys for specific functionalities.
-
-    *   Instead of relying on centralized entities like OpenAI or Anthropic, which require API keys, the Pastel Network utilizes a network of Supernodes. These Supernodes collaboratively process inference requests, ensuring that no single entity controls access or can impose censorship.
-    *   The system is designed to be robust and fault-tolerant. If one Supernode fails or acts maliciously, others can step in to fulfill user requests, preventing service disruptions and maintaining network integrity.
-    *   Users are not required to provide personal information like email addresses, Google accounts, or credit card details. Interaction with the network is primarily based on PastelIDs, allowing for pseudonymous participation.
-*   **Cryptocurrency-Based Payments (PSL)**: The use of Pastel's native PSL token facilitates secure and pseudonymous payments for AI services.
-
-    *   Users can purchase "credit pack tickets" using PSL. These tickets act as pre-paid bundles for future inference requests. This approach simplifies payment processing and reduces reliance on traditional financial systems.
-    *   The cost of inference is measured in "credits," decoupled from the fluctuating market value of PSL. This helps maintain stable and predictable pricing for AI services even amidst market volatility.
-    *   A unique aspect of the credit pack system is the burning of PSL tokens. When users purchase credit packs, the PSL used is sent to a burn address, effectively removing it from circulation. While this means Supernodes don’t directly profit from these transactions, they benefit indirectly as PSL holders due to the deflationary mechanism. This mechanism helps maintain the economic viability of the Pastel Inference system and benefits all PSL holders, encouraging network participation and support.
-*   **Uncensored Models**: The Pastel Network emphasizes its capacity to host and provide access to completely uncensored AI models, addressing the growing concern of censorship in centralized AI platforms.
-
-    *   The platform supports "locally hosted" Large Language Models (LLMs) using Swiss Army Llama. These models can be run directly on the Supernode's hardware (CPU or, optionally, on a remote GPU-enabled instance rented through services like Vast.ai), bypassing the need for external APIs and their associated content restrictions.
-    *   The sources highlight that uncensored models can handle requests that might be rejected by platforms like OpenAI or Claude3, ensuring users have access to a wider range of information and functionalities.
-    *   To further mitigate censorship risks, the Pastel Inference Layer incorporates a mechanism to check if an inference request is likely to be flagged or rejected by API-based services. If a request is deemed potentially problematic, the system can be configured to route it to a locally hosted uncensored model instead, ensuring the request is processed without restrictions.
-
-*   **Integration with Other Decentralized Projects**: The Pastel Network is designed for seamless integration with other decentralized blockchain projects.
-
-    *   Its APIs allow these projects to incorporate diverse AI models and functionalities, enhancing their capabilities without compromising their decentralized principles.
-    *   Potential use cases mentioned include dynamic content moderation, content classification and tagging, summarization, and metadata generation—all crucial for decentralized platforms aiming to provide robust and user-friendly experiences.
-
-In essence, the sources paint a picture of the Pastel Network evolving beyond its initial focus on art and collectibles to become a platform for decentralized AI inference. The network's features are designed to address key concerns regarding censorship, privacy, security, and control in the rapidly evolving field of artificial intelligence, positioning it as a significant player in the decentralized AI landscape.
-
----
 Q: What are the primary components and functions of the Pastel Inference Layer server, and how do they work together to process inference requests?
 
 
