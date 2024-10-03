@@ -200,8 +200,8 @@ CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_
 SWISS_ARMY_LLAMA_PORT = config.get("SWISS_ARMY_LLAMA_PORT", default=8089, cast=int)
 USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE = config.get("USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE", default=0, cast=int)
 REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH", default="/home/ubuntu/vastai_privkey")
-REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES = [ip.strip() for ip in config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES", default="ssh4.vast.ai").split(",")]
-REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS = [int(port.strip()) for port in config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS", default="29898").split(",")]
+REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES", "ssh4.vast.ai").split(",")
+REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS = [int(port.strip()) for port in config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS", "29898").split(",")]
 REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT", default=8087, cast=int)
 REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT", default=8089, cast=int)
 CREDIT_COST_MULTIPLIER_FACTOR = config.get("CREDIT_COST_MULTIPLIER_FACTOR", default=0.1, cast=float)
@@ -473,8 +473,6 @@ def get_remote_swiss_army_llama_instances() -> List[Tuple[str, int]]:
 async def establish_ssh_tunnel():
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
         instances = get_remote_swiss_army_llama_instances()
-        random.shuffle(instances)
-        
         for ip_address, port in instances:
             kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
             key_path = REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH
@@ -503,12 +501,11 @@ async def establish_ssh_tunnel():
                     if not tunnel.is_active:
                         logger.warning(f"SSH tunnel to {ip_address}:{port} is no longer active. Reconnecting...")
                         break
-            except BaseSSHTunnelForwarderError as e:
-                logger.error(f"SSH tunnel error for {ip_address}:{port}: {e}")
             except Exception as e:
                 logger.error(f"Error establishing SSH tunnel to {ip_address}:{port}: {e}")
+                continue
             
-            logger.info(f"Attempting to connect to next available Swiss Army Llama instance...")
+            return  # Successfully established tunnel
         
         logger.error("Failed to establish SSH tunnel to any remote Swiss Army Llama instance")
     else:
@@ -4895,18 +4892,8 @@ def is_swiss_army_llama_responding(local=True):
         port = SWISS_ARMY_LLAMA_PORT
         url = f"http://localhost:{port}/get_list_of_available_model_names/"
     else:
-        instances = get_remote_swiss_army_llama_instances()
-        random.shuffle(instances)
-        for ip_address, _ in instances:
-            port = REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
-            url = f"http://{ip_address}:{port}/get_list_of_available_model_names/"
-            try:
-                params = {'token': SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-                response = httpx.get(url, params=params, timeout=5)
-                return response.status_code == 200
-            except Exception as e:
-                logger.error(f"Error checking Swiss Army Llama at {ip_address}:{port}: {e}")
-        return False
+        port = REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
+        url = f"http://localhost:{port}/get_list_of_available_model_names/"
     
     try:
         params = {'token': SWISS_ARMY_LLAMA_SECURITY_TOKEN}
