@@ -465,26 +465,27 @@ def kill_open_ssh_tunnels(local_port):
         logger.error("Error while killing SSH tunnels: {}".format(e))
         
 def get_remote_swiss_army_llama_instances() -> List[Tuple[str, int]]:
-    ip_addresses = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES", "").split(",")
-    ports = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS", "").split(",")
-    if len(ip_addresses) != len(ports):
+    if len(REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES) != len(REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS):
         logger.error("Mismatch between number of IP addresses and ports for remote Swiss Army Llama instances")
         return []
-    return list(zip(ip_addresses, [int(port) for port in ports]))
+    return list(zip(REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES, REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS))
 
 async def establish_ssh_tunnel():
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
         instances = get_remote_swiss_army_llama_instances()
         random.shuffle(instances)
+        
         for ip_address, port in instances:
             kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
             key_path = REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH
             if not os.access(key_path, os.R_OK):
                 raise PermissionError(f"SSH key file at {key_path} is not readable.")
+            
             current_permissions = os.stat(key_path).st_mode & 0o777
             if current_permissions != 0o600:
                 os.chmod(key_path, 0o600)
                 logger.info("Permissions for SSH key file set to 600.")
+            
             try:
                 tunnel = SSHTunnelForwarder(
                     (ip_address, port),
@@ -496,6 +497,7 @@ async def establish_ssh_tunnel():
                 )
                 tunnel.start()
                 logger.info(f"SSH tunnel established to {ip_address}:{port}: {tunnel.local_bind_address}")
+                
                 while True:
                     await asyncio.sleep(10)
                     if not tunnel.is_active:
@@ -505,7 +507,9 @@ async def establish_ssh_tunnel():
                 logger.error(f"SSH tunnel error for {ip_address}:{port}: {e}")
             except Exception as e:
                 logger.error(f"Error establishing SSH tunnel to {ip_address}:{port}: {e}")
+            
             logger.info(f"Attempting to connect to next available Swiss Army Llama instance...")
+        
         logger.error("Failed to establish SSH tunnel to any remote Swiss Army Llama instance")
     else:
         logger.info("Remote Swiss Army Llama is not enabled. Using local instance.")
@@ -6079,7 +6083,7 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
         logger.error(f"Neither the local (port {SWISS_ARMY_LLAMA_PORT}) nor any remote Swiss Army Llama instance is responding!")
         return None, None
     
-    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 12)) as client:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 12)) as client:
         if inference_request.model_inference_type_string == "text_completion":
             return await handle_swiss_army_llama_text_completion(client, inference_request, model_parameters, port, is_fallback)
         elif inference_request.model_inference_type_string == "embedding_document":
