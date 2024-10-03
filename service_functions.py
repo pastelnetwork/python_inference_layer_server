@@ -200,8 +200,8 @@ CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_
 SWISS_ARMY_LLAMA_PORT = config.get("SWISS_ARMY_LLAMA_PORT", default=8089, cast=int)
 USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE = config.get("USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE", default=0, cast=int)
 REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH", default="/home/ubuntu/vastai_privkey")
-REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESS = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESS", default="50.20.127.188")
-REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORT", default=40396, cast=int)
+REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES = [ip.strip() for ip in config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES", default="ssh4.vast.ai").split(",")]
+REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS = [int(port.strip()) for port in config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS", default="29898").split(",")]
 REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT", default=8087, cast=int)
 REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT", default=8089, cast=int)
 CREDIT_COST_MULTIPLIER_FACTOR = config.get("CREDIT_COST_MULTIPLIER_FACTOR", default=0.1, cast=float)
@@ -464,33 +464,51 @@ def kill_open_ssh_tunnels(local_port):
     except Exception as e:
         logger.error("Error while killing SSH tunnels: {}".format(e))
         
-def establish_ssh_tunnel():
+def get_remote_swiss_army_llama_instances() -> List[Tuple[str, int]]:
+    ip_addresses = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES", "").split(",")
+    ports = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS", "").split(",")
+    if len(ip_addresses) != len(ports):
+        logger.error("Mismatch between number of IP addresses and ports for remote Swiss Army Llama instances")
+        return []
+    return list(zip(ip_addresses, [int(port) for port in ports]))
+
+async def establish_ssh_tunnel():
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
-        kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
-        key_path = REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH
-        if not os.access(key_path, os.R_OK):
-            raise PermissionError("SSH key file at {} is not readable.".format(key_path))
-        current_permissions = os.stat(key_path).st_mode & 0o777
-        if current_permissions != 0o600:
-            os.chmod(key_path, 0o600)
-            logger.info("Permissions for SSH key file set to 600.")
-        try:
-            tunnel = SSHTunnelForwarder(
-                (REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESS, REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORT),
-                ssh_username="root",
-                ssh_pkey=key_path,
-                remote_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT),
-                local_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT),
-                host_pkey_directories=[]  # Disable host key checking
-            )
-            tunnel.start()
-            logger.info("SSH tunnel established: {}".format(tunnel.local_bind_address))
-            while True:
-                time.sleep(10)
-        except BaseSSHTunnelForwarderError as e:
-            logger.error("SSH tunnel error: {}".format(e))
-        except Exception as e:
-            logger.error("Error establishing SSH tunnel: {}".format(e))
+        instances = get_remote_swiss_army_llama_instances()
+        random.shuffle(instances)
+        for ip_address, port in instances:
+            kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
+            key_path = REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH
+            if not os.access(key_path, os.R_OK):
+                raise PermissionError(f"SSH key file at {key_path} is not readable.")
+            current_permissions = os.stat(key_path).st_mode & 0o777
+            if current_permissions != 0o600:
+                os.chmod(key_path, 0o600)
+                logger.info("Permissions for SSH key file set to 600.")
+            try:
+                tunnel = SSHTunnelForwarder(
+                    (ip_address, port),
+                    ssh_username="root",
+                    ssh_pkey=key_path,
+                    remote_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT),
+                    local_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT),
+                    host_pkey_directories=[]  # Disable host key checking
+                )
+                tunnel.start()
+                logger.info(f"SSH tunnel established to {ip_address}:{port}: {tunnel.local_bind_address}")
+                while True:
+                    await asyncio.sleep(10)
+                    if not tunnel.is_active:
+                        logger.warning(f"SSH tunnel to {ip_address}:{port} is no longer active. Reconnecting...")
+                        break
+            except BaseSSHTunnelForwarderError as e:
+                logger.error(f"SSH tunnel error for {ip_address}:{port}: {e}")
+            except Exception as e:
+                logger.error(f"Error establishing SSH tunnel to {ip_address}:{port}: {e}")
+            logger.info(f"Attempting to connect to next available Swiss Army Llama instance...")
+        logger.error("Failed to establish SSH tunnel to any remote Swiss Army Llama instance")
+    else:
+        logger.info("Remote Swiss Army Llama is not enabled. Using local instance.")
                 
 def get_audio_length(audio_input) -> float:
     if isinstance(audio_input, bytes):
@@ -4869,14 +4887,29 @@ def validate_pastel_txid_string(input_string: str):
     return re.match(r'^[0-9a-fA-F]{64}$', input_string) is not None
 
 def is_swiss_army_llama_responding(local=True):
-    port = SWISS_ARMY_LLAMA_PORT if local else REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
-    try:
+    if local:
+        port = SWISS_ARMY_LLAMA_PORT
         url = f"http://localhost:{port}/get_list_of_available_model_names/"
+    else:
+        instances = get_remote_swiss_army_llama_instances()
+        random.shuffle(instances)
+        for ip_address, _ in instances:
+            port = REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
+            url = f"http://{ip_address}:{port}/get_list_of_available_model_names/"
+            try:
+                params = {'token': SWISS_ARMY_LLAMA_SECURITY_TOKEN}
+                response = httpx.get(url, params=params, timeout=5)
+                return response.status_code == 200
+            except Exception as e:
+                logger.error(f"Error checking Swiss Army Llama at {ip_address}:{port}: {e}")
+        return False
+    
+    try:
         params = {'token': SWISS_ARMY_LLAMA_SECURITY_TOKEN}
-        response = httpx.get(url, params=params)
+        response = httpx.get(url, params=params, timeout=5)
         return response.status_code == 200
     except Exception as e:
-        logger.error("Error: {}".format(e))
+        logger.error(f"Error checking Swiss Army Llama: {e}")
         return False
 
 async def check_if_input_text_would_get_rejected_from_api_services(input_text: str) -> bool:
@@ -5761,7 +5794,7 @@ def determine_swiss_army_llama_port():
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
         remote_swiss_army_llama_responding = is_swiss_army_llama_responding(local=False)
     else:
-        remote_swiss_army_llama_responding = 0
+        remote_swiss_army_llama_responding = False
     
     if remote_swiss_army_llama_responding and USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
         return REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
@@ -5770,14 +5803,27 @@ def determine_swiss_army_llama_port():
     return None
 
 async def handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handler_function):
-    logger.error("Failed to execute inference request: {}".format(e))
+    logger.error(f"Failed to execute inference request: {e}")
     if port == REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT and not is_fallback:
         logger.info("Falling back to local Swiss Army Llama.")
+        return await handler_function(client, inference_request, model_parameters, SWISS_ARMY_LLAMA_PORT, True)
+    elif not is_fallback:
+        logger.info("Attempting to use another remote Swiss Army Llama instance.")
+        instances = get_remote_swiss_army_llama_instances()
+        random.shuffle(instances)
+        for ip_address, _ in instances:
+            try:
+                result = await handler_function(client, inference_request, model_parameters, REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT, False, ip_address)
+                if result is not None:
+                    return result
+            except Exception as e:
+                logger.error(f"Failed to execute inference request on {ip_address}: {e}")
+        logger.info("All remote instances failed. Falling back to local Swiss Army Llama.")
         return await handler_function(client, inference_request, model_parameters, SWISS_ARMY_LLAMA_PORT, True)
     else:
         return None, None
     
-async def handle_swiss_army_llama_text_completion(client, inference_request, model_parameters, port, is_fallback):
+async def handle_swiss_army_llama_text_completion(client, inference_request, model_parameters, port, is_fallback, ip_address=None):
     payload = {
         "input_prompt": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"),
         "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
@@ -5787,8 +5833,9 @@ async def handle_swiss_army_llama_text_completion(client, inference_request, mod
         "grammar_file_string": model_parameters.get("grammar_file_string", ""),
     }
     try:
+        url = f"http://{ip_address or 'localhost'}:{port}/get_text_completions_from_input_prompt/"
         response = await client.post(
-            f"http://localhost:{port}/get_text_completions_from_input_prompt/",
+            url,
             json=payload,
             params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
         )
@@ -5805,7 +5852,7 @@ async def handle_swiss_army_llama_text_completion(client, inference_request, mod
     except Exception as e:
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_text_completion)
 
-async def handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback):
+async def handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback, ip_address=None):
     input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
     image_data_binary = base64.b64decode(input_data["image"])
     question = input_data["question"]
@@ -5818,8 +5865,9 @@ async def handle_swiss_army_llama_image_question(client, inference_request, mode
     }
     files = {"image": ("image.png", image_data_binary, "image/png")}
     try:
+        url = f"http://{ip_address or 'localhost'}:{port}/ask_question_about_image/"
         response = await client.post(
-            f"http://localhost:{port}/ask_question_about_image/",
+            url,
             data=payload,
             files=files,
             params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
@@ -5837,7 +5885,7 @@ async def handle_swiss_army_llama_image_question(client, inference_request, mode
     except Exception as e:
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_image_question)
 
-async def handle_swiss_army_llama_embedding_document(client, inference_request, model_parameters, port, is_fallback):
+async def handle_swiss_army_llama_embedding_document(client, inference_request, model_parameters, port, is_fallback, ip_address=None):
     input_data = inference_request.model_input_data_json_b64
     if is_base64_encoded(input_data):
         input_data = base64.b64decode(input_data)
@@ -5848,9 +5896,9 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
         if is_base64_encoded(document_file_data):
             document_file_data = base64.b64decode(document_file_data)
     except Exception as e:
-        logger.error(f"Error decoding audio data: {str(e)}")
+        logger.error(f"Error decoding document data: {str(e)}")
         traceback.print_exc()
-        raise("Error decoding audio data")
+        raise("Error decoding document data")
     try:
         file_metadata = await upload_and_get_file_metadata(document_file_data, file_prefix="document")
         file_url = file_metadata["file_url"]
@@ -5875,8 +5923,9 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
         'size': (None, str(file_size))
     }
     try:
+        url = f"http://{ip_address or 'localhost'}:{port}/get_all_embedding_vectors_for_document/"
         response = await client.post(
-            f"http://localhost:{port}/get_all_embedding_vectors_for_document/",
+            url,
             params=params,
             files=files,
             headers={"accept": "application/json"}
@@ -5898,8 +5947,8 @@ async def handle_swiss_army_llama_embedding_document(client, inference_request, 
         return output_results, output_results_file_type_strings
     except Exception as e:
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_embedding_document)
-    
-async def handle_swiss_army_llama_embedding_audio(client, inference_request, model_parameters, port, is_fallback):
+
+async def handle_swiss_army_llama_embedding_audio(client, inference_request, model_parameters, port, is_fallback, ip_address=None):
     input_data = inference_request.model_input_data_json_b64
     if is_base64_encoded(input_data):
         input_data = base64.b64decode(input_data)
@@ -5936,8 +5985,9 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
         'size': (None, str(file_size))
     }
     try:
+        url = f"http://{ip_address or 'localhost'}:{port}/compute_transcript_with_whisper_from_audio/"
         response = await client.post(
-            f"http://localhost:{port}/compute_transcript_with_whisper_from_audio/",
+            url,
             params=params,
             files=files,
             headers={"accept": "application/json"}
@@ -5956,8 +6006,9 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
                 "embedding_pooling_method": model_parameters.get("embedding_pooling_method", "svd"),
                 "corpus_identifier_string": corpus_identifier_string
             }
+            search_url = f"http://{ip_address or 'localhost'}:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/"
             search_response = await client.post(
-                f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
+                search_url,
                 json=search_payload,
                 headers={"accept": "application/json", "Content-Type": "application/json"}
             )
@@ -5968,7 +6019,7 @@ async def handle_swiss_army_llama_embedding_audio(client, inference_request, mod
     except Exception as e:
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_embedding_audio)
 
-async def handle_swiss_army_llama_semantic_search(client, inference_request, model_parameters, port, is_fallback):
+async def handle_swiss_army_llama_semantic_search(client, inference_request, model_parameters, port, is_fallback, ip_address=None):
     payload = {
         "query_text": model_parameters.get("query_text", ""),
         "number_of_most_similar_strings_to_return": model_parameters.get("number_of_most_similar_strings_to_return", 10),
@@ -5977,8 +6028,9 @@ async def handle_swiss_army_llama_semantic_search(client, inference_request, mod
         "corpus_identifier_string": model_parameters.get("corpus_identifier_string", "")
     }
     try:
+        url = f"http://{ip_address or 'localhost'}:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/"
         response = await client.post(
-            f"http://localhost:{port}/search_stored_embeddings_with_query_string_for_semantic_similarity/",
+            url,
             json=payload,
             params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
         )
@@ -5992,7 +6044,7 @@ async def handle_swiss_army_llama_semantic_search(client, inference_request, mod
     except Exception as e:
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_semantic_search)
 
-async def handle_swiss_army_llama_advanced_semantic_search(client, inference_request, model_parameters, port, is_fallback):
+async def handle_swiss_army_llama_advanced_semantic_search(client, inference_request, model_parameters, port, is_fallback, ip_address=None):
     payload = {
         "query_text": model_parameters.get("query_text", ""),
         "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
@@ -6003,8 +6055,9 @@ async def handle_swiss_army_llama_advanced_semantic_search(client, inference_req
         "result_sorting_metric": model_parameters.get("result_sorting_metric", "hoeffding_d")
     }
     try:
+        url = f"http://{ip_address or 'localhost'}:{port}/advanced_search_stored_embeddings_with_query_string_for_semantic_similarity/"
         response = await client.post(
-            f"http://localhost:{port}/advanced_search_stored_embeddings_with_query_string_for_semantic_similarity/",
+            url,
             json=payload,
             params={"token": SWISS_ARMY_LLAMA_SECURITY_TOKEN}
         )
@@ -6019,12 +6072,13 @@ async def handle_swiss_army_llama_advanced_semantic_search(client, inference_req
         return await handle_swiss_army_llama_exception(e, client, inference_request, model_parameters, port, is_fallback, handle_swiss_army_llama_advanced_semantic_search)
 
 async def submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=False):
-    logger.info("Now calling Swiss Army Llama with model {}".format(inference_request.requested_model_canonical_string))
+    logger.info(f"Now calling Swiss Army Llama with model {inference_request.requested_model_canonical_string}")
     model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
     port = determine_swiss_army_llama_port()
     if not port:
-        logger.error(f"Neither the local (port {SWISS_ARMY_LLAMA_PORT}) nor the remote (port {REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}) Swiss Army Llama is responding!")
+        logger.error(f"Neither the local (port {SWISS_ARMY_LLAMA_PORT}) nor any remote Swiss Army Llama instance is responding!")
         return None, None
+    
     async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 12)) as client:
         if inference_request.model_inference_type_string == "text_completion":
             return await handle_swiss_army_llama_text_completion(client, inference_request, model_parameters, port, is_fallback)
@@ -6039,7 +6093,7 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
         elif inference_request.model_inference_type_string == "advanced_semantic_search":
             return await handle_swiss_army_llama_advanced_semantic_search(client, inference_request, model_parameters, port, is_fallback)
         else:
-            logger.warning("Unsupported inference type: {}".format(inference_request.model_inference_type_string))
+            logger.warning(f"Unsupported inference type: {inference_request.model_inference_type_string}")
             return None, None
 
 async def execute_inference_request(inference_request_id: str) -> None:
