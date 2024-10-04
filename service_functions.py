@@ -441,22 +441,42 @@ def is_base64_encoded(data):
 
 def kill_open_ssh_tunnels(local_port):
     try:
+        # Find processes listening on the specified port
         lsof_command = [
             "lsof", "-i", f"TCP:{local_port}", "-sTCP:LISTEN"
         ]
         result = subprocess.run(lsof_command, capture_output=True, text=True)
+
         if result.stdout:
             lines = result.stdout.strip().split('\n')
             pids = []
+            
+            # Skip the header and process each line
             for line in lines[1:]:
                 columns = line.split()
-                if len(columns) > 1:
+                if len(columns) > 1 and columns[1].isdigit():
                     pids.append(columns[1])
+            
             if pids:
+                # First try a graceful termination
                 for pid in pids:
-                    kill_command = ["kill", "-9", pid]
-                    subprocess.run(kill_command)
-                logger.info("Killed SSH tunnels with PIDs: {}".format(', '.join(pids)))
+                    try:
+                        kill_command = ["kill", "-15", pid]  # Try SIGTERM first
+                        subprocess.run(kill_command)
+                        logger.info(f"Sent SIGTERM to SSH tunnel with PID: {pid}")
+                    except Exception as e:
+                        logger.error(f"Error sending SIGTERM to PID {pid}: {e}")
+                
+                # After giving some time, check if any processes remain and force kill if needed
+                time.sleep(1)  # Allow some time for processes to exit
+                for pid in pids:
+                    if subprocess.run(["ps", "-p", pid], capture_output=True, text=True).returncode == 0:
+                        try:
+                            kill_command = ["kill", "-9", pid]  # Force kill if still alive
+                            subprocess.run(kill_command)
+                            logger.info(f"Sent SIGKILL to SSH tunnel with PID: {pid}")
+                        except Exception as e:
+                            logger.error(f"Error sending SIGKILL to PID {pid}: {e}")
             else:
                 logger.info("No SSH tunnels found to kill.")
         else:
@@ -476,15 +496,20 @@ async def establish_ssh_tunnel():
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
         instances = get_remote_swiss_army_llama_instances()
         random.shuffle(instances)  # Randomize the order of instances
+        
+        # Kill any open tunnels once, before starting new ones
+        kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
+
         for ip_address, port in instances:
-            kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
             key_path = REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH
             if not os.access(key_path, os.R_OK):
                 raise PermissionError(f"SSH key file at {key_path} is not readable.")
+            
             current_permissions = os.stat(key_path).st_mode & 0o777
             if current_permissions != 0o600:
                 os.chmod(key_path, 0o600)
                 logger.info("Permissions for SSH key file set to 600.")
+            
             try:
                 tunnel = SSHTunnelForwarder(
                     (ip_address, port),
@@ -496,11 +521,18 @@ async def establish_ssh_tunnel():
                 )
                 tunnel.start()
                 logger.info(f"SSH tunnel established to {ip_address}:{port}: {tunnel.local_bind_address}")
+                
                 # If we successfully establish a tunnel, return
                 return
             except Exception as e:
                 logger.error(f"Error establishing SSH tunnel to {ip_address}:{port}: {e}")
+                # Explicitly ensure we close the tunnel to free up any resources
+                try:
+                    tunnel.close()
+                except Exception as cleanup_error:
+                    logger.error(f"Error closing SSH tunnel after failure: {cleanup_error}")
                 # Continue to the next instance if this one fails
+        
         logger.error("Failed to establish SSH tunnel to any remote Swiss Army Llama instance")
     else:
         logger.info("Remote Swiss Army Llama is not enabled. Using local instance.")
