@@ -496,20 +496,16 @@ async def establish_ssh_tunnel():
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
         instances = get_remote_swiss_army_llama_instances()
         random.shuffle(instances)  # Randomize the order of instances
-        
         # Kill any open tunnels once, before starting new ones
         kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
-
         for ip_address, port in instances:
             key_path = REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH
             if not os.access(key_path, os.R_OK):
                 raise PermissionError(f"SSH key file at {key_path} is not readable.")
-            
             current_permissions = os.stat(key_path).st_mode & 0o777
             if current_permissions != 0o600:
                 os.chmod(key_path, 0o600)
                 logger.info("Permissions for SSH key file set to 600.")
-            
             try:
                 tunnel = SSHTunnelForwarder(
                     (ip_address, port),
@@ -521,18 +517,21 @@ async def establish_ssh_tunnel():
                 )
                 tunnel.start()
                 logger.info(f"SSH tunnel established to {ip_address}:{port}: {tunnel.local_bind_address}")
-                
                 # If we successfully establish a tunnel, return
                 return
+            except BaseSSHTunnelForwarderError as e:
+                logger.error("SSH tunnel error: {}".format(e))       
+                try:
+                    tunnel.close()
+                except Exception as cleanup_error:
+                    logger.error(f"Error closing SSH tunnel after failure: {cleanup_error}")                     
             except Exception as e:
                 logger.error(f"Error establishing SSH tunnel to {ip_address}:{port}: {e}")
-                # Explicitly ensure we close the tunnel to free up any resources
                 try:
                     tunnel.close()
                 except Exception as cleanup_error:
                     logger.error(f"Error closing SSH tunnel after failure: {cleanup_error}")
                 # Continue to the next instance if this one fails
-        
         logger.error("Failed to establish SSH tunnel to any remote Swiss Army Llama instance")
     else:
         logger.info("Remote Swiss Army Llama is not enabled. Using local instance.")
