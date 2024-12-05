@@ -6064,105 +6064,28 @@ async def handle_swiss_army_llama_advanced_semantic_search(client, inference_req
 
 async def submit_inference_request_to_swiss_army_llama(inference_request, is_fallback=False):
     logger.info("Now calling Swiss Army Llama with model {}".format(inference_request.requested_model_canonical_string))
-    try:
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
-    except Exception as e:
-        logger.error(f"Failed to decode model parameters: {str(e)}")
-        return None, None
-
+    model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
     port = determine_swiss_army_llama_port()
     if not port:
         logger.error(f"Neither the local (port {SWISS_ARMY_LLAMA_PORT}) nor the remote (port {REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}) Swiss Army Llama is responding!")
         return None, None
-
-    # Check if port is actually accessible
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(5)
-            result = s.connect_ex(('127.0.0.1', port))
-            if result != 0:
-                logger.error(f"Port {port} is not accessible (error code: {result})")
-                if not is_fallback:
-                    logger.info("Attempting to re-establish SSH tunnel...")
-                    await establish_ssh_tunnel()
-                    # Retry connection check after tunnel re-establishment
-                    s.settimeout(5)
-                    result = s.connect_ex(('127.0.0.1', port))
-                    if result != 0:
-                        logger.error(f"Port {port} still not accessible after tunnel re-establishment")
-                        return None, None
-            else:
-                logger.info(f"Successfully verified port {port} is accessible")
-    except Exception as e:
-        logger.error(f"Error checking port {port} accessibility: {str(e)}")
-        if not is_fallback:
-            logger.info("Attempting to re-establish SSH tunnel due to port check error...")
-            await establish_ssh_tunnel()
-
-    # Configure client with specific connection settings
-    limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
-    transport = httpx.AsyncHTTPTransport(
-        retries=2,
-        verify=False,
-        local_address='127.0.0.1'
-    )
-
-    async with httpx.AsyncClient(
-        timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 12),
-        limits=limits,
-        transport=transport
-    ) as client:
-        try:
-            # Initial health check
-            health_check_url = f"http://127.0.0.1:{port}/liveness_ping"
-            try:
-                health_response = await client.get(health_check_url, timeout=5.0)
-                if health_response.status_code != 200:
-                    logger.error(f"Health check failed with status code: {health_response.status_code}")
-                    if not is_fallback:
-                        return await submit_inference_request_to_swiss_army_llama(inference_request, True)
-                    return None, None
-            except Exception as e:
-                logger.error(f"Health check failed: {str(e)}")
-                if not is_fallback:
-                    return await submit_inference_request_to_swiss_army_llama(inference_request, True)
-                return None, None
-
-            # Process based on inference type
-            if inference_request.model_inference_type_string == "text_completion":
-                return await handle_swiss_army_llama_text_completion(client, inference_request, model_parameters, port, is_fallback)
-            elif inference_request.model_inference_type_string == "embedding_document":
-                return await handle_swiss_army_llama_embedding_document(client, inference_request, model_parameters, port, is_fallback)
-            elif inference_request.model_inference_type_string == "embedding_audio":
-                return await handle_swiss_army_llama_embedding_audio(client, inference_request, model_parameters, port, is_fallback)
-            elif inference_request.model_inference_type_string == "ask_question_about_an_image":
-                return await handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback)
-            elif inference_request.model_inference_type_string == "semantic_search":
-                return await handle_swiss_army_llama_semantic_search(client, inference_request, model_parameters, port, is_fallback)
-            elif inference_request.model_inference_type_string == "advanced_semantic_search":
-                return await handle_swiss_army_llama_advanced_semantic_search(client, inference_request, model_parameters, port, is_fallback)
-            else:
-                logger.warning("Unsupported inference type: {}".format(inference_request.model_inference_type_string))
-                return None, None
-
-        except httpx.LocalProtocolError as e:
-            logger.error(f"Local protocol error: {str(e)}")
-            if not is_fallback:
-                return await submit_inference_request_to_swiss_army_llama(inference_request, True)
+    async with httpx.AsyncClient(timeout=Timeout(MESSAGING_TIMEOUT_IN_SECONDS * 12)) as client:
+        if inference_request.model_inference_type_string == "text_completion":
+            return await handle_swiss_army_llama_text_completion(client, inference_request, model_parameters, port, is_fallback)
+        elif inference_request.model_inference_type_string == "embedding_document":
+            return await handle_swiss_army_llama_embedding_document(client, inference_request, model_parameters, port, is_fallback)
+        elif inference_request.model_inference_type_string == "embedding_audio":
+            return await handle_swiss_army_llama_embedding_audio(client, inference_request, model_parameters, port, is_fallback)
+        elif inference_request.model_inference_type_string == "ask_question_about_an_image":
+            return await handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback)
+        elif inference_request.model_inference_type_string == "semantic_search":
+            return await handle_swiss_army_llama_semantic_search(client, inference_request, model_parameters, port, is_fallback)
+        elif inference_request.model_inference_type_string == "advanced_semantic_search":
+            return await handle_swiss_army_llama_advanced_semantic_search(client, inference_request, model_parameters, port, is_fallback)
+        else:
+            logger.warning("Unsupported inference type: {}".format(inference_request.model_inference_type_string))
             return None, None
-        except httpx.NetworkError as e:
-            logger.error(f"Network error: {str(e)}")
-            if not is_fallback:
-                return await submit_inference_request_to_swiss_army_llama(inference_request, True)
-            return None, None
-        except Exception as e:
-            logger.error(f"Unexpected error in submit_inference_request_to_swiss_army_llama: {str(e)}")
-            logger.error(f"Error type: {type(e).__name__}")
-            logger.error(f"Error details: {traceback.format_exc()}")
-            if not is_fallback:
-                return await submit_inference_request_to_swiss_army_llama(inference_request, True)
-            return None, None
-
+            
 async def execute_inference_request(inference_request_id: str) -> None:
     try:
         # Retrieve the inference API usage request from the database
