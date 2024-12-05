@@ -2277,8 +2277,8 @@ To get started with Vast.ai, users need to follow these steps:
 
 ```bash
     cd /swiss_army_llama/ 
-    git update python swiss_army_llama.py
-    cd /swiss_army_llama/ git update python swiss_army_llama.py
+    git pull
+    python swiss_army_llama.py
 ```
 
 7. This will initiate the process of downloading the default Swiss Army Llama model files from Hugging Face.
