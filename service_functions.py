@@ -443,44 +443,34 @@ def kill_open_ssh_tunnels(local_port):
     try:
         # Find processes listening on the specified port
         lsof_command = [
-            "lsof", "-i", f"TCP:{local_port}", "-sTCP:LISTEN"
+            "lsof", "-i", f"TCP:{local_port}", "-t"  # -t outputs only the PID
         ]
         result = subprocess.run(lsof_command, capture_output=True, text=True)
-
+        
         if result.stdout:
-            lines = result.stdout.strip().split('\n')
-            pids = []
-            
-            # Skip the header and process each line
-            for line in lines[1:]:
-                columns = line.split()
-                if len(columns) > 1 and columns[1].isdigit():
-                    pids.append(columns[1])
-            
-            if pids:
-                # First try a graceful termination
-                for pid in pids:
+            pids = result.stdout.strip().split('\n')
+            for pid in pids:
+                try:
+                    subprocess.run(["kill", pid])
+                    logger.info(f"Killed SSH tunnel process with PID: {pid}")
+                except Exception as e:
+                    logger.error(f"Error killing process {pid}: {e}")
+                    
+        # Also kill any ssh processes with the specific port forward
+        ps_command = [
+            "ps", "aux"
+        ]
+        result = subprocess.run(ps_command, capture_output=True, text=True)
+        if result.stdout:
+            for line in result.stdout.split('\n'):
+                if f':{local_port}:' in line and 'ssh' in line:
                     try:
-                        kill_command = ["kill", "-15", pid]  # Try SIGTERM first
-                        subprocess.run(kill_command)
-                        logger.info(f"Sent SIGTERM to SSH tunnel with PID: {pid}")
+                        pid = line.split()[1]
+                        subprocess.run(["kill", pid])
+                        logger.info(f"Killed SSH process with PID: {pid}")
                     except Exception as e:
-                        logger.error(f"Error sending SIGTERM to PID {pid}: {e}")
-                
-                # After giving some time, check if any processes remain and force kill if needed
-                time.sleep(1)  # Allow some time for processes to exit
-                for pid in pids:
-                    if subprocess.run(["ps", "-p", pid], capture_output=True, text=True).returncode == 0:
-                        try:
-                            kill_command = ["kill", "-9", pid]  # Force kill if still alive
-                            subprocess.run(kill_command)
-                            logger.info(f"Sent SIGKILL to SSH tunnel with PID: {pid}")
-                        except Exception as e:
-                            logger.error(f"Error sending SIGKILL to PID {pid}: {e}")
-            else:
-                logger.info("No SSH tunnels found to kill.")
-        else:
-            logger.info("No SSH tunnels found.")
+                        logger.error(f"Error killing SSH process: {e}")
+                        
     except Exception as e:
         logger.error("Error while killing SSH tunnels: {}".format(e))
         
@@ -498,40 +488,51 @@ async def establish_ssh_tunnel():
         random.shuffle(instances)  # Randomize the order of instances
         # Kill any open tunnels once, before starting new ones
         kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
+        
         for ip_address, port in instances:
             key_path = REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH
             if not os.access(key_path, os.R_OK):
                 raise PermissionError(f"SSH key file at {key_path} is not readable.")
+            
             current_permissions = os.stat(key_path).st_mode & 0o777
             if current_permissions != 0o600:
                 os.chmod(key_path, 0o600)
                 logger.info("Permissions for SSH key file set to 600.")
+                
             try:
-                tunnel = SSHTunnelForwarder(
-                    (ip_address, port),
-                    ssh_username="root",
-                    ssh_pkey=key_path,
-                    remote_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT),
-                    local_bind_address=("0.0.0.0", REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT),
-                    host_pkey_directories=[]  # Disable host key checking
+                # Use the exact same SSH command that works manually
+                cmd = [
+                    'ssh',
+                    '-i', key_path,
+                    '-p', str(port),
+                    '-L', f'{REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}:localhost:{REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT}',
+                    '-o', 'StrictHostKeyChecking=no',  # Equivalent to disabling host key checking
+                    '-o', 'ExitOnForwardFailure=yes',  # Exit if port forwarding fails
+                    '-N',  # Don't execute remote command
+                    f'root@{ip_address}'
+                ]
+                
+                # Start the SSH process
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
                 )
-                tunnel.start()
-                logger.info(f"SSH tunnel established to {ip_address}:{port}: {tunnel.local_bind_address}")
-                # If we successfully establish a tunnel, return
-                return
-            except BaseSSHTunnelForwarderError as e:
-                logger.error("SSH tunnel error: {}".format(e))       
-                try:
-                    tunnel.close()
-                except Exception as cleanup_error:
-                    logger.error(f"Error closing SSH tunnel after failure: {cleanup_error}")                     
+                
+                # Wait a bit to ensure the tunnel is established
+                await asyncio.sleep(2)
+                
+                # Check if process is still running
+                if process.returncode is None:
+                    logger.info(f"SSH tunnel established to {ip_address}:{port}")
+                    return process  # Return the process so it can be managed/terminated later
+                else:
+                    stdout, stderr = await process.communicate()
+                    logger.error(f"SSH process failed. stdout: {stdout.decode()}, stderr: {stderr.decode()}")
+                    
             except Exception as e:
                 logger.error(f"Error establishing SSH tunnel to {ip_address}:{port}: {e}")
-                try:
-                    tunnel.close()
-                except Exception as cleanup_error:
-                    logger.error(f"Error closing SSH tunnel after failure: {cleanup_error}")
-                # Continue to the next instance if this one fails
+                
         logger.error("Failed to establish SSH tunnel to any remote Swiss Army Llama instance")
     else:
         logger.info("Remote Swiss Army Llama is not enabled. Using local instance.")
