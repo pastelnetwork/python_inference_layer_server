@@ -56,8 +56,6 @@ from mutagen import File as MutagenFile
 from PIL import Image
 import libpastelid
 
-tunnel = None
-
 tracking_period_start = datetime.utcnow()
 rpc_call_stats = defaultdict(lambda: {
     "count": 0,
@@ -202,8 +200,8 @@ CHALLENGE_EXPIRATION_TIME_IN_SECONDS = config.get("CHALLENGE_EXPIRATION_TIME_IN_
 SWISS_ARMY_LLAMA_PORT = config.get("SWISS_ARMY_LLAMA_PORT", default=8089, cast=int)
 USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE = config.get("USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE", default=0, cast=int)
 REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH", default="/home/ubuntu/vastai_privkey")
-REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES", default="167.179.138.57").split(",")
-REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS = [int(port.strip()) for port in config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS", default="29898").split(",")]
+REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES", default="172.219.157.164").split(",")
+REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS = [int(port.strip()) for port in config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_PORTS", default="9188").split(",")]
 REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT", default=8087, cast=int)
 REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT", default=8089, cast=int)
 CREDIT_COST_MULTIPLIER_FACTOR = config.get("CREDIT_COST_MULTIPLIER_FACTOR", default=0.1, cast=float)
@@ -495,9 +493,6 @@ def get_remote_swiss_army_llama_instances() -> List[Tuple[str, int]]:
     return list(zip(ip_addresses, [int(port) for port in ports]))
                 
 async def establish_ssh_tunnel():
-    global tunnel
-    if tunnel and tunnel.is_active:
-        tunnel.stop()    
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
         instances = get_remote_swiss_army_llama_instances()
         random.shuffle(instances)  # Randomize the order of instances
@@ -518,7 +513,7 @@ async def establish_ssh_tunnel():
                     ssh_pkey=key_path,
                     remote_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT),
                     local_bind_address=("0.0.0.0", REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT),
-                    host_pkey_directories=None # Disable host key checking
+                    host_pkey_directories=[]  # Disable host key checking
                 )
                 tunnel.start()
                 logger.info(f"SSH tunnel established to {ip_address}:{port}: {tunnel.local_bind_address}")
