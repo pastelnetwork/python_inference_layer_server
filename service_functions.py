@@ -496,6 +496,8 @@ def get_remote_swiss_army_llama_instances() -> List[Tuple[str, int]]:
                 
 async def establish_ssh_tunnel():
     global tunnel
+    if tunnel and tunnel.is_active:
+        tunnel.stop()    
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
         instances = get_remote_swiss_army_llama_instances()
         random.shuffle(instances)  # Randomize the order of instances
@@ -515,8 +517,8 @@ async def establish_ssh_tunnel():
                     ssh_username="root",
                     ssh_pkey=key_path,
                     remote_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT),
-                    local_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT),
-                    host_pkey_directories=[]  # Disable host key checking
+                    local_bind_address=("0.0.0.0", REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT),
+                    host_pkey_directories=None # Disable host key checking
                 )
                 tunnel.start()
                 logger.info(f"SSH tunnel established to {ip_address}:{port}: {tunnel.local_bind_address}")
