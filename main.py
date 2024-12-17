@@ -21,11 +21,12 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
 from database_code import initialize_db
 from setup_swiss_army_llama import check_and_setup_swiss_army_llama
 from service_functions import (monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value, fetch_all_mnid_tickets_details, establish_ssh_tunnel, schedule_micro_benchmark_periodically,
-                                list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them, generate_supernode_inference_ip_blacklist)
+                                list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them, generate_supernode_inference_ip_blacklist, kill_open_ssh_tunnels)
 warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 config = DecoupleConfig(RepositoryEnv('.env'))
 UVICORN_PORT = config.get("UVICORN_PORT", cast=int)
 USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE = config.get("USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE", default=0, cast=int)
+REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT = config.get("REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT", cast=int)
 SWISS_ARMY_LLAMA_SECURITY_TOKEN = config.get("SWISS_ARMY_LLAMA_SECURITY_TOKEN", cast=str)
 os.environ['TZ'] = 'UTC' # Set timezone to UTC for the current session
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -127,8 +128,27 @@ async def main():
 
 if __name__ == "__main__":
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
-        ssh_thread = threading.Thread(target=establish_ssh_tunnel, daemon=True)
-        ssh_thread.start()
+        kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
+        
+        # Create and run event loop for SSH tunnel setup
+        async def setup_tunnel():
+            try:
+                await establish_ssh_tunnel()
+            except Exception as e:
+                logger.error(f"Error establishing SSH tunnel: {e}")
+                logger.error(traceback.format_exc())
+                
+        # Run the tunnel setup in the event loop
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(setup_tunnel())
+        except Exception as e:
+            logger.error(f"Error in tunnel setup loop: {e}")
+            logger.error(traceback.format_exc())
+        finally:
+            loop.close()
+            
     generate_or_load_encryption_key_sync()
     config = DecoupleConfig(RepositoryEnv('.env'))
     asyncio.run(main())

@@ -51,11 +51,11 @@ from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
 import database_code as db_code
 from sqlmodel import select, delete, func, SQLModel
 from sqlalchemy.exc import IntegrityError
-from sshtunnel import SSHTunnelForwarder, BaseSSHTunnelForwarderError
 from mutagen import File as MutagenFile
 from PIL import Image
 import libpastelid
 
+ssh_tunnel_process = None  # Add this at top of file with other globals
 tracking_period_start = datetime.utcnow()
 rpc_call_stats = defaultdict(lambda: {
     "count": 0,
@@ -439,8 +439,36 @@ def is_base64_encoded(data):
     except Exception:
         return False
 
+async def check_tunnel_health():
+    global ssh_tunnel_process
+    while True:
+        await asyncio.sleep(60)  # Check every minute
+        if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE and ssh_tunnel_process is not None:
+            if ssh_tunnel_process.returncode is not None:
+                logger.warning("SSH tunnel process died, attempting to reestablish...")
+                kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
+                await establish_ssh_tunnel()
+
+async def cleanup_ssh_tunnel():
+    global ssh_tunnel_process
+    if ssh_tunnel_process is not None:
+        try:
+            ssh_tunnel_process.terminate()
+            await ssh_tunnel_process.wait()
+        except Exception as e:
+            logger.error(f"Error cleaning up SSH tunnel: {e}")
+            
 def kill_open_ssh_tunnels(local_port):
     try:
+        # First try to terminate the global process if it exists
+        global ssh_tunnel_process
+        if ssh_tunnel_process and ssh_tunnel_process.returncode is None:
+            try:
+                ssh_tunnel_process.terminate()
+            except Exception as e:
+                logger.error(f"Error terminating existing SSH process: {e}")
+            ssh_tunnel_process = None
+
         # Find processes listening on the specified port
         lsof_command = [
             "lsof", "-i", f"TCP:{local_port}", "-t"  # -t outputs only the PID
@@ -451,28 +479,36 @@ def kill_open_ssh_tunnels(local_port):
             pids = result.stdout.strip().split('\n')
             for pid in pids:
                 try:
-                    subprocess.run(["kill", pid])
-                    logger.info(f"Killed SSH tunnel process with PID: {pid}")
+                    subprocess.run(["kill", "-15", pid])  # Try SIGTERM first
+                    logger.info(f"Sent SIGTERM to process with PID: {pid}")
+                    time.sleep(1)  # Give it a second to terminate gracefully
+                    
+                    # Check if process still exists and force kill if necessary
+                    if subprocess.run(["ps", "-p", pid], capture_output=True).returncode == 0:
+                        subprocess.run(["kill", "-9", pid])
+                        logger.info(f"Sent SIGKILL to persistent process with PID: {pid}")
                 except Exception as e:
                     logger.error(f"Error killing process {pid}: {e}")
-                    
+        
         # Also kill any ssh processes with the specific port forward
-        ps_command = [
-            "ps", "aux"
-        ]
+        ps_command = ["ps", "aux"]
         result = subprocess.run(ps_command, capture_output=True, text=True)
         if result.stdout:
             for line in result.stdout.split('\n'):
                 if f':{local_port}:' in line and 'ssh' in line:
                     try:
                         pid = line.split()[1]
-                        subprocess.run(["kill", pid])
-                        logger.info(f"Killed SSH process with PID: {pid}")
+                        subprocess.run(["kill", "-15", pid])
+                        time.sleep(1)
+                        if subprocess.run(["ps", "-p", pid], capture_output=True).returncode == 0:
+                            subprocess.run(["kill", "-9", pid])
                     except Exception as e:
                         logger.error(f"Error killing SSH process: {e}")
                         
     except Exception as e:
-        logger.error("Error while killing SSH tunnels: {}".format(e))
+        logger.error(f"Error while killing SSH tunnels: {e}")
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error details: {traceback.format_exc()}")
         
 def get_remote_swiss_army_llama_instances() -> List[Tuple[str, int]]:
     ip_addresses = config.get("REMOTE_SWISS_ARMY_LLAMA_INSTANCE_IP_ADDRESSES", "").split(",")
@@ -483,6 +519,7 @@ def get_remote_swiss_army_llama_instances() -> List[Tuple[str, int]]:
     return list(zip(ip_addresses, [int(port) for port in ports]))
                 
 async def establish_ssh_tunnel():
+    global ssh_tunnel_process
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
         instances = get_remote_swiss_army_llama_instances()
         random.shuffle(instances)  # Randomize the order of instances
@@ -498,17 +535,17 @@ async def establish_ssh_tunnel():
             if current_permissions != 0o600:
                 os.chmod(key_path, 0o600)
                 logger.info("Permissions for SSH key file set to 600.")
-                
+            
             try:
-                # Use the exact same SSH command that works manually
                 cmd = [
                     'ssh',
                     '-i', key_path,
                     '-p', str(port),
                     '-L', f'{REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT}:localhost:{REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT}',
-                    '-o', 'StrictHostKeyChecking=no',  # Equivalent to disabling host key checking
-                    '-o', 'ExitOnForwardFailure=yes',  # Exit if port forwarding fails
-                    '-N',  # Don't execute remote command
+                    '-o', 'StrictHostKeyChecking=no',
+                    '-o', 'UserKnownHostsFile=/dev/null',
+                    '-o', 'ExitOnForwardFailure=yes',
+                    '-N',
                     f'root@{ip_address}'
                 ]
                 
@@ -525,14 +562,20 @@ async def establish_ssh_tunnel():
                 # Check if process is still running
                 if process.returncode is None:
                     logger.info(f"SSH tunnel established to {ip_address}:{port}")
-                    return process  # Return the process so it can be managed/terminated later
+                    ssh_tunnel_process = process
+                    return
                 else:
                     stdout, stderr = await process.communicate()
                     logger.error(f"SSH process failed. stdout: {stdout.decode()}, stderr: {stderr.decode()}")
-                    
             except Exception as e:
                 logger.error(f"Error establishing SSH tunnel to {ip_address}:{port}: {e}")
-                
+                if process and process.returncode is None:
+                    try:
+                        process.terminate()
+                        await process.wait()
+                    except Exception as cleanup_error:
+                        logger.error(f"Error terminating failed SSH process: {cleanup_error}")
+        
         logger.error("Failed to establish SSH tunnel to any remote Swiss Army Llama instance")
     else:
         logger.info("Remote Swiss Army Llama is not enabled. Using local instance.")
@@ -4914,8 +4957,12 @@ def validate_pastel_txid_string(input_string: str):
     return re.match(r'^[0-9a-fA-F]{64}$', input_string) is not None
 
 def is_swiss_army_llama_responding(local=True):
+    global ssh_tunnel_process
     port = SWISS_ARMY_LLAMA_PORT if local else REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
     try:
+        # Check if tunnel process is still alive for remote case
+        if not local and (ssh_tunnel_process is None or ssh_tunnel_process.returncode is not None):
+            return False
         url = f"http://localhost:{port}/get_list_of_available_model_names/"
         params = {'token': SWISS_ARMY_LLAMA_SECURITY_TOKEN}
         response = httpx.get(url, params=params)
@@ -4923,7 +4970,7 @@ def is_swiss_army_llama_responding(local=True):
     except Exception as e:
         logger.error("Error: {}".format(e))
         return False
-
+    
 async def check_if_input_text_would_get_rejected_from_api_services(input_text: str) -> bool:
     inference_request_allowed = True
     local_swiss_army_llama_responding = is_swiss_army_llama_responding(local=True)
