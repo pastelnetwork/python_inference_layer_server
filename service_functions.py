@@ -56,6 +56,8 @@ from mutagen import File as MutagenFile
 from PIL import Image
 import libpastelid
 
+tunnel = None
+
 tracking_period_start = datetime.utcnow()
 rpc_call_stats = defaultdict(lambda: {
     "count": 0,
@@ -493,41 +495,33 @@ def get_remote_swiss_army_llama_instances() -> List[Tuple[str, int]]:
     return list(zip(ip_addresses, [int(port) for port in ports]))
                 
 async def establish_ssh_tunnel():
+    global tunnel
     if USE_REMOTE_SWISS_ARMY_LLAMA_IF_AVAILABLE:
         instances = get_remote_swiss_army_llama_instances()
         random.shuffle(instances)  # Randomize the order of instances
-        
-        # Kill any existing tunnels first
+        # Kill any open tunnels once, before starting new ones
         kill_open_ssh_tunnels(REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT)
-        
         for ip_address, port in instances:
             key_path = REMOTE_SWISS_ARMY_LLAMA_INSTANCE_SSH_KEY_PATH
-            
-            # Verify SSH key permissions and existence
             if not os.access(key_path, os.R_OK):
                 raise PermissionError(f"SSH key file at {key_path} is not readable.")
-                
             current_permissions = os.stat(key_path).st_mode & 0o777
             if current_permissions != 0o600:
                 os.chmod(key_path, 0o600)
                 logger.info("Permissions for SSH key file set to 600.")
-
             try:
-                # Create tunnel with explicit loopback binding
                 tunnel = SSHTunnelForwarder(
                     (ip_address, port),
                     ssh_username="root",
                     ssh_pkey=key_path,
-                    remote_bind_address=("127.0.1.1", REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT),
-                    local_bind_address=("127.0.1.1", REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT),
+                    remote_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_EXPOSED_PORT),
+                    local_bind_address=("localhost", REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT),
                     host_pkey_directories=[]  # Disable host key checking
                 )
-                
                 tunnel.start()
                 logger.info(f"SSH tunnel established to {ip_address}:{port}: {tunnel.local_bind_address}")
                 # If we successfully establish a tunnel, return
                 return
-
             except BaseSSHTunnelForwarderError as e:
                 logger.error("SSH tunnel error: {}".format(e))       
                 try:
@@ -541,11 +535,10 @@ async def establish_ssh_tunnel():
                 except Exception as cleanup_error:
                     logger.error(f"Error closing SSH tunnel after failure: {cleanup_error}")
                 # Continue to the next instance if this one fails
-
         logger.error("Failed to establish SSH tunnel to any remote Swiss Army Llama instance")
     else:
         logger.info("Remote Swiss Army Llama is not enabled. Using local instance.")
-        
+                        
 def get_audio_length(audio_input) -> float:
     if isinstance(audio_input, bytes):
         audio_file = io.BytesIO(audio_input)
@@ -4925,8 +4918,7 @@ def validate_pastel_txid_string(input_string: str):
 def is_swiss_army_llama_responding(local=True):
     port = SWISS_ARMY_LLAMA_PORT if local else REMOTE_SWISS_ARMY_LLAMA_MAPPED_PORT
     try:
-        # Try connecting to the loopback address specifically
-        url = f"http://127.0.1.1:{port}/get_list_of_available_model_names/"
+        url = f"http://localhost:{port}/get_list_of_available_model_names/"
         params = {'token': SWISS_ARMY_LLAMA_SECURITY_TOKEN}
         response = httpx.get(url, params=params)
         return response.status_code == 200
@@ -6096,7 +6088,7 @@ async def submit_inference_request_to_swiss_army_llama(inference_request, is_fal
         else:
             logger.warning("Unsupported inference type: {}".format(inference_request.model_inference_type_string))
             return None, None
-            
+
 async def execute_inference_request(inference_request_id: str) -> None:
     try:
         # Retrieve the inference API usage request from the database
