@@ -839,6 +839,15 @@ class InferenceConfirmation(SQLModel):
             }
         }
 
+class UserDefinedToolFunction(SQLModel, table=True):
+    id: Optional[str] = Field(default=None, primary_key=True, index=True)
+    code_hash: str = Field(unique=True, index=True)
+    code_text: str
+    approved_flag: bool
+    rationale: str
+    function_name: str
+    schema_json: Optional[str] = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 
 #_____________________________________________________________________________
 

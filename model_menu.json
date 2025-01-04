@@ -1,16 +1,57 @@
 {
   "models": [
     {
-      "model_name": "claude3-haiku",
+      "model_name": "claude3.5-sonnet",
       "model_url": "",
-      "description": "The Claude3 Haiku model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
-      "supported_inference_type_strings": ["text_completion", "embedding"],
+      "description": "Most intelligent Claude model optimized for complex tasks. Features 200K context window, support for images, PDFs, JSON output, structured responses, prompt caching, and embeddings.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding",
+        "ask_question_about_an_image",
+        "analyze_document"
+      ],
       "input_fields": [
         {
           "name": "input_prompt",
           "file_type": "text",
-          "inference_types_parameter_applies_to": "['text_completion']",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "embedding"
+          ],
           "optional": false
+        },
+        {
+          "name": "image",
+          "file_type": "base64",
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image"
+          ],
+          "optional": false,
+          "constraints": {
+            "max_file_size_mb": 100,
+            "supported_formats": ["png", "jpeg", "jpg", "gif", "webp", "heic"],
+            "max_dimension": 4096,
+            "min_dimension": 16
+          }
+        },
+        {
+          "name": "question",
+          "file_type": "text",
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image"
+          ],
+          "optional": false
+        },
+        {
+          "name": "document",
+          "file_type": "base64",
+          "inference_types_parameter_applies_to": ["analyze_document"],
+          "optional": false,
+          "constraints": {
+            "max_file_size_mb": 32,
+            "supported_formats": ["pdf"],
+            "max_pages": 100
+          }
         }
       ],
       "output_fields": [
@@ -18,29 +59,128 @@
           "name": "generated_text",
           "file_type": "text",
           "optional": false
+        },
+        {
+          "name": "embedding",
+          "file_type": "embedding",
+          "optional": false,
+          "dimensions": 1536
         }
       ],
       "model_parameters": [
         {
+          "name": "system_message",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "System message to set context and behavior for the model"
+        },
+        {
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
+          "minimum": 1,
+          "maximum": 8192,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Maximum number of tokens to generate in response"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Controls randomness in output. Higher values make output more random, lower values more focused"
         },
         {
-          "name": "number_of_completions_to_generate [Optional]",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
+          "name": "top_p",
+          "type": "float",
+          "default": 1.0,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Nucleus sampling parameter. Lower values lead to more focused output"
+        },
+        {
+          "name": "top_k",
+          "type": "integer",
+          "default": null,
+          "minimum": 1,
+          "maximum": 500,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Only sample from the top K options for each token. Lower values lead to more focused output"
+        },
+        {
+          "name": "response_format",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Controls the format of model responses",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text", "json_object", "json_schema"],
+              "description": "Response format type"
+            },
+            "schema": {
+              "type": "object",
+              "description": "JSON Schema for structured output validation"
+            }
+          }
+        },
+        {
+          "name": "cache_control",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Controls prompt caching behavior",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["ephemeral"],
+              "description": "Cache type - currently only 'ephemeral' (5-minute cache) is supported"
+            }
+          }
+        },
+        {
+          "name": "metadata",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Additional metadata to include with the request"
         }
       ],
       "credit_costs": {
@@ -48,14 +188,18 @@
       }
     },
     {
-      "model_name": "claude3.5-sonnet",
+      "model_name": "claude3.5-haiku",
       "model_url": "",
-      "description": "The Claude3.5 Sonnet model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
+      "description": "Fastest Claude model optimized for rapid responses. Features 200K context window, support for prompt caching, JSON output, and structured responses. Does not support image or PDF analysis.",
       "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
           "file_type": "text",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "embedding"
+          ],
           "optional": false
         }
       ],
@@ -64,40 +208,309 @@
           "name": "generated_text",
           "file_type": "text",
           "optional": false
+        },
+        {
+          "name": "embedding",
+          "file_type": "embedding",
+          "optional": false,
+          "dimensions": 1536
         }
       ],
       "model_parameters": [
         {
+          "name": "system_message",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "System message to set context and behavior for the model"
+        },
+        {
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
+          "minimum": 1,
+          "maximum": 8192,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Maximum number of tokens to generate in response"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls randomness in output. Higher values make output more random, lower values more focused"
         },
         {
-          "name": "number_of_completions_to_generate [Optional]",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
+          "name": "top_p",
+          "type": "float",
+          "default": 1.0,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Nucleus sampling parameter. Lower values lead to more focused output"
+        },
+        {
+          "name": "top_k",
+          "type": "integer",
+          "default": null,
+          "minimum": 1,
+          "maximum": 500,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Only sample from the top K options for each token. Lower values lead to more focused output"
+        },
+        {
+          "name": "response_format",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls the format of model responses",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text", "json_object", "json_schema"],
+              "description": "Response format type"
+            },
+            "schema": {
+              "type": "object",
+              "description": "JSON Schema for structured output validation"
+            }
+          }
+        },
+        {
+          "name": "cache_control",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls prompt caching behavior",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["ephemeral"],
+              "description": "Cache type - currently only 'ephemeral' (5-minute cache) is supported"
+            }
+          }
+        },
+        {
+          "name": "metadata",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Additional metadata to include with the request"
         }
       ],
       "credit_costs": {
         "api_based_pricing": 1
       }
-    },    
-      {
+    },
+    {
       "model_name": "claude3-opus",
       "model_url": "",
-      "description": "The Claude3 Opus model is a powerful language model developed by Anthropic. It offers advanced natural language processing capabilities and can be accessed through the Claude API.",
-      "supported_inference_type_strings": ["text_completion", "embedding"],
+      "description": "Most powerful Claude model with top-tier intelligence and multilingual capabilities. Features 200K context window, support for images, PDFs, JSON output, structured responses, prompt caching, and embeddings.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "embedding",
+        "ask_question_about_an_image",
+        "analyze_document"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "embedding"
+          ],
+          "optional": false
+        },
+        {
+          "name": "image",
+          "file_type": "base64",
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image"
+          ],
+          "optional": false,
+          "constraints": {
+            "max_file_size_mb": 100,
+            "supported_formats": ["png", "jpeg", "jpg", "gif", "webp", "heic"],
+            "max_dimension": 4096,
+            "min_dimension": 16
+          }
+        },
+        {
+          "name": "question",
+          "file_type": "text",
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image"
+          ],
+          "optional": false
+        },
+        {
+          "name": "document",
+          "file_type": "base64",
+          "inference_types_parameter_applies_to": ["analyze_document"],
+          "optional": false,
+          "constraints": {
+            "max_file_size_mb": 32,
+            "supported_formats": ["pdf"],
+            "max_pages": 100
+          }
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        },
+        {
+          "name": "embedding",
+          "file_type": "embedding",
+          "optional": false,
+          "dimensions": 1536
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "system_message",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "System message to set context and behavior for the model"
+        },
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "minimum": 1,
+          "maximum": 4096,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Maximum number of tokens to generate in response"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Controls randomness in output. Higher values make output more random, lower values more focused"
+        },
+        {
+          "name": "top_p",
+          "type": "float",
+          "default": 1.0,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Nucleus sampling parameter. Lower values lead to more focused output"
+        },
+        {
+          "name": "top_k",
+          "type": "integer",
+          "default": null,
+          "minimum": 1,
+          "maximum": 500,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Only sample from the top K options for each token. Lower values lead to more focused output"
+        },
+        {
+          "name": "response_format",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Controls the format of model responses",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text", "json_object", "json_schema"],
+              "description": "Response format type"
+            },
+            "schema": {
+              "type": "object",
+              "description": "JSON Schema for structured output validation"
+            }
+          }
+        },
+        {
+          "name": "cache_control",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Controls prompt caching behavior",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["ephemeral"],
+              "description": "Cache type - currently only 'ephemeral' (5-minute cache) is supported"
+            }
+          }
+        },
+        {
+          "name": "metadata",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Additional metadata to include with the request"
+        },
+        {
+          "name": "stop_sequences",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": null,
+          "maxItems": 4,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image",
+            "analyze_document"
+          ],
+          "description": "Custom stop sequences to end generation"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "deepseek-chat",
+      "model_url": "",
+      "description": "DeepSeek-V3 chat model with 671B MoE parameters (37B activated). Features context caching, JSON output, and function calling capabilities. Maximum context window of 128K tokens.",
+      "supported_inference_type_strings": ["text_completion"],
       "input_fields": [
         {
           "name": "input_prompt",
@@ -114,18 +527,18 @@
       ],
       "model_parameters": [
         {
-          "name": "number_of_tokens_to_generate",
+          "name": "max_tokens",
           "type": "int",
-          "default": 1000,
+          "default": 4096,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
+          "description": "The maximum number of tokens to generate, between 1 and 8192 [Optional]"
         },
         {
           "name": "temperature",
           "type": "float",
-          "default": 0.7,
+          "default": 1.0,
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
+          "description": "What sampling temperature to use, between 0 and 2 [Optional]"
         },
         {
           "name": "number_of_completions_to_generate [Optional]",
@@ -133,6 +546,70 @@
           "default": 1,
           "inference_types_parameter_applies_to": "['text_completion']",
           "description": "The number of completions to generate"
+        },
+        {
+          "name": "response_format",
+          "type": "string",
+          "default": "text",
+          "options": ["text", "json_object"],
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "The format of the response [Optional]"
+        },
+        {
+          "name": "tools",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "Function calling definitions [Optional]"
+        },
+        {
+          "name": "tool_choice",
+          "type": "string",
+          "default": "none",
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "Controls function calling behavior [Optional]"
+        },
+        {
+          "name": "system_message",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "System message for setting context [Optional]"
+        },
+        {
+          "name": "frequency_penalty",
+          "type": "float",
+          "default": 0,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "Number between -2.0 and 2.0 to penalize token frequency [Optional]"
+        },
+        {
+          "name": "presence_penalty",
+          "type": "float",
+          "default": 0,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "Number between -2.0 and 2.0 to penalize token presence [Optional]"
+        },
+        {
+          "name": "top_p",
+          "type": "float",
+          "default": 1.0,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "Alternative to temperature for nucleus sampling, between 0 and 1 [Optional]"
+        },
+        {
+          "name": "logprobs",
+          "type": "boolean",
+          "default": false,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "Whether to return log probabilities of output tokens [Optional]"
+        },
+        {
+          "name": "top_logprobs",
+          "type": "int",
+          "default": null,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "Number of most likely tokens (0-20) to return with probabilities [Optional]"
         }
       ],
       "credit_costs": {
@@ -568,13 +1045,16 @@
     {
       "model_name": "openai-gpt-4o",
       "model_url": "",
-      "description": "GPT-4o is OpenAI's most advanced multimodal model that is faster and cheaper than GPT-4 Turbo with stronger vision capabilities. The model has 128K context and an October 2023 knowledge cutoff.",
-      "supported_inference_type_strings": ["text_completion"],
+      "description": "OpenAI's most advanced multimodal model that's faster and cheaper than GPT-4 Turbo with stronger vision capabilities. The model has 128K context and an October 2023 knowledge cutoff.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "ask_question_about_an_image"
+      ],
       "input_fields": [
         {
           "name": "input_prompt",
           "file_type": "text",
-          "optional": true
+          "optional": false
         }
       ],
       "output_fields": [
@@ -586,25 +1066,230 @@
       ],
       "model_parameters": [
         {
-          "name": "number_of_tokens_to_generate",
+          "name": "tools",
+          "type": "array",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Array of functions the model may call",
+          "items": {
+            "type": "object",
+            "required": ["type", "function"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["function"],
+                "description": "Type of tool - currently only 'function' is supported"
+              },
+              "function": {
+                "type": "object",
+                "required": ["name", "parameters"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Name of the function to be called"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Description of when the function should be used"
+                  },
+                  "parameters": {
+                    "type": "object",
+                    "description": "JSON Schema defining the function parameters",
+                    "required": ["type", "properties"],
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["object"],
+                        "description": "Must be 'object' for function parameters"
+                      },
+                      "properties": {
+                        "type": "object",
+                        "description": "Function parameters schema"
+                      },
+                      "required": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Array of required parameter names"
+                      }
+                    }
+                  },
+                  "strict": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable Structured Outputs for strict JSON schema validation"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "tool_choice",
+          "type": "object",
+          "default": "auto",
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls which (if any) tool is called by the model",
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["none", "auto", "required"]
+            },
+            {
+              "type": "object",
+              "required": ["type", "function"],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["function"]
+                },
+                "function": {
+                  "type": "object",
+                  "required": ["name"],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Name of the function to force the model to use"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "parallel_tool_calls",
+          "type": "boolean",
+          "default": true,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Whether to allow multiple tool calls in parallel. Set to false when using strict schema validation"
+        },
+        {
+          "name": "response_format",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls the format of model responses",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text", "json_object", "json_schema"],
+              "description": "Response format type"
+            },
+            "schema": {
+              "type": "object",
+              "description": "JSON Schema for structured output validation"
+            }
+          }
+        },
+        {
+          "name": "seed",
           "type": "int",
-          "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image"
+          ],
+          "description": "Seed for deterministic sampling"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
+          "minimum": 0,
+          "maximum": 2,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image"
+          ],
+          "description": "What sampling temperature to use, between 0 and 2. Higher values make output more random, lower values more focused"
         },
         {
-          "name": "number_of_completions_to_generate [Optional]",
+          "name": "number_of_tokens_to_generate",
           "type": "int",
+          "default": 1000,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image"
+          ],
+          "description": "Maximum number of tokens to generate"
+        },
+        {
+          "name": "user_defined_tool_definition_function_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image"
+          ],
+          "description": "Optional user-defined function code that can be validated, then used as a custom tool."
+        },
+        {
+          "name": "presence_penalty",
+          "type": "float",
+          "default": 0,
+          "minimum": -2.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far"
+        },
+        {
+          "name": "frequency_penalty",
+          "type": "float",
+          "default": 0,
+          "minimum": -2.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency"
+        },
+        {
+          "name": "logit_bias",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Modify the likelihood of specified tokens appearing in the completion",
+          "additionalProperties": {
+            "type": "number",
+            "minimum": -100,
+            "maximum": 100
+          }
+        },
+        {
+          "name": "top_p",
+          "type": "float",
           "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
+          "minimum": 0,
+          "maximum": 1,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Alternative to temperature for nucleus sampling. Top-p probability mass to consider"
+        },
+        {
+          "name": "stop",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 4,
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Up to 4 sequences where the API will stop generating tokens"
+        },
+        {
+          "name": "logprobs",
+          "type": "boolean",
+          "default": false,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Whether to return log probabilities of the output tokens"
+        },
+        {
+          "name": "top_logprobs",
+          "type": "int",
+          "default": null,
+          "minimum": 0,
+          "maximum": 20,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Number of most likely tokens to return with probabilities (0-20). Requires logprobs=true"
         }
       ],
       "credit_costs": {
@@ -614,7 +1299,7 @@
     {
       "model_name": "openai-gpt-4o-vision",
       "model_url": "",
-      "description": "GPT-4o is OpenAI's most advanced multimodal model that\u2019s faster and cheaper than GPT-4 Turbo with stronger vision capabilities. The model has 128K context and an October 2023 knowledge cutoff.",
+      "description": "Vision-specialized variant of GPT-4o, optimized for analyzing images with strong multimodal reasoning capabilities.",
       "supported_inference_type_strings": ["ask_question_about_an_image"],
       "input_fields": [
         {
@@ -637,25 +1322,49 @@
       ],
       "model_parameters": [
         {
-          "name": "number_of_tokens_to_generate",
+          "name": "response_format",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image"
+          ],
+          "description": "Controls the format of model responses",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text", "json_object"],
+              "description": "Response format type"
+            }
+          }
+        },
+        {
+          "name": "seed",
           "type": "int",
-          "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image"
+          ],
+          "description": "Seed for deterministic sampling"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
+          "minimum": 0,
+          "maximum": 2,
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image"
+          ],
+          "description": "What sampling temperature to use. Higher values make output more random, lower values more focused"
         },
         {
-          "name": "number_of_completions_to_generate [Optional]",
+          "name": "number_of_tokens_to_generate",
           "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
+          "default": 300,
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image"
+          ],
+          "description": "Maximum number of tokens to generate in response"
         }
       ],
       "credit_costs": {
@@ -663,15 +1372,18 @@
       }
     },
     {
-      "model_name": "openai-gpt-4-turbo",
+      "model_name": "openai-gpt-4o-mini",
       "model_url": "",
-      "description": "GPT-4 Turbo is offered at 128K context with an April 2023 knowledge cutoff and basic support for vision.",
-      "supported_inference_type_strings": ["text_completion"],
+      "description": "Cost-efficient small model that's smarter and cheaper than GPT-3.5 Turbo, with vision capabilities. Features full multimodal capabilities like GPT-4o at lower cost.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "ask_question_about_an_image"
+      ],
       "input_fields": [
         {
           "name": "input_prompt",
           "file_type": "text",
-          "optional": true
+          "optional": false
         }
       ],
       "output_fields": [
@@ -683,25 +1395,67 @@
       ],
       "model_parameters": [
         {
+          "name": "system_message",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "System message to set context and behavior for the model"
+        },
+        {
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
+          "inference_types_parameter_applies_to": "['text_completion', 'ask_question_about_an_image']",
+          "description": "The maximum number of tokens to generate"
+        },
+        {
+          "name": "user_defined_tool_definition_function_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image"
+          ],
+          "description": "Optional user-defined function code that can be validated, then used as a custom tool."
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
+          "minimum": 0,
+          "maximum": 2,
+          "inference_types_parameter_applies_to": "['text_completion', 'ask_question_about_an_image']",
+          "description": "What sampling temperature to use. Higher values make output more random, lower values more focused"
         },
         {
-          "name": "number_of_completions_to_generate [Optional]",
-          "type": "int",
-          "default": 1,
+          "name": "response_format",
+          "type": "string",
+          "default": "text",
+          "options": ["text", "json"],
           "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
+          "description": "Format for model responses. Use 'json' to force JSON output"
+        },
+        {
+          "name": "tools",
+          "type": "array",
+          "default": null,
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "List of function definitions that the model may call"
+        },
+        {
+          "name": "tool_choice",
+          "type": "string",
+          "default": "none",
+          "options": ["none", "auto", "required"],
+          "inference_types_parameter_applies_to": "['text_completion']",
+          "description": "Controls when the model is allowed to call functions"
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "default": null,
+          "inference_types_parameter_applies_to": "['text_completion', 'ask_question_about_an_image']",
+          "description": "Seed for deterministic sampling"
         }
       ],
       "credit_costs": {
@@ -709,9 +1463,400 @@
       }
     },
     {
-      "model_name": "openai-text-embedding-ada-002",
+      "model_name": "openai-o1",
       "model_url": "",
-      "description": "OpenAI's text embedding model. Provides high-quality embeddings for semantic search and clustering tasks.",
+      "description": "Most powerful reasoning model with 200K context, supporting tools, Structured Outputs, and vision. October 2023 knowledge cutoff. Specialized for complex reasoning tasks.",
+      "supported_inference_type_strings": [
+        "text_completion",
+        "ask_question_about_an_image"
+      ],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "tools",
+          "type": "array",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Array of functions the model may call",
+          "items": {
+            "type": "object",
+            "required": ["type", "function"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["function"],
+                "description": "Type of tool - currently only 'function' is supported"
+              },
+              "function": {
+                "type": "object",
+                "required": ["name", "parameters"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Name of the function to be called"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Description of when the function should be used"
+                  },
+                  "parameters": {
+                    "type": "object",
+                    "description": "JSON Schema defining the function parameters",
+                    "required": ["type", "properties"],
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["object"],
+                        "description": "Must be 'object' for function parameters"
+                      },
+                      "properties": {
+                        "type": "object",
+                        "description": "Function parameters schema"
+                      },
+                      "required": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Array of required parameter names"
+                      }
+                    }
+                  },
+                  "strict": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable Structured Outputs for strict JSON schema validation"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "tool_choice",
+          "type": "object",
+          "default": "auto",
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls which (if any) tool is called by the model",
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["none", "auto", "required"]
+            },
+            {
+              "type": "object",
+              "required": ["type", "function"],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["function"]
+                },
+                "function": {
+                  "type": "object",
+                  "required": ["name"],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Name of the function to force the model to use"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "parallel_tool_calls",
+          "type": "boolean",
+          "default": true,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Whether to allow multiple tool calls in parallel. Set to false when using strict schema validation"
+        },
+        {
+          "name": "response_format",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls the format of model responses",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text", "json_object", "json_schema"],
+              "description": "Response format type"
+            },
+            "schema": {
+              "type": "object",
+              "description": "JSON Schema for structured output validation"
+            }
+          }
+        },
+        {
+          "name": "reasoning_effort",
+          "type": "string",
+          "default": "medium",
+          "enum": ["low", "medium", "high"],
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls effort spent on reasoning. Lower values are faster but less thorough"
+        },
+        {
+          "name": "seed",
+          "type": "int",
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image"
+          ],
+          "description": "Seed for deterministic sampling"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 2,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image"
+          ],
+          "description": "What sampling temperature to use, between 0 and 2. Higher values make output more random, lower values more focused"
+        },
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image"
+          ],
+          "description": "Maximum number of tokens to generate"
+        },
+        {
+          "name": "user_defined_tool_definition_function_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image"
+          ],
+          "description": "Optional user-defined function code that can be validated, then used as a custom tool."
+        },
+        {
+          "name": "presence_penalty",
+          "type": "float",
+          "default": 0,
+          "minimum": -2.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far"
+        },
+        {
+          "name": "frequency_penalty",
+          "type": "float",
+          "default": 0,
+          "minimum": -2.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "openai-o1-mini",
+      "model_url": "",
+      "description": "Small reasoning model optimized for coding and math. Faster than o1 with specialized capabilities for technical tasks.",
+      "supported_inference_type_strings": ["text_completion"],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "tools",
+          "type": "array",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Array of functions the model may call",
+          "items": {
+            "type": "object",
+            "required": ["type", "function"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["function"],
+                "description": "Type of tool - currently only 'function' is supported"
+              },
+              "function": {
+                "type": "object",
+                "required": ["name", "parameters"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Name of the function to be called"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Description of when the function should be used"
+                  },
+                  "parameters": {
+                    "type": "object",
+                    "description": "JSON Schema defining the function parameters",
+                    "required": ["type", "properties"],
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["object"],
+                        "description": "Must be 'object' for function parameters"
+                      },
+                      "properties": {
+                        "type": "object",
+                        "description": "Function parameters schema"
+                      },
+                      "required": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "description": "Array of required parameter names"
+                      }
+                    }
+                  },
+                  "strict": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Enable Structured Outputs for strict JSON schema validation"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "tool_choice",
+          "type": "object",
+          "default": "auto",
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls which (if any) tool is called by the model",
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": ["none", "auto", "required"]
+            },
+            {
+              "type": "object",
+              "required": ["type", "function"],
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": ["function"]
+                },
+                "function": {
+                  "type": "object",
+                  "required": ["name"],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Name of the function to force the model to use"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "parallel_tool_calls",
+          "type": "boolean",
+          "default": true,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Whether to allow multiple tool calls in parallel. Set to false when using strict schema validation"
+        },
+        {
+          "name": "response_format",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls the format of model responses",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text", "json_object", "json_schema"],
+              "description": "Response format type"
+            },
+            "schema": {
+              "type": "object",
+              "description": "JSON Schema for structured output validation"
+            }
+          }
+        },
+        {
+          "name": "reasoning_effort",
+          "type": "string",
+          "default": "medium",
+          "enum": ["low", "medium", "high"],
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls effort spent on reasoning. Lower values are faster but less thorough"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 2,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "What sampling temperature to use, between 0 and 2. Higher values make output more random, lower values more focused"
+        },
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Maximum number of tokens to generate"
+        },
+        {
+          "name": "user_defined_tool_definition_function_string",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "ask_question_about_an_image"
+          ],
+          "description": "Optional user-defined function code that can be validated, then used as a custom tool."
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "openai-text-embedding-3-large",
+      "model_url": "",
+      "description": "Most capable embedding model for maximum performance. Best choice for tasks requiring highest accuracy. 3072 dimensions by default.",
       "supported_inference_type_strings": ["embedding"],
       "input_fields": [
         {
@@ -727,7 +1872,100 @@
           "optional": false
         }
       ],
-      "model_parameters": [],
+      "model_parameters": [
+        {
+          "name": "encoding_format",
+          "type": "string",
+          "default": "float",
+          "options": ["float", "base64"],
+          "inference_types_parameter_applies_to": ["embedding"],
+          "description": "The format to return the embeddings in"
+        },
+        {
+          "name": "dimensions",
+          "type": "int",
+          "default": 3072,
+          "minimum": 1,
+          "maximum": 3072,
+          "inference_types_parameter_applies_to": ["embedding"],
+          "description": "The number of dimensions the resulting output embeddings should have"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "openai-text-embedding-3-small",
+      "model_url": "",
+      "description": "Efficient embedding model for search, clustering, and classification tasks. Best price-performance ratio. 1536 dimensions by default.",
+      "supported_inference_type_strings": ["embedding"],
+      "input_fields": [
+        {
+          "name": "input_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "embedding",
+          "file_type": "embedding",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "encoding_format",
+          "type": "string",
+          "default": "float",
+          "options": ["float", "base64"],
+          "inference_types_parameter_applies_to": ["embedding"],
+          "description": "The format to return the embeddings in"
+        },
+        {
+          "name": "dimensions",
+          "type": "int",
+          "default": 1536,
+          "minimum": 1,
+          "maximum": 1536,
+          "inference_types_parameter_applies_to": ["embedding"],
+          "description": "The number of dimensions the resulting output embeddings should have"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "openai-text-embedding-ada-002",
+      "model_url": "",
+      "description": "Legacy embedding model. 1536 dimensions. Fixed size only. Recommended to use text-embedding-3-small instead for better performance.",
+      "supported_inference_type_strings": ["embedding"],
+      "input_fields": [
+        {
+          "name": "input_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "embedding",
+          "file_type": "embedding",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "encoding_format",
+          "type": "string",
+          "default": "float",
+          "options": ["float", "base64"],
+          "inference_types_parameter_applies_to": ["embedding"],
+          "description": "The format to return the embeddings in"
+        }
+      ],
       "credit_costs": {
         "api_based_pricing": 1
       }
@@ -1009,14 +2247,15 @@
       }
     },
     {
-      "model_name": "mistralapi-mistral-small-latest",
+      "model_name": "mistralapi-mistral-large-latest",
       "model_url": "",
-      "description": "Mistral small is a powerful language model developed by Mistral AI.",
+      "description": "Most powerful Mistral model optimized for complex tasks. Features 32K context window, JSON output, function calling, tools, embeddings and advanced parameter controls.",
       "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
           "file_type": "text",
+          "inference_types_parameter_applies_to": ["text_completion"],
           "optional": false
         }
       ],
@@ -1029,25 +2268,163 @@
       ],
       "model_parameters": [
         {
+          "name": "system_message",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Optional system message to set context and behavior"
+        },
+        {
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
+          "minimum": 1,
+          "maximum": 32768,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
+          "minimum": 0.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls randomness. Higher values make output more random, lower values more deterministic"
         },
         {
-          "name": "number_of_completions_to_generate [Optional]",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
+          "name": "top_p",
+          "type": "float",
+          "default": 1.0,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Nucleus sampling parameter. Lower values lead to more focused output"
+        },
+        {
+          "name": "presence_penalty",
+          "type": "float",
+          "default": 0.0,
+          "minimum": -2.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Penalizes new tokens based on presence in text"
+        },
+        {
+          "name": "frequency_penalty",
+          "type": "float",
+          "default": 0.0,
+          "minimum": -2.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Penalizes new tokens based on their frequency"
+        },
+        {
+          "name": "seed",
+          "type": "integer",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Random seed for reproducible outputs"
+        },
+        {
+          "name": "safe_prompt",
+          "type": "boolean",
+          "default": false,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Enable content filtering"
+        },
+        {
+          "name": "response_format",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls response format",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text", "json_object"],
+              "description": "Response format type"
+            }
+          }
+        },
+        {
+          "name": "tools",
+          "type": "array",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "List of functions the model may call",
+          "items": {
+            "type": "object",
+            "required": ["type", "function"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["function"],
+                "description": "Tool type - only 'function' supported"
+              },
+              "function": {
+                "type": "object",
+                "required": ["name", "parameters"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Function name"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Function description"
+                  },
+                  "parameters": {
+                    "type": "object",
+                    "description": "JSON Schema for parameters"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "tool_choice",
+          "type": "string",
+          "default": "auto",
+          "options": ["auto", "any", "none"],
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls tool usage"
+        },
+        {
+          "name": "parallel_tool_calls",
+          "type": "boolean",
+          "default": true,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Allow parallel function calls"
+        },
+        {
+          "name": "logprobs",
+          "type": "boolean",
+          "default": false,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Return log probabilities of tokens"
+        },
+        {
+          "name": "top_logprobs",
+          "type": "integer",
+          "default": null,
+          "minimum": 0,
+          "maximum": 20,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Number of most likely tokens to return probabilities for"
+        },
+        {
+          "name": "request_timeout",
+          "type": "integer",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 300,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "embedding"
+          ],
+          "description": "Request timeout in seconds"
         }
       ],
       "credit_costs": {
@@ -1057,12 +2434,13 @@
     {
       "model_name": "mistralapi-mistral-medium-latest",
       "model_url": "",
-      "description": "Mistral medium is a powerful language model developed by Mistral AI.",
+      "description": "Balanced Mistral model with improved cost-performance ratio. Features 32K context window, JSON output, function calling, and efficient inference capabilities.",
       "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
           "file_type": "text",
+          "inference_types_parameter_applies_to": ["text_completion"],
           "optional": false
         }
       ],
@@ -1075,25 +2453,163 @@
       ],
       "model_parameters": [
         {
+          "name": "system_message",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Optional system message to set context and behavior"
+        },
+        {
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
+          "minimum": 1,
+          "maximum": 32768,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Maximum number of tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
+          "minimum": 0.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls randomness. Higher values make output more random, lower values more deterministic"
         },
         {
-          "name": "number_of_completions_to_generate [Optional]",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
+          "name": "top_p",
+          "type": "float",
+          "default": 1.0,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Nucleus sampling parameter. Lower values lead to more focused output"
+        },
+        {
+          "name": "presence_penalty",
+          "type": "float",
+          "default": 0.0,
+          "minimum": -2.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Penalizes new tokens based on presence in text"
+        },
+        {
+          "name": "frequency_penalty",
+          "type": "float",
+          "default": 0.0,
+          "minimum": -2.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Penalizes new tokens based on their frequency"
+        },
+        {
+          "name": "seed",
+          "type": "integer",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Random seed for reproducible outputs"
+        },
+        {
+          "name": "safe_prompt",
+          "type": "boolean",
+          "default": false,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Enable content filtering"
+        },
+        {
+          "name": "response_format",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls response format",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text", "json_object"],
+              "description": "Response format type"
+            }
+          }
+        },
+        {
+          "name": "tools",
+          "type": "array",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "List of functions the model may call",
+          "items": {
+            "type": "object",
+            "required": ["type", "function"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["function"],
+                "description": "Tool type - only 'function' supported"
+              },
+              "function": {
+                "type": "object",
+                "required": ["name", "parameters"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Function name"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Function description"
+                  },
+                  "parameters": {
+                    "type": "object",
+                    "description": "JSON Schema for parameters"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "tool_choice",
+          "type": "string",
+          "default": "auto",
+          "options": ["auto", "any", "none"],
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls tool usage"
+        },
+        {
+          "name": "parallel_tool_calls",
+          "type": "boolean",
+          "default": true,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Allow parallel function calls"
+        },
+        {
+          "name": "logprobs",
+          "type": "boolean",
+          "default": false,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Return log probabilities of tokens"
+        },
+        {
+          "name": "top_logprobs",
+          "type": "integer",
+          "default": null,
+          "minimum": 0,
+          "maximum": 20,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Number of most likely tokens to return probabilities for"
+        },
+        {
+          "name": "request_timeout",
+          "type": "integer",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 300,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "embedding"
+          ],
+          "description": "Request timeout in seconds"
         }
       ],
       "credit_costs": {
@@ -1101,14 +2617,219 @@
       }
     },
     {
-      "model_name": "mistralapi-mistral-large-latest",
+      "model_name": "mistralapi-mistral-small-latest",
       "model_url": "",
-      "description": "Mistral large is a powerful language model developed by Mistral AI.",
+      "description": "Fast, efficient Mistral model optimized for cost-effective inference. Features 32K context window, JSON output, function calling, and rapid response times.",
       "supported_inference_type_strings": ["text_completion", "embedding"],
       "input_fields": [
         {
           "name": "input_prompt",
           "file_type": "text",
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "system_message",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Optional system message to set context and behavior"
+        },
+        {
+          "name": "number_of_tokens_to_generate",
+          "type": "int",
+          "default": 1000,
+          "minimum": 1,
+          "maximum": 32768,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Maximum number of tokens to generate"
+        },
+        {
+          "name": "temperature",
+          "type": "float",
+          "default": 0.7,
+          "minimum": 0.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls randomness. Higher values make output more random, lower values more deterministic"
+        },
+        {
+          "name": "top_p",
+          "type": "float",
+          "default": 1.0,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Nucleus sampling parameter. Lower values lead to more focused output"
+        },
+        {
+          "name": "presence_penalty",
+          "type": "float",
+          "default": 0.0,
+          "minimum": -2.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Penalizes new tokens based on presence in text"
+        },
+        {
+          "name": "frequency_penalty",
+          "type": "float",
+          "default": 0.0,
+          "minimum": -2.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Penalizes new tokens based on their frequency"
+        },
+        {
+          "name": "seed",
+          "type": "integer",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Random seed for reproducible outputs"
+        },
+        {
+          "name": "safe_prompt",
+          "type": "boolean",
+          "default": false,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Enable content filtering"
+        },
+        {
+          "name": "response_format",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls response format",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text", "json_object"],
+              "description": "Response format type"
+            }
+          }
+        },
+        {
+          "name": "tools",
+          "type": "array",
+          "default": null,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "List of functions the model may call",
+          "items": {
+            "type": "object",
+            "required": ["type", "function"],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["function"],
+                "description": "Tool type - only 'function' supported"
+              },
+              "function": {
+                "type": "object",
+                "required": ["name", "parameters"],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Function name"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Function description"
+                  },
+                  "parameters": {
+                    "type": "object",
+                    "description": "JSON Schema for parameters"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "name": "tool_choice",
+          "type": "string",
+          "default": "auto",
+          "options": ["auto", "any", "none"],
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Controls tool usage"
+        },
+        {
+          "name": "parallel_tool_calls",
+          "type": "boolean",
+          "default": true,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Allow parallel function calls"
+        },
+        {
+          "name": "logprobs",
+          "type": "boolean",
+          "default": false,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Return log probabilities of tokens"
+        },
+        {
+          "name": "top_logprobs",
+          "type": "integer",
+          "default": null,
+          "minimum": 0,
+          "maximum": 20,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "Number of most likely tokens to return probabilities for"
+        },
+        {
+          "name": "request_timeout",
+          "type": "integer",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 300,
+          "inference_types_parameter_applies_to": [
+            "text_completion",
+            "embedding"
+          ],
+          "description": "Request timeout in seconds"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
+      "model_name": "mistralapi-pixtral-12b-2409",
+      "model_url": "",
+      "description": "Multimodal model combining advanced vision and language capabilities. Supports image analysis, OCR, chart interpretation, and multi-image comparison.",
+      "supported_inference_type_strings": [
+        "ask_question_about_an_image",
+        "text_completion"
+      ],
+      "input_fields": [
+        {
+          "name": "image",
+          "file_type": "base64",
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image"
+          ],
+          "optional": false,
+          "constraints": {
+            "max_file_size_mb": 10,
+            "max_dimension": 1024,
+            "supported_formats": ["png", "jpeg", "jpg", "webp", "gif"],
+            "max_images_per_request": 8
+          }
+        },
+        {
+          "name": "question",
+          "file_type": "text",
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image"
+          ],
           "optional": false
         }
       ],
@@ -1123,36 +2844,154 @@
         {
           "name": "number_of_tokens_to_generate",
           "type": "int",
-          "default": 1000,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The maximum number of tokens to generate [Optional]"
+          "default": 300,
+          "minimum": 1,
+          "maximum": 4096,
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image",
+            "text_completion"
+          ],
+          "description": "Maximum tokens to generate"
         },
         {
           "name": "temperature",
           "type": "float",
           "default": 0.7,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The temperature for sampling [Optional]"
+          "minimum": 0.0,
+          "maximum": 2.0,
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image",
+            "text_completion"
+          ],
+          "description": "Controls randomness in output"
         },
         {
-          "name": "number_of_completions_to_generate [Optional]",
-          "type": "int",
-          "default": 1,
-          "inference_types_parameter_applies_to": "['text_completion']",
-          "description": "The number of completions to generate"
+          "name": "response_format",
+          "type": "object",
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image",
+            "text_completion"
+          ],
+          "description": "Controls response format",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": ["text", "json_object"],
+              "description": "Response format type"
+            }
+          }
+        },
+        {
+          "name": "seed",
+          "type": "integer",
+          "default": null,
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image",
+            "text_completion"
+          ],
+          "description": "Random seed for reproducible outputs"
+        },
+        {
+          "name": "safe_prompt",
+          "type": "boolean",
+          "default": false,
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image",
+            "text_completion"
+          ],
+          "description": "Enable content filtering"
+        },
+        {
+          "name": "task_type",
+          "type": "string",
+          "default": "general",
+          "options": ["general", "ocr", "chart_analysis", "image_comparison"],
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image"
+          ],
+          "description": "Specify type of vision task"
+        },
+        {
+          "name": "request_timeout",
+          "type": "integer",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 300,
+          "inference_types_parameter_applies_to": [
+            "ask_question_about_an_image",
+            "text_completion"
+          ],
+          "description": "Request timeout in seconds"
         }
       ],
       "credit_costs": {
         "api_based_pricing": 1
       }
     },
+    {
+      "model_name": "mistralapi-mistral-embed",
+      "model_url": "",
+      "description": "State-of-the-art embedding model producing 1024-dimensional vectors. Optimized for semantic search, clustering, and similarity tasks.",
+      "supported_inference_type_strings": ["embedding"],
+      "input_fields": [
+        {
+          "name": "input_text",
+          "file_type": "text",
+          "optional": false,
+          "constraints": {
+            "max_length": 32768
+          }
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "embedding",
+          "file_type": "embedding",
+          "optional": false,
+          "properties": {
+            "dimensions": 1024
+          }
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "encoding_format",
+          "type": "string",
+          "default": "float",
+          "options": ["float", "base64"],
+          "inference_types_parameter_applies_to": ["embedding"],
+          "description": "Output encoding format"
+        },
+        {
+          "name": "batch_size",
+          "type": "integer",
+          "default": 32,
+          "minimum": 1,
+          "maximum": 2048,
+          "inference_types_parameter_applies_to": ["embedding"],
+          "description": "Number of texts to embed in parallel"
+        },
+        {
+          "name": "request_timeout",
+          "type": "integer",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 300,
+          "inference_types_parameter_applies_to": ["embedding"],
+          "description": "Request timeout in seconds"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+
     {
       "model_name": "stability-core",
       "model_url": "",
       "description": "Stable Image Core is the best quality achievable at high speed for text-to-image generation.",
-      "supported_inference_type_strings": [
-        "text_to_image"
-      ],
+      "supported_inference_type_strings": ["text_to_image"],
       "input_fields": [
         {
           "name": "prompt",
@@ -1212,9 +3051,7 @@
       "model_name": "stability-sd3-large",
       "model_url": "",
       "description": "Stable Diffusion 3 Large model for high-quality image generation.",
-      "supported_inference_type_strings": [
-        "text_to_image"
-      ],
+      "supported_inference_type_strings": ["text_to_image"],
       "input_fields": [
         {
           "name": "prompt",
@@ -1267,9 +3104,7 @@
       "model_name": "stability-conservative-upscale",
       "model_url": "",
       "description": "Conservative upscaling model that preserves image details.",
-      "supported_inference_type_strings": [
-        "conservative_upscale"
-      ],
+      "supported_inference_type_strings": ["conservative_upscale"],
       "input_fields": [
         {
           "name": "image",
@@ -1320,9 +3155,7 @@
       "model_name": "stability-creative-upscale",
       "model_url": "",
       "description": "Creative upscaling model that can enhance and add details to images.",
-      "supported_inference_type_strings": [
-        "creative_upscale"
-      ],
+      "supported_inference_type_strings": ["creative_upscale"],
       "input_fields": [
         {
           "name": "image",
@@ -1382,9 +3215,7 @@
       "model_name": "stability-sd3-medium",
       "model_url": "",
       "description": "Stable Diffusion 3 Medium model for balanced performance and quality in image generation.",
-      "supported_inference_type_strings": [
-        "text_to_image"
-      ],
+      "supported_inference_type_strings": ["text_to_image"],
       "input_fields": [
         {
           "name": "prompt",
@@ -1437,9 +3268,7 @@
       "model_name": "stability-sd3-large-turbo",
       "model_url": "",
       "description": "Stable Diffusion 3 Large Turbo model for faster inference with high-quality results.",
-      "supported_inference_type_strings": [
-        "text_to_image"
-      ],
+      "supported_inference_type_strings": ["text_to_image"],
       "input_fields": [
         {
           "name": "prompt",

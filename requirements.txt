@@ -15,9 +15,11 @@ mutagen
 pandas
 picologging
 pillow
+pip-review
 plotly
 plyvel
 psutil
+PyPDF2
 python-decouple
 python-Levenshtein
 pytz

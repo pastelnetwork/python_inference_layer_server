@@ -7,7 +7,6 @@ import os
 import random
 import traceback
 import fastapi
-import threading
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

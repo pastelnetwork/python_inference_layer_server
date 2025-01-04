@@ -22,6 +22,8 @@ import tempfile
 import warnings
 import pickle
 import pytz
+import PyPDF2
+from typing import Any
 from collections import defaultdict
 from collections.abc import Iterable
 from functools import wraps
@@ -43,8 +45,7 @@ from magika import Magika
 import tiktoken
 import anthropic
 from groq import AsyncGroq
-from mistralai.async_client import MistralAsyncClient
-from mistralai.models.chat_completion import ChatMessage
+from mistralai import Mistral
 from cryptography.fernet import Fernet
 from fuzzywuzzy import process
 from transformers import AutoTokenizer, GPT2TokenizerFast, WhisperTokenizer
@@ -75,7 +76,7 @@ pastel_signer = libpastelid.PastelSigner(pastel_keys_dir)
 encryption_key = None
 magika = Magika()
 
-SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "OPENAI_API_KEY", "CLAUDE3_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "STABILITY_API_KEY", "OPENROUTER_API_KEY"]
+SENSITIVE_ENV_FIELDS = ["LOCAL_PASTEL_ID_PASSPHRASE", "SWISS_ARMY_LLAMA_SECURITY_TOKEN", "OPENAI_API_KEY", "CLAUDE3_API_KEY", "GROQ_API_KEY", "MISTRAL_API_KEY", "STABILITY_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"]
 LOCAL_PASTEL_ID_PASSPHRASE = None
 SWISS_ARMY_LLAMA_SECURITY_TOKEN = None
 OPENAI_API_KEY = None
@@ -84,6 +85,10 @@ GROQ_API_KEY = None
 MISTRAL_API_KEY = None
 STABILITY_API_KEY = None
 OPENROUTER_API_KEY = None
+DEEPSEEK_API_KEY = None
+
+AVAILABLE_TOOLS: Dict[str, callable] = {} # Our global dictionary of available tools for use with OpenAI models
+USER_FUNCTION_SCHEMAS: Dict[str, dict] = {}  # new global or module-level dictionary
 
 def get_local_ip():
     hostname = socket.gethostname()
@@ -99,6 +104,7 @@ def get_env_value(key):
                     return line.split('=', 1)[1].strip() # Split on the first '=' to allow for '=' in the value
     except FileNotFoundError:
         print(f"Error: .env file at {env_file_path} not found.")
+    print(f"Warning: Key '{key}' not found in .env file.")
     return None
 
 def generate_or_load_encryption_key_sync():
@@ -146,10 +152,16 @@ def encrypt_sensitive_fields(key):
     logger.info(f"Updated {len(SENSITIVE_ENV_FIELDS)} sensitive fields in .env file with encrypted values!")
 
 def decrypt_sensitive_data(url_encoded_encrypted_data, encryption_key):
-    cipher_suite = Fernet(encryption_key)
-    encrypted_data = unquote_plus(url_encoded_encrypted_data)  # URL-decode first
-    decrypted_data = cipher_suite.decrypt(encrypted_data.encode()).decode()  # Ensure this is a bytes-like object
-    return decrypted_data
+    if url_encoded_encrypted_data is None:
+        raise ValueError("No encrypted data provided for decryption.")
+    try:
+        cipher_suite = Fernet(encryption_key)
+        encrypted_data = unquote_plus(url_encoded_encrypted_data)  # URL-decode first
+        decrypted_data = cipher_suite.decrypt(encrypted_data.encode()).decode()  # Ensure this is a bytes-like object
+        return decrypted_data
+    except Exception as e:
+        logger.error(f"Failed to decrypt data: {e}")
+        raise
 
 def encrypt_sensitive_data(data, encryption_key):
     cipher_suite = Fernet(encryption_key)
@@ -158,7 +170,7 @@ def encrypt_sensitive_data(data, encryption_key):
     return url_encoded_encrypted_data
 
 def decrypt_sensitive_fields():
-    global LOCAL_PASTEL_ID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, OPENAI_API_KEY, CLAUDE3_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, STABILITY_API_KEY, OPENROUTER_API_KEY, encryption_key
+    global LOCAL_PASTEL_ID_PASSPHRASE, SWISS_ARMY_LLAMA_SECURITY_TOKEN, OPENAI_API_KEY, CLAUDE3_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, STABILITY_API_KEY, OPENROUTER_API_KEY, DEEPSEEK_API_KEY, encryption_key
     LOCAL_PASTEL_ID_PASSPHRASE = decrypt_sensitive_data(get_env_value("LOCAL_PASTEL_ID_PASSPHRASE"), encryption_key)
     SWISS_ARMY_LLAMA_SECURITY_TOKEN = decrypt_sensitive_data(get_env_value("SWISS_ARMY_LLAMA_SECURITY_TOKEN"), encryption_key)
     OPENAI_API_KEY = decrypt_sensitive_data(get_env_value("OPENAI_API_KEY"), encryption_key)
@@ -167,6 +179,7 @@ def decrypt_sensitive_fields():
     MISTRAL_API_KEY = decrypt_sensitive_data(get_env_value("MISTRAL_API_KEY"), encryption_key)
     STABILITY_API_KEY = decrypt_sensitive_data(get_env_value("STABILITY_API_KEY"), encryption_key)
     OPENROUTER_API_KEY = decrypt_sensitive_data(get_env_value("OPENROUTER_API_KEY"), encryption_key)
+    DEEPSEEK_API_KEY = decrypt_sensitive_data(get_env_value("DEEPSEEK_API_KEY"), encryption_key)
         
 number_of_cpus = os.cpu_count()
 my_os = platform.system()
@@ -608,6 +621,10 @@ def compute_sha3_256_hexdigest(input_str: str):
 
 def compute_sha3_256_hexdigest_of_file(file_data: bytes):
     return hashlib.sha3_256(file_data).hexdigest()
+
+def compute_function_string_hash(fn_code: str) -> str:
+    """SHA3-256 hash of the code, for DB lookups."""
+    return hashlib.sha3_256(fn_code.encode("utf-8")).hexdigest()
 
 def remove_file(path: str):
     if os.path.exists(path):
@@ -4310,6 +4327,12 @@ async def get_inference_model_menu(use_verbose=0):
                     filtered_model_menu["models"].append(model)
                     if use_verbose:
                         logger.info(f"Added OpenRouter model: {model['model_name']} to the filtered model menu.")
+            elif model["model_name"].startswith("deepseek-"):
+                if DEEPSEEK_API_KEY and await is_api_key_valid("deepseek", api_key_tests):
+                    filtered_model_menu["models"].append(model)
+                    if use_verbose:
+                        logger.info(f"Added DeepSeek model: {model['model_name']} to the filtered model menu.")
+                        
             else:
                 # Models that don't require API keys can be automatically included
                 filtered_model_menu["models"].append(model)
@@ -4366,6 +4389,8 @@ async def run_api_key_test(api_name):
         return await test_claude_api_key()
     elif api_name == "openrouter":
         return await test_openrouter_api_key()    
+    elif api_name == "deepseek":
+        return await test_deepseek_api_key()
     else:
         return False
 
@@ -4448,18 +4473,23 @@ async def test_openrouter_api_key():
 
 async def test_mistral_api_key():
     try:
-        client = MistralAsyncClient(api_key=MISTRAL_API_KEY)
-        async_response = client.chat_stream(
+        client = Mistral(api_key=MISTRAL_API_KEY)
+        async_response = await client.chat.stream_async(
             model="mistral-small-latest",
-            messages=[ChatMessage(role="user", content="Test; just reply with the word yes if you're working!")],
+            messages=[
+                {
+                    "role": "user",
+                    "content": "Test; just reply with the word yes if you're working!"
+                }
+            ],
             max_tokens=10,
             temperature=0.7,
         )
         completion_text = ""
         async for chunk in async_response:
-            if chunk.choices[0].delta.content:
-                completion_text += chunk.choices[0].delta.content
-        logger.info(f"Mistral API test response: {completion_text}")                
+            if chunk.data.choices[0].delta.content:
+                completion_text += chunk.data.choices[0].delta.content
+        logger.info(f"Mistral API test response: {completion_text}")
         return len(completion_text) > 0
     except Exception as e:
         logger.warning(f"Mistral API key test failed: {str(e)}")
@@ -4505,6 +4535,25 @@ async def test_claude_api_key():
     except Exception as e:
         logger.warning(f"Claude API key test failed: {str(e)}")
         return False
+    
+async def test_deepseek_api_key():
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.deepseek.com/chat/completions",  # Note: no v1/ in the URL
+                headers={
+                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "deepseek-chat",  # Their API docs specify this exact name
+                    "messages": [{"role": "user", "content": "Test; just reply with the word yes if you're working!"}]
+                }
+            )
+            return response.status_code == 200
+    except Exception as e:
+        logger.warning(f"DeepSeek API key test failed: {str(e)}")
+        return False
 
 async def save_inference_api_usage_request(inference_request_model: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageRequest:
     async with db_code.Session() as db_session:
@@ -4526,7 +4575,12 @@ def get_tokenizer(model_name: str):
         "groq-mixtral": "EleutherAI/gpt-neox-20b",
         "groq-gemma": "google/flan-ul2",
         "bge-m3": "Shitao/bge-m3",
-        "mistralapi": "mistralai/Mistral-7B-Instruct-v0.2",
+        "deepseek-chat": "gpt2",
+        "mistralapi-mistral-small-latest": "mistralai/Mistral-7B-Instruct-v0.2",
+        "mistralapi-mistral-medium-latest": "mistralai/Mistral-7B-Instruct-v0.2",
+        "mistralapi-mistral-large-latest": "mistralai/Mistral-7B-Instruct-v0.2",
+        "mistralapi-mistral-embed": "sentence-transformers/all-MiniLM-L12-v2",
+        "mistralapi-pixtral-12b-2409": "Xenova/llava-v1.5-7b",        
         "stability": "openai/clip-vit-large-patch14",
         "Lexi-Llama-3-8B-Uncensored_Q5_K_M": "gradientai/Llama-3-70B-Instruct-Gradient-1048k",
         "Hermes-2-Pro-Llama-3-Instruct-Merged-DPO-Q4_K_M": "gradientai/Llama-3-70B-Instruct-Gradient-1048k",
@@ -4548,11 +4602,90 @@ def get_tokenizer(model_name: str):
     best_match = process.extractOne(model_name.lower(), model_to_tokenizer_mapping.keys())
     return model_to_tokenizer_mapping.get(best_match[0], get_fallback_tokenizer())  # Default to fallback tokenizer if no match found
 
+async def count_tokens_claude(model_name: str, input_data: Any) -> int:
+    """
+    Use Claude's token counting API to accurately count tokens for any input type
+    """
+    client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
+    # Convert input data into message format based on type
+    if isinstance(input_data, str):
+        messages = [{"role": "user", "content": input_data}]
+    elif isinstance(input_data, dict) and input_data.get('document'):
+        # Handle PDF input
+        messages = [{
+            "role": "user",
+            "content": [{
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": input_data['document']
+                }
+            }]
+        }]
+    elif isinstance(input_data, dict) and input_data.get('image'):
+        # Handle image input
+        messages = [{
+            "role": "user", 
+            "content": [{
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg", # Adjust based on actual type
+                    "data": input_data['image']
+                }
+            }]
+        }]
+    else:
+        messages = [{"role": "user", "content": str(input_data)}]
+    try:
+        response = await client.messages.count_tokens(
+            model=get_claude3_model_name(model_name),
+            messages=messages
+        )
+        return response.input_tokens
+    except Exception as e:
+        logger.warning(f"Claude token counting API failed: {e}")
+        # Fall back to approximate counting
+        return super_approximate_token_count(input_data)
+    
+def super_approximate_token_count(input_data: Any) -> int:
+    """
+    Very rough approximation used only as fallback if Anthropic token counting API fails
+    """
+    if isinstance(input_data, str):
+        return len(input_data.split()) * 1.3
+    elif isinstance(input_data, dict):
+        if input_data.get('document'):
+            # Rough PDF estimate
+            return 2000  
+        elif input_data.get('image'):
+            # Rough image estimate
+            return 1500
+    return 500 # Default fallback
+    
 def count_tokens(model_name: str, input_data: str) -> int:
     tokenizer_name = get_tokenizer(model_name)
     logger.info(f"Selected tokenizer {tokenizer_name} for model {model_name}")
     try:
-        if 'claude' in model_name.lower():
+        if "mistralapi-pixtral" in model_name.lower():
+            input_data_dict = json.loads(input_data)
+            image_data_binary = base64.b64decode(input_data_dict["image"])
+            question = input_data_dict["question"]
+            # Calculate image tokens
+            image_tokens, _ = estimate_pixtral_image_tokens(image_data_binary)
+            # Calculate question tokens using text tokenizer
+            if 'openai' in tokenizer_name.lower():
+                encoding = tiktoken.get_encoding(tokenizer_name)
+                question_tokens = len(encoding.encode(question))
+            else:
+                tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+                if hasattr(tokenizer, "encode"):
+                    question_tokens = len(tokenizer.encode(question))
+                else:
+                    question_tokens = len(tokenizer.convert_tokens_to_ids(tokenizer.tokenize(question)))
+            return image_tokens + question_tokens
+        elif 'claude' in model_name.lower():
             tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_name)
         elif 'whisper' in model_name.lower():
             tokenizer = WhisperTokenizer.from_pretrained(tokenizer_name)
@@ -4585,35 +4718,118 @@ def count_tokens(model_name: str, input_data: str) -> int:
             else:
                 input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
         return len(input_tokens)
+    
+def estimate_pixtral_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[int, int]]:
+    try:
+        image = Image.open(io.BytesIO(image_data_binary))
+        width, height = image.size
+        # Apply Pixtral's auto-resizing logic
+        max_dimension = 1024
+        if width > max_dimension or height > max_dimension:
+            aspect_ratio = width / height
+            if width > height:
+                new_width = max_dimension
+                new_height = int(max_dimension / aspect_ratio)
+            else:
+                new_height = max_dimension
+                new_width = int(max_dimension * aspect_ratio)
+            width, height = new_width, new_height
+        # Calculate 16x16 pixel patches (Pixtral's image tokenization approach)
+        patches_x = (width + 15) // 16  # Ceiling division
+        patches_y = (height + 15) // 16
+        total_patches = patches_x * patches_y
+        return total_patches, (width, height)
+    except Exception as e:
+        logger.error(f"Error estimating Pixtral image tokens: {str(e)}")
+        return 0, (0, 0)
 
 def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict) -> float:
     # Define the pricing data for each API service and model
     logger.info(f"Evaluating API cost for model: {model_name}")
     pricing_data = {
-        "claude-2.1": {"input_cost": 0.008, "output_cost": 0.024, "per_call_cost": 0.0128},
-        "claude3-haiku": {"input_cost": 0.00025, "output_cost": 0.00125, "per_call_cost": 0.0006},
-        "claude3.5-sonnet": {"input_cost": 0.0003, "output_cost": 0.0015, "per_call_cost": 0.0},
-        "claude3-opus": {"input_cost": 0.0015, "output_cost": 0.0075, "per_call_cost": 0.0},
-        "mistralapi-mistral-small-latest": {"input_cost": 0.002, "output_cost": 0.006, "per_call_cost": 0.0032},
-        "mistralapi-mistral-medium-latest": {"input_cost": 0.0027, "output_cost": 0.0081, "per_call_cost": 0},
-        "mistralapi-mistral-large-latest": {"input_cost": 0.008, "output_cost": 0.024, "per_call_cost": 0.0128},
-        "mistralapi-mistral-7b": {"input_cost": 0.00025, "output_cost": 0.00025, "per_call_cost": 0},
-        "mistralapi-open-mistral-7b": {"input_cost": 0.00025, "output_cost": 0.00025, "per_call_cost": 0},
-        "mistralapi-open-mixtral-8x7b": {"input_cost": 0.0007, "output_cost": 0.0007, "per_call_cost": 0},
-        "mistralapi-mistral-embed": {"input_cost": 0.0001, "output_cost": 0, "per_call_cost": 0},
-        "openai-gpt-4o": {"input_cost": 0.005, "output_cost": 0.015, "per_call_cost": 0.0},
-        "openai-gpt-4o-2024-05-13": {"input_cost": 0.005, "output_cost": 0.015, "per_call_cost": 0.0},
+        "claude3.5-sonnet": {
+            "input_cost": 0.003,           # Base input cost ($3.00 per million tokens)
+            "input_cost_cached": 0.0003,   # Cache hit cost ($0.30 per million tokens - 90% discount)
+            "input_cost_write": 0.00375,   # Cache write cost ($3.75 per million tokens - 25% premium)
+            "output_cost": 0.015,          # Output cost ($15.00 per million tokens)
+            "per_call_cost": 0.0
+        },
+        "claude3.5-haiku": {
+            "input_cost": 0.0008,          # Base input cost ($0.80 per million tokens)
+            "input_cost_cached": 0.00008,  # Cache hit cost ($0.08 per million tokens)
+            "input_cost_write": 0.001,     # Cache write cost ($1.00 per million tokens)
+            "output_cost": 0.004,          # Output cost ($4.00 per million tokens)
+            "per_call_cost": 0.0
+        },
+        "claude3-opus": {
+            "input_cost": 0.015,           # Base input cost ($15.00 per million tokens)
+            "input_cost_cached": 0.0015,   # Cache hit cost ($1.50 per million tokens)
+            "input_cost_write": 0.01875,   # Cache write cost ($18.75 per million tokens)
+            "output_cost": 0.075,          # Output cost ($75.00 per million tokens)
+            "per_call_cost": 0.0
+        },
+        "mistralapi-mistral-small-latest": {
+            "input_cost": 0.002,
+            "output_cost": 0.006,
+            "per_call_cost": 0.0032
+        },
+        "mistralapi-mistral-medium-latest": {
+            "input_cost": 0.0027,
+            "output_cost": 0.0081,
+            "per_call_cost": 0.0
+        },
+        "mistralapi-mistral-large-latest": {
+            "input_cost": 0.008,
+            "output_cost": 0.024,
+            "per_call_cost": 0.0128
+        },
+        "mistralapi-mistral-embed": {
+            "input_cost": 0.0001,
+            "output_cost": 0.0,
+            "per_call_cost": 0.0
+        },
+        "mistralapi-pixtral-12b-2409": {
+            "input_cost": 0.008,
+            "output_cost": 0.024,
+            "image_cost": 0.004,
+            "per_call_cost": 0.0
+        },
+        "openai-gpt-4o": {
+            "input_cost": 0.0025,  # $2.50 per 1M tokens
+            "input_cost_cached": 0.00125,  # $1.25 per 1M cached tokens
+            "output_cost": 0.01,  # $10.00 per 1M tokens
+            "per_call_cost": 0.0
+        },
+        "openai-gpt-4o-mini": {
+            "input_cost": 0.00015,  # $0.15 per 1M tokens
+            "input_cost_cached": 0.000075,  # $0.075 per 1M cached tokens
+            "output_cost": 0.0006,  # $0.60 per 1M tokens
+            "per_call_cost": 0.0
+        },
+        "openai-o1": {
+            "input_cost": 0.015,  # $15 per 1M tokens
+            "input_cost_cached": 0.0075,  # $7.50 per 1M cached tokens
+            "output_cost": 0.06,  # $60 per 1M tokens (includes reasoning tokens)
+            "per_call_cost": 0.0
+        },
+        "openai-o1-mini": {
+            "input_cost": 0.003,  # $3 per 1M tokens
+            "input_cost_cached": 0.0015,  # $1.50 per 1M cached tokens
+            "output_cost": 0.012,  # $12 per 1M tokens (includes reasoning tokens)
+            "per_call_cost": 0.0
+        },
+        "openai-text-embedding-3-small": {
+            "input_cost": 0.00002,  # $0.02 per 1M tokens
+            "output_cost": 0.0,
+            "per_call_cost": 0.0
+        },
+        "openai-text-embedding-3-large": {
+            "input_cost": 0.00013,  # $0.13 per 1M tokens
+            "output_cost": 0.0,
+            "per_call_cost": 0.0
+        },
         "openai-gpt-4o-vision": {"input_cost": 0.005, "output_cost": 0.015, "per_call_cost": 0.0},
         "openai-gpt-4-turbo": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0.0},
-        "openai-gpt-4-turbo-2024-04-09": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0.0},
-        "openai-gpt-4": {"input_cost": 0.03, "output_cost": 0.06, "per_call_cost": 0.0},
-        "openai-gpt-4-32k": {"input_cost": 0.06, "output_cost": 0.12, "per_call_cost": 0.0},
-        "openai-gpt-3.5-turbo-0125": {"input_cost": 0.0005, "output_cost": 0.0015, "per_call_cost": 0.0},
-        "openai-gpt-3.5-turbo-instruct": {"input_cost": 0.0015, "output_cost": 0.002, "per_call_cost": 0.0},
-        "openai-gpt-3.5-turbo-16k": {"input_cost": 0.003, "output_cost": 0.004, "per_call_cost": 0.0},
-        "openai-gpt-4-0125-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0.0},
-        "openai-gpt-4-1106-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0.0},
-        "openai-gpt-4-vision-preview": {"input_cost": 0.01, "output_cost": 0.03, "per_call_cost": 0.0},
         "openai-text-embedding-ada-002": {"input_cost": 0.0004, "output_cost": 0.0, "per_call_cost": 0.0},
         "groq-llama3-70b-8192": {"input_cost": 0.0007, "output_cost": 0.0008, "per_call_cost": 0},
         "groq-llama3-8b-8192": {"input_cost": 0.0001, "output_cost": 0.0001, "per_call_cost": 0},
@@ -4640,6 +4856,12 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         "stability-style": {"credits_per_call": 4},
         "stability-video": {"credits_per_call": 20},
         "stability-fast-3d": {"credits_per_call": 2},
+        "deepseek-chat": {
+            "input_cost": 0.00027,        # $0.27 per million tokens for cache miss
+            "input_cost_cache_hit": 0.00007,  # $0.07 per million tokens for cache hit
+            "output_cost": 0.00110,       # $1.10 per million tokens
+            "per_call_cost": 0
+        },        
         "openrouter/auto": {"input_cost": 0.0005, "output_cost": 0.0015, "per_call_cost": 0},
         "openrouter/nousresearch/nous-capybara-7b:free": {"input_cost": 0, "output_cost": 0, "per_call_cost": 0},
         "openrouter/mistralai/mistral-7b-instruct:free": {"input_cost": 0, "output_cost": 0, "per_call_cost": 0},
@@ -4722,27 +4944,71 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
     }
     # Find the best match for the model name using fuzzy string matching
     best_match = process.extractOne(model_name.lower(), pricing_data.keys())
-    if best_match is None or best_match[1] < 60:  # Adjust the threshold as needed
+    if best_match is None or best_match[1] < 60:
         logger.warning(f"No pricing data found for model: {model_name}")
         return 0.0
     model_pricing = pricing_data[best_match[0]]
-    if model_name.startswith("stability-"):
-        # For Stability models, calculate the cost based on the credits per call
+    if "mistralapi-pixtral" in model_name.lower():
+        try:
+            input_data_dict = json.loads(input_data)
+            image_data_binary = base64.b64decode(input_data_dict["image"])
+            question = input_data_dict["question"]
+            # Calculate image costs
+            image_tokens, _ = estimate_pixtral_image_tokens(image_data_binary)
+            image_cost = float(model_pricing["image_cost"]) * float(image_tokens)
+            # Calculate text costs
+            question_tokens = count_tokens(model_name, question)
+            input_cost = float(model_pricing["input_cost"]) * float(question_tokens) / 1000.0
+            # Calculate output costs
+            output_tokens = int(model_parameters.get("number_of_tokens_to_generate", 300))
+            output_cost = float(model_pricing["output_cost"]) * float(output_tokens) / 1000.0
+            estimated_cost = image_cost + input_cost + output_cost
+        except Exception as e:
+            logger.error(f"Error calculating Pixtral cost: {str(e)}")
+            return 0.0
+    elif "mistralapi-mistral-embed" in model_name.lower():
+        input_tokens = count_tokens(model_name, input_data)
+        estimated_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
+    elif model_name.startswith("mistralapi-"):
+        input_tokens = count_tokens(model_name, input_data)
+        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-        credits_cost = model_pricing["credits_per_call"] * number_of_completions_to_generate
-        estimated_cost = credits_cost * 10 / 1000  # Convert credits to dollars ($10 per 1,000 credits)
-    elif model_name.endswith("4o-vision"):
-        if input_data is None:
-            logger.error("Input data is empty!")
+        input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
+        output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
+        per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
+        estimated_cost = input_cost + output_cost + per_call_cost
+    elif model_name.startswith("openai-gpt-4o") or model_name.startswith("openai-o1"):
+        input_tokens = count_tokens(model_name, input_data)
+        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
+        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+        cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
+        cache_miss_tokens = input_tokens - cache_hit_tokens
+        input_cost = (
+            float(model_pricing["input_cost"]) * float(cache_miss_tokens) +
+            float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)
+        ) / 1000.0
+        reasoning_effort_multiplier = 1.0
+        if model_name.startswith("openai-o1"):
+            reasoning_effort = model_parameters.get("reasoning_effort", "medium")
+            reasoning_effort_multipliers = {
+                "low": 0.7,
+                "medium": 1.0,
+                "high": 1.3
+            }
+        reasoning_effort_multiplier = reasoning_effort_multipliers.get(reasoning_effort, 1.0)
+        output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) * reasoning_effort_multiplier / 1000.0
+        per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
+        estimated_cost = input_cost + output_cost + per_call_cost
+    elif model_name.startswith("openai-gpt-4o-vision"):
         input_data_dict = json.loads(input_data)
-        image_data_binary = base64.b64decode(input_data_dict["image"]) # Decode image data and question from input_data
+        image_data_binary = base64.b64decode(input_data_dict["image"])
         question = input_data_dict["question"]
-        # Calculate image resolution
+        # Calculate image resolution and tokens
         image = Image.open(io.BytesIO(image_data_binary))
         width, height = image.size
-        image_file_size_in_mb = len(image_data_binary) / (1024 * 1024)  # Calculate image file size in MB
+        image_file_size_in_mb = len(image_data_binary) / (1024 * 1024)
         logger.info(f"Submitted image file is {image_file_size_in_mb:.2f}MB and has resolution of {width} x {height}")
-        # Resize logic to fit the larger dimension to 1286 pixels while maintaining aspect ratio
+        # Resize logic to fit the larger dimension to 1286 pixels
         target_larger_dimension = 1286
         aspect_ratio = width / height
         if width > height:
@@ -4752,35 +5018,113 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
             resized_height = target_larger_dimension
             resized_width = int(target_larger_dimension * aspect_ratio)
         logger.info(f"Image will be resized automatically by OpenAI to a resolution of {resized_width} x {resized_height}")
-        # Calculate number of tiles and tokens
-        tiles_x = -(-resized_width // 512)
+        # Calculate visual tokens
+        tiles_x = -(-resized_width // 512)  # Ceiling division
         tiles_y = -(-resized_height // 512)
         total_tiles = tiles_x * tiles_y
         base_tokens = 85
         tile_tokens = 170 * total_tiles
         total_tokens = base_tokens + tile_tokens
-        # Count tokens in the question
+        # Add question tokens
         question_tokens = count_tokens(model_name, question)
-        input_data_tokens = total_tokens + question_tokens
-        logger.info(f"Total input data tokens: {input_data_tokens}")
-        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
+        input_tokens = total_tokens + question_tokens
+        input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
+        output_tokens = int(model_parameters.get("number_of_tokens_to_generate", 300))
+        output_cost = float(model_pricing["output_cost"]) * float(output_tokens) / 1000.0
+        estimated_cost = input_cost + output_cost
+    elif model_name.startswith("openai-text-embedding"):
+        input_tokens = count_tokens(model_name, input_data)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-        input_cost = float(model_pricing["input_cost"]) * float(input_data_tokens) / 1000.0
+        input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
+        estimated_cost = input_cost * number_of_completions_to_generate
+    elif model_name.startswith("claude3"):
+        try:
+            # Determine input type and handle accordingly
+            if isinstance(input_data, dict) and "image" in input_data:
+                # Handle image input
+                image_data_binary = base64.b64decode(input_data["image"])
+                image = Image.open(io.BytesIO(image_data_binary))
+                width, height = image.size
+                
+                # Calculate image tokens using Claude's formula
+                # Approximately 750 pixels per token
+                image_tokens = (width * height) // 750
+                question_tokens = count_tokens(model_name, input_data.get("question", ""))
+                input_tokens = image_tokens + question_tokens
+                
+            elif isinstance(input_data, dict) and "document" in input_data:
+                # Handle PDF input - estimate ~1500-3000 tokens per page
+                pdf_data = base64.b64decode(input_data["document"])
+                with io.BytesIO(pdf_data) as pdf_file:
+                    pdf_reader = PyPDF2.PdfReader(pdf_file)
+                    num_pages = len(pdf_reader.pages)
+                    # Conservative estimate of 2000 tokens per page
+                    input_tokens = num_pages * 2000
+                    if "query" in input_data:
+                        query_tokens = count_tokens(model_name, input_data["query"])
+                        input_tokens += query_tokens
+            else:
+                # Handle regular text input
+                input_tokens = count_tokens(model_name, input_data)
+
+            # Get cache-related parameters
+            cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
+            cache_miss_tokens = input_tokens - cache_hit_tokens
+            
+            # Calculate input costs based on caching
+            input_cost = (
+                float(model_pricing["input_cost_write"]) * float(cache_miss_tokens) +  # New tokens that need caching
+                float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)    # Already cached tokens
+            ) / 1000.0
+
+            # Calculate output costs
+            number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
+            output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
+            
+            # Add system prompt token costs if applicable
+            if model_parameters.get("system_prompt"):
+                system_tokens = count_tokens(model_name, model_parameters["system_prompt"])
+                input_cost += float(model_pricing["input_cost"]) * float(system_tokens) / 1000.0
+                
+            estimated_cost = input_cost + output_cost
+            logger.info(f"Estimated Claude cost breakdown - Input: ${input_cost:.4f}, Output: ${output_cost:.4f}")
+            
+            return estimated_cost
+
+        except Exception as e:
+            logger.error(f"Error calculating Claude cost: {str(e)}")
+            traceback.print_exc()
+            return 0.0   
+    elif model_name.startswith("deepseek-"):
+        input_tokens = count_tokens(model_name, input_data)
+        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 4096)
+        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+        input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
         output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
         per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
         estimated_cost = input_cost + output_cost + per_call_cost
-    else:
-        # For other models, calculate the cost based on input/output tokens and per-call cost
-        input_data_tokens = count_tokens(model_name, input_data)
-        logger.info(f"Total input data tokens: {input_data_tokens}")
+    elif model_name.startswith("groq-"):
+        input_tokens = count_tokens(model_name, input_data)
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-        input_cost = float(model_pricing["input_cost"]) * float(input_data_tokens) / 1000.0
+        input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
+        output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
+        per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
+        estimated_cost = input_cost + output_cost + per_call_cost
+    elif model_name.startswith("stability-"):
+        credits_per_call = model_pricing.get("credits_per_call", 0)
+        estimated_cost = credits_per_call * number_of_completions_to_generate
+    else:
+        # Default cost calculation for other models
+        input_tokens = count_tokens(model_name, input_data)
+        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
+        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+        input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
         output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
         per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
         estimated_cost = input_cost + output_cost + per_call_cost
     logger.info(f"Estimated cost: ${estimated_cost:.4f}")
-    return estimated_cost
+    return estimated_cost            
 
 async def convert_document_to_sentences(file_content: bytes, tried_local=False) -> Dict:
     logger.info("Now calling Swiss Army Llama to convert document to sentences.")
@@ -5338,9 +5682,9 @@ async def save_inference_output_results(inference_request_id: str, inference_res
 
 def get_claude3_model_name(model_name: str) -> str:
     model_mapping = {
-        "claude3-haiku": "claude-3-haiku-20240307",
-        "claude3-opus": "claude-3-opus-20240229",
-        "claude3.5-sonnet": "claude-3-5-sonnet-20240620"
+        "claude3.5-haiku": "claude-3-5-haiku-latest",
+        "claude3-opus": "claude-3-opus-latest",
+        "claude3.5-sonnet": "claude-3-5-sonnet-latest"
     }
     return model_mapping.get(model_name, "")
 
@@ -5506,144 +5850,227 @@ async def _handle_creative_upscale_request(input_image, prompt, model_parameters
         else:
             logger.error(f"Error initiating creative upscale request: {response.text}")
             return None, None
-
-async def submit_inference_request_to_openai_api(inference_request):
+        
+async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Optional[Any], Optional[Dict]]:
     logger.info("Now accessing OpenAI API...")
-    if inference_request.model_inference_type_string == "text_completion":
+    model_name: str = inference_request.requested_model_canonical_string
+    inference_type: str = inference_request.model_inference_type_string
+    try:
         model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
-        input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+    except Exception as e:
+        logger.error(f"Could not decode model_parameters_json_b64: {e}")
+        return None, None
+    async def process_tool_calls(client: httpx.AsyncClient, tool_calls: List[dict], current_messages: List[dict], request_params: dict) -> dict:
+        updated_messages = current_messages.copy()
+        for call_obj in tool_calls:
+            tool_call_id = call_obj["id"]
+            fn_name = call_obj["function"]["name"]
+            try:
+                fn_args = json.loads(call_obj["function"].get("arguments", "{}"))
+            except json.JSONDecodeError:
+                fn_args = {}
+            if fn_name in AVAILABLE_TOOLS:
+                logger.info(f"Calling Python function: {fn_name} with {fn_args}")
+                tool_result = AVAILABLE_TOOLS[fn_name](**fn_args)
+                logger.info(f"Function '{fn_name}' returned: {tool_result}")
+            else:
+                tool_result = {"error": f"Unknown function '{fn_name}'", "arguments_received": fn_args}
+            updated_messages.append({"role": "assistant", "content": None, "tool_calls": [call_obj]})
+            updated_messages.append({"role": "tool", "content": json.dumps(tool_result), "tool_call_id": tool_call_id})
+        post_resp = await client.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}, json={"messages": updated_messages, **request_params})
+        return post_resp.json()
+    if inference_type == "text_completion":
+        try:
+            input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        except Exception as ex:
+            logger.error(f"Could not decode model_input_data_json_b64: {ex}")
+            return None, None
         num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
         output_results = []
         total_input_tokens = 0
         total_output_tokens = 0
-        openai_text_completion_response_timeout_seconds = 60
-        async with httpx.AsyncClient(timeout=openai_text_completion_response_timeout_seconds) as client:
-            for i in range(num_completions):
-                response = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {OPENAI_API_KEY}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "model": inference_request.requested_model_canonical_string.replace("openai-", ""),
-                        "messages": [{"role": "user", "content": input_prompt}],
-                        "max_tokens": int(model_parameters.get("number_of_tokens_to_generate", 1000)),
-                        "temperature": float(model_parameters.get("temperature", 0.7)),
-                        "n": 1
+        messages = []
+        if system_msg := model_parameters.get("system_message"):
+            messages.append({"role": "system", "content": system_msg})
+        messages.append({"role": "user", "content": input_prompt})
+        def build_function_definitions(tools_config: Optional[List[dict]]) -> List[dict]:
+            """
+            Constructs an array of function definitions for OpenAI's Chat Completions
+            from the user-defined functions that we have in AVAILABLE_TOOLS.
+            
+            1) For each function name in AVAILABLE_TOOLS:
+            - Look up the docstring-based JSON schema in USER_FUNCTION_SCHEMAS.
+            - If none is found, use a minimal fallback schema.
+            2) Return the resulting list of function definitions,
+            which can be passed in 'tools' to OpenAI's chat/completions API.
+            """
+            out = []
+            for fn_name in AVAILABLE_TOOLS:
+                # Attempt to get a docstring-based schema we extracted earlier
+                schema = USER_FUNCTION_SCHEMAS.get(fn_name)
+                if not schema:
+                    schema = {
+                        "type": "object",
+                        "properties": {
+                            "dummy_param": {
+                                "type": "string",
+                                "description": f"No docstring schema found for function {fn_name}"
+                            }
+                        },
+                        "required": []
                     }
-                )
-                if response.status_code == 200:
-                    response_json = response.json()
-                    output_results.append(response_json["choices"][0]["message"]["content"])
-                    total_input_tokens += response_json["usage"]["prompt_tokens"]
-                    total_output_tokens += response_json["usage"]["completion_tokens"]
-                else:
-                    logger.error(f"Error generating text from OpenAI API: {response.text}")
-                    return None, None
-        logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
-        logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
-        if num_completions == 1:
-            output_text = output_results[0]
-        else:
-            output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
-        logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
-        result = magika.identify_bytes(output_text.encode("utf-8"))
-        detected_data_type = result.output.ct_label
-        output_results_file_type_strings = {
-            "output_text": detected_data_type,
-            "output_files": ["NA"]
+                # Build the final 'function' definition
+                function_def = {
+                    "type": "function",
+                    "function": {
+                        "name": fn_name,
+                        "description": f"User-defined function '{fn_name}'.",
+                        "parameters": schema
+                    }
+                }
+                out.append(function_def)
+            # If you want to merge in any user-supplied 'tools_config', do it here
+            # (e.g., if model_parameters["tools"] includes extra tool definitions).
+            # Currently we ignore 'tools_config' for simplicity.
+            return out
+        tools = build_function_definitions(model_parameters.get("tools"))
+        # Build request_params, including reasoning_effort, metadata, store, etc.
+        request_params = {
+            "model": model_name.replace("openai-", ""),
+            "n": 1,  # We'll handle multiple completions ourselves
+            "max_completion_tokens": int(model_parameters.get("number_of_tokens_to_generate", 1000)),
+            "temperature": float(model_parameters.get("temperature", 0.7)),
+            "top_p": model_parameters.get("top_p", 1),
+            "frequency_penalty": model_parameters.get("frequency_penalty", 0),
+            "presence_penalty": model_parameters.get("presence_penalty", 0),
+            "stop": model_parameters.get("stop"),
+            "parallel_tool_calls": model_parameters.get("parallel_tool_calls", True),
+            "logprobs": model_parameters.get("logprobs", False),
+            "top_logprobs": model_parameters.get("top_logprobs") if model_parameters.get("logprobs", False) else None,
+            # Add reasoning_effort, metadata, store if present
+            "reasoning_effort": model_parameters.get("reasoning_effort"),
+            "metadata": model_parameters.get("metadata"),
+            "store": model_parameters.get("store"),
         }
-        return output_results, output_results_file_type_strings
-    elif inference_request.model_inference_type_string == "embedding":
-        input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        # If response_format is set, incorporate it
+        if response_format := model_parameters.get("response_format"):
+            if isinstance(response_format, dict):
+                if response_format.get("type") == "json_schema":
+                    request_params["response_format"] = {"type": "json_schema", "schema": response_format["schema"]}
+                elif response_format.get("type") == "json_object":
+                    request_params["response_format"] = {"type": "json_object"}
+        if tools:
+            request_params["tools"] = tools
+            request_params["tool_choice"] = model_parameters.get("tool_choice", "auto")
+        else:
+            request_params["tool_choice"] = "none"
+        # Remove any param that is None
+        request_params = {k: v for k, v in request_params.items() if v is not None}
+        openai_timeout = float(model_parameters.get("request_timeout_seconds", 60))
+        async with httpx.AsyncClient(timeout=openai_timeout) as client:
+            for _ in range(num_completions):
+                resp = await client.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}, json={"messages": messages, **request_params})
+                if resp.status_code != 200:
+                    logger.error(f"OpenAI error: {resp.text}")
+                    return None, None
+                response_json = resp.json()
+                choice_obj = response_json["choices"][0]
+                assistant_msg = choice_obj["message"]
+                if "tool_calls" in assistant_msg and assistant_msg["tool_calls"]:
+                    final_response_json = await process_tool_calls(client=client, tool_calls=assistant_msg["tool_calls"], current_messages=messages, request_params=request_params)
+                    final_choice = final_response_json["choices"][0]["message"]
+                    output_results.append(final_choice.get("content", ""))
+                else:
+                    output_results.append(assistant_msg.get("content", ""))
+                usage_data = response_json.get("usage", {})
+                total_input_tokens += usage_data.get("prompt_tokens", 0)
+                total_output_tokens += usage_data.get("completion_tokens", 0)
+        logger.info(f"Total input tokens used: {total_input_tokens}")
+        logger.info(f"Total output tokens used: {total_output_tokens}")
+        final_output = output_results[0] if num_completions == 1 else json.dumps({f"completion_{i+1:02}": val for i, val in enumerate(output_results)})
+        detect_result = magika.identify_bytes(final_output.encode("utf-8"))
+        return final_output, {"output_text": detect_result.output.ct_label, "output_files": ["NA"]}
+    elif inference_type == "embedding":
+        try:
+            input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        except Exception as exc:
+            logger.error(f"Could not decode model_input_data_json_b64: {exc}")
+            return None, None
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://api.openai.com/v1/embeddings",
-                headers={
-                    "Authorization": f"Bearer {OPENAI_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": inference_request.requested_model_canonical_string.replace("openai-", ""),
-                    "input": input_text
-                }
-            )
-            if response.status_code == 200:
-                output_results = response.json()["data"][0]["embedding"]
-                output_results_file_type_strings = {
-                    "output_text": "embedding",
-                    "output_files": ["NA"]
-                }
-                return output_results, output_results_file_type_strings
-            else:
-                logger.error(f"Error generating embedding from OpenAI API: {response.text}")
+            payload = {"model": model_name.replace("openai-", ""), "input": input_text}
+            if encoding_format := model_parameters.get("encoding_format"):
+                payload["encoding_format"] = encoding_format
+            if dimensions := model_parameters.get("dimensions"):
+                payload["dimensions"] = dimensions
+            resp = await client.post("https://api.openai.com/v1/embeddings", headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}, json=payload)
+            if resp.status_code != 200:
+                logger.error(f"Error generating embedding from OpenAI API: {resp.text}")
                 return None, None
-    elif inference_request.model_inference_type_string == "ask_question_about_an_image":
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+            return resp.json()["data"][0]["embedding"], {"output_text": "embedding", "output_files": ["NA"]}
+    elif inference_type == "ask_question_about_an_image":
+        try:
+            input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
+            image_data_binary = base64.b64decode(input_data["image"])
+            question = input_data["question"]
+        except Exception as exc:
+            logger.error(f"Error decoding image or question: {exc}")
+            return None, None
+        def optimize_image(image_binary):
+            image = Image.open(io.BytesIO(image_binary))
+            width, height = image.size
+            target_dim = 1286
+            if max(width, height) > target_dim:
+                ratio = width / height
+                if width > height:
+                    width = target_dim
+                    height = int(target_dim / ratio)
+                else:
+                    height = target_dim
+                    width = int(target_dim * ratio)
+                image = image.resize((width, height))
+                buffer = io.BytesIO()
+                image.save(buffer, format=image.format or 'JPEG')
+                return buffer.getvalue()
+            return image_binary
+        optimized_image = optimize_image(image_data_binary)
         num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
-        input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
-        image_data_binary = base64.b64decode(input_data["image"])
-        question = input_data["question"]
-        base64_image = base64.b64encode(image_data_binary).decode('utf-8')
         output_results = []
         total_input_tokens = 0
-        total_output_tokens = 0        
-        openai_vision_timeout_seconds = 90
-        async with httpx.AsyncClient(timeout=openai_vision_timeout_seconds) as client:
-            for i in range(num_completions):
-                response = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {OPENAI_API_KEY}"
-                    },
-                    json={
-                        "model": inference_request.requested_model_canonical_string.replace("openai-", "").replace("-vision", ""),
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "text",
-                                        "text": question
-                                    },
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": f"data:image/jpeg;base64,{base64_image}"
-                                        }
-                                    }
-                                ]
-                            }
-                        ],
-                        "max_tokens": int(json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8")).get("number_of_tokens_to_generate", 300))
-                    }
-                )
-                if response.status_code == 200:
-                    response_json = response.json()
-                    output_results.append(response_json["choices"][0]["message"]["content"])
-                    total_input_tokens += response_json["usage"]["prompt_tokens"]
-                    total_output_tokens += response_json["usage"]["completion_tokens"]                    
-                else:
-                    logger.error(f"Error generating response from OpenAI API: {response.text}")
+        total_output_tokens = 0
+        async with httpx.AsyncClient(timeout=float(model_parameters.get("request_timeout_seconds", 90))) as client:
+            for _ in range(num_completions):
+                payload = {
+                    "model": model_name.replace("openai-", ""),
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": question},
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(optimized_image).decode('utf-8')}"}}
+                        ]
+                    }],
+                    "max_completion_tokens": int(model_parameters.get("number_of_tokens_to_generate", 300)),
+                    "temperature": float(model_parameters.get("temperature", 0.7))
+                }
+                if response_format := model_parameters.get("response_format"):
+                    if isinstance(response_format, dict):
+                        if response_format.get("type") in ["json_schema", "json_object"]:
+                            payload["response_format"] = response_format
+                resp = await client.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}, json=payload)
+                if resp.status_code != 200:
+                    logger.error(f"Error with ask_question_about_an_image: {resp.text}")
                     return None, None
-        logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
-        logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
-        if num_completions == 1:
-            output_text = output_results[0]
-        else:
-            output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})             
-        logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
-        result = magika.identify_bytes(output_text.encode("utf-8"))
-        detected_data_type = result.output.ct_label
-        output_results_file_type_strings = {
-            "output_text": detected_data_type,
-            "output_files": ["NA"]
-        }
-        return output_results, output_results_file_type_strings               
+                resp_json = resp.json()
+                output_results.append(resp_json["choices"][0]["message"]["content"])
+                usage_info = resp_json.get("usage", {})
+                total_input_tokens += usage_info.get("prompt_tokens", 0)
+                total_output_tokens += usage_info.get("completion_tokens", 0)
+        logger.info(f"Total input tokens used with {model_name}: {total_input_tokens}")
+        logger.info(f"Total output tokens used with {model_name}: {total_output_tokens}")
+        output_text = output_results[0] if num_completions == 1 else json.dumps({f"completion_{i+1:02}": val for i, val in enumerate(output_results)})
+        data_type_result = magika.identify_bytes(output_text.encode("utf-8"))
+        return output_text, {"output_text": data_type_result.output.ct_label, "output_files": ["NA"]}
     else:
-        logger.warning(f"Unsupported inference type for OpenAI model: {inference_request.model_inference_type_string}")
+        logger.warning(f"Unsupported inference type '{inference_type}' for OpenAI model '{model_name}'")
         return None, None
     
 async def submit_inference_request_to_openrouter(inference_request):
@@ -5681,43 +6108,69 @@ async def submit_inference_request_to_openrouter(inference_request):
         logger.warning(f"Unsupported inference type for OpenRouter model: {inference_request.model_inference_type_string}")
         return None, None
 
-async def submit_inference_request_to_mistral_api(inference_request):
-    # Integrate with the Mistral API to perform the inference task
-    logger.info("Now accessing Mistral API...")
-    client = MistralAsyncClient(api_key=MISTRAL_API_KEY)
+async def submit_inference_request_to_deepseek(inference_request):
+    logger.info("Now accessing DeepSeek API...")
     if inference_request.model_inference_type_string == "text_completion":
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))        
+        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-        num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
+        num_completions = int(model_parameters.get("number_of_completions_to_generate [Optional]", 1))
         output_results = []
         total_input_tokens = 0
         total_output_tokens = 0
-        for i in range(num_completions):
-            messages = [ChatMessage(role="user", content=input_prompt)]
-            async_response = client.chat_stream(
-                model=inference_request.requested_model_canonical_string.replace("mistralapi-",""),
-                messages=messages,
-                max_tokens=int(model_parameters.get("number_of_tokens_to_generate", 1000)),
-                temperature=float(model_parameters.get("temperature", 0.7)),
-            )
-            completion_text = ""
-            prompt_tokens = 0
-            completion_tokens = 0
-            async for chunk in async_response:
-                if chunk.choices[0].delta.content:
-                    completion_text += chunk.choices[0].delta.content
-                    completion_tokens += 1
-                else:
-                    prompt_tokens += 1
-            output_results.append(completion_text)
-            total_input_tokens += prompt_tokens
-            total_output_tokens += completion_tokens
+        # Build messages array based on input_prompt and optional system message
+        messages = [{"role": "user", "content": input_prompt}]
+        if system_message := model_parameters.get("system_message"):
+            messages.insert(0, {"role": "system", "content": system_message})
+        # Configure response format for JSON output if specified
+        response_format = {"type": "text"}  # Default to text
+        if model_parameters.get("response_format") == "json":
+            response_format = {"type": "json_object"}
+        async with httpx.AsyncClient() as client:
+            for i in range(num_completions):
+                try:
+                    response = await client.post(
+                        "https://api.deepseek.com/chat/completions",  # Removed v1/
+                        headers={
+                            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                            "Content-Type": "application/json",
+                            "Accept": "application/json"
+                        },
+                        json={
+                            "model": "deepseek-chat",  # Always use this exact name
+                            "messages": messages,
+                            "max_tokens": int(model_parameters.get("number_of_tokens_to_generate", 4096)),  # Default per docs
+                            "temperature": float(model_parameters.get("temperature", 1.0)),  # Default per docs
+                            "response_format": response_format,
+                            "frequency_penalty": float(model_parameters.get("frequency_penalty", 0.0)),
+                            "presence_penalty": float(model_parameters.get("presence_penalty", 0.0)),
+                            "top_p": float(model_parameters.get("top_p", 1.0)),
+                            "tools": model_parameters.get("tools", None),
+                            "tool_choice": model_parameters.get("tool_choice", "none"),
+                            "stream": False,
+                            "logprobs": model_parameters.get("logprobs", False),
+                            "top_logprobs": model_parameters.get("top_logprobs", None)
+                        }
+                    )
+                    response.raise_for_status()
+                    response_json = response.json()
+                    output_results.append(response_json["choices"][0]["message"]["content"])
+                    total_input_tokens += response_json["usage"]["prompt_tokens"]
+                    total_output_tokens += response_json["usage"]["completion_tokens"]
+                    # Log cache hit statistics if available
+                    if "prompt_cache_hit_tokens" in response_json["usage"]:
+                        logger.info(f"Cache hit tokens: {response_json['usage']['prompt_cache_hit_tokens']}")
+                    if "prompt_cache_miss_tokens" in response_json["usage"]:
+                        logger.info(f"Cache miss tokens: {response_json['usage']['prompt_cache_miss_tokens']}")
+                except Exception as e:
+                    logger.error(f"Error generating text from DeepSeek API: {str(e)}")
+                    return None, None
         logger.info(f"Total input tokens used with {inference_request.requested_model_canonical_string} model: {total_input_tokens}")
         logger.info(f"Total output tokens used with {inference_request.requested_model_canonical_string} model: {total_output_tokens}")
         if num_completions == 1:
             output_text = output_results[0]
         else:
             output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
+            
         logger.info(f"Generated the following output text using {inference_request.requested_model_canonical_string}: {output_text[:100]} <abbreviated>...")
         result = magika.identify_bytes(output_text.encode("utf-8"))
         detected_data_type = result.output.ct_label
@@ -5726,22 +6179,197 @@ async def submit_inference_request_to_mistral_api(inference_request):
             "output_files": ["NA"]
         }
         return output_results, output_results_file_type_strings
-    elif inference_request.model_inference_type_string == "embedding":
-        input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-        embeddings_batch_response = client.embeddings(
-            model=inference_request.requested_model_canonical_string,
-            input=[input_text],
-        )
-        output_results = embeddings_batch_response.data[0].embedding
-        output_results_file_type_strings = {
-            "output_text": "embedding",
-            "output_files": ["NA"]
-        }
-        return output_results, output_results_file_type_strings
     else:
-        logger.warning(f"Unsupported inference type for Mistral model: {inference_request.model_inference_type_string}")
+        logger.warning(f"Unsupported inference type for DeepSeek model: {inference_request.model_inference_type_string}")
         return None, None
-    
+
+async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Optional[Any], Optional[Dict]]:
+    """Submit inference request to Mistral API, with complete parameter support."""
+    logger.info("Now accessing Mistral API...")
+    try:
+        client = Mistral(api_key=MISTRAL_API_KEY)
+        model_name = inference_request.requested_model_canonical_string
+        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        # Common parameters for all request types
+        request_timeout = model_parameters.get("request_timeout", 60)
+        if inference_request.model_inference_type_string == "text_completion":
+            # Get input prompt
+            input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+            # Build messages array
+            messages = []
+            if system_message := model_parameters.get("system_message"):
+                messages.append({"role": "system", "content": system_message})
+            messages.append({"role": "user", "content": input_prompt})
+            # Configure request parameters
+            request_params = {
+                "model": model_name.replace("mistralapi-", ""),
+                "messages": messages,
+                "max_tokens": int(model_parameters.get("number_of_tokens_to_generate", 1000)),
+                "temperature": float(model_parameters.get("temperature", 0.7)),
+                "top_p": float(model_parameters.get("top_p", 1.0)),
+                "presence_penalty": float(model_parameters.get("presence_penalty", 0.0)),
+                "frequency_penalty": float(model_parameters.get("frequency_penalty", 0.0))
+            }
+            # Optional parameters
+            if seed := model_parameters.get("seed"):
+                request_params["seed"] = seed
+            if model_parameters.get("safe_prompt"):
+                request_params["safe_prompt"] = True
+            if model_parameters.get("logprobs"):
+                request_params["logprobs"] = True
+                if top_logprobs := model_parameters.get("top_logprobs"):
+                    request_params["top_logprobs"] = top_logprobs
+            # Handle JSON mode if specified
+            if response_format := model_parameters.get("response_format"):
+                if isinstance(response_format, dict) and response_format.get("type") == "json_object":
+                    request_params["response_format"] = {"type": "json_object"}
+            # Handle function calling if tools are provided
+            if tools := model_parameters.get("tools"):
+                request_params["tools"] = tools
+                request_params["tool_choice"] = model_parameters.get("tool_choice", "auto")
+                if model_parameters.get("parallel_tool_calls") is False:
+                    request_params["tool_choice"] = "none"  # Disable parallel calls
+            # Make API call with timeout
+            async with httpx.AsyncClient(timeout=request_timeout):
+                chat_completion = await client.chat.complete_async(**request_params)
+                # Handle function calling in response
+                if (hasattr(chat_completion.choices[0].message, "tool_calls") and 
+                    chat_completion.choices[0].message.tool_calls):
+                    tool_calls = chat_completion.choices[0].message.tool_calls
+                    messages.append({
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": tool_calls
+                    })
+                    # Execute each tool call
+                    for tool_call in tool_calls:
+                        if tool_call.type == "function":
+                            function_name = tool_call.function.name
+                            function_args = json.loads(tool_call.function.arguments)
+                            if function_name in AVAILABLE_TOOLS:
+                                function_response = AVAILABLE_TOOLS[function_name](**function_args)
+                                messages.append({
+                                    "role": "tool",
+                                    "content": json.dumps(function_response),
+                                    "tool_call_id": tool_call.id
+                                })
+                    # Get final response after tool usage
+                    request_params["messages"] = messages
+                    chat_completion = await client.chat.complete_async(**request_params)
+            output_text = chat_completion.choices[0].message.content
+            result = magika.identify_bytes(output_text.encode("utf-8"))
+            return output_text, {
+                "output_text": result.output.ct_label,
+                "output_files": ["NA"]
+            }
+        elif inference_request.model_inference_type_string == "embedding":
+            input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+            # Configure embedding parameters
+            embed_params = {
+                "model": "mistral-embed",
+                "inputs": [input_text]
+            }
+            # Handle encoding format
+            if encoding_format := model_parameters.get("encoding_format"):
+                embed_params["encoding_format"] = encoding_format
+            # Handle batch size
+            if batch_size := model_parameters.get("batch_size"):
+                embed_params["batch_size"] = batch_size
+            # Make API call with timeout
+            async with httpx.AsyncClient(timeout=request_timeout):
+                embed_response = await client.embeddings.create_async(**embed_params)
+            return embed_response.data[0].embedding, {
+                "output_text": "embedding",
+                "output_files": ["NA"]
+            }
+        elif inference_request.model_inference_type_string == "ask_question_about_an_image":
+            # Parse input data
+            input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
+            image_data = base64.b64decode(input_data["image"])
+            question = input_data["question"]
+            # Validate image constraints
+            try:
+                image = Image.open(io.BytesIO(image_data))
+                # Check file size
+                if len(image_data) > 10 * 1024 * 1024:  # 10MB limit
+                    raise ValueError("Image exceeds 10MB size limit")
+                # Check format
+                if image.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
+                    raise ValueError("Unsupported image format")
+                # Check and resize dimensions if needed
+                width, height = image.size
+                max_dim = 1024
+                if width > max_dim or height > max_dim:
+                    aspect_ratio = width / height
+                    if width > height:
+                        new_width = max_dim
+                        new_height = int(max_dim / aspect_ratio)
+                    else:
+                        new_height = max_dim
+                        new_width = int(max_dim * aspect_ratio)
+                    image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    buffer = io.BytesIO()
+                    image.save(buffer, format=image.format)
+                    image_data = buffer.getvalue()
+            except Exception as e:
+                logger.error(f"Image validation failed: {str(e)}")
+                return None, None
+            # Format message for Pixtral vision model
+            content = [
+                {
+                    "type": "text",
+                    "text": question
+                },
+                {
+                    "type": "image_url",
+                    "image_url": f"data:image/jpeg;base64,{base64.b64encode(image_data).decode('utf-8')}"
+                }
+            ]
+            # Add task type context if specified
+            if task_type := model_parameters.get("task_type"):
+                if task_type == "ocr":
+                    content[0]["text"] = f"Perform OCR on this image and extract all text. Question: {question}"
+                elif task_type == "chart_analysis":
+                    content[0]["text"] = f"Analyze this chart/diagram in detail. Question: {question}"
+                elif task_type == "image_comparison":
+                    content[0]["text"] = f"Compare the images and describe the differences. Question: {question}"
+            messages = [{
+                "role": "user",
+                "content": content
+            }]
+            # Configure request parameters
+            request_params = {
+                "model": "pixtral-12b-2409",
+                "messages": messages,
+                "max_tokens": int(model_parameters.get("number_of_tokens_to_generate", 300)),
+                "temperature": float(model_parameters.get("temperature", 0.7))
+            }
+            # Optional parameters
+            if seed := model_parameters.get("seed"):
+                request_params["seed"] = seed
+            if model_parameters.get("safe_prompt"):
+                request_params["safe_prompt"] = True
+            # Handle JSON mode for vision model
+            if response_format := model_parameters.get("response_format"):
+                if isinstance(response_format, dict) and response_format.get("type") == "json_object":
+                    request_params["response_format"] = {"type": "json_object"}
+            # Make API call with timeout
+            async with httpx.AsyncClient(timeout=request_timeout):
+                completion = await client.chat.complete_async(**request_params)
+            output_text = completion.choices[0].message.content
+            result = magika.identify_bytes(output_text.encode("utf-8"))
+            return output_text, {
+                "output_text": result.output.ct_label,
+                "output_files": ["NA"]
+            }
+        else:
+            logger.warning(f"Unsupported inference type for Mistral model: {inference_request.model_inference_type_string}")
+            return None, None
+    except Exception as e:
+        logger.error(f"Error in Mistral API request: {str(e)}")
+        traceback.print_exc()
+        return None, None
+
 async def submit_inference_request_to_groq_api(inference_request):
     # Integrate with the Groq API to perform the inference task
     logger.info("Now accessing Groq API...")
@@ -5793,59 +6421,140 @@ async def submit_inference_request_to_groq_api(inference_request):
         logger.warning(f"Unsupported inference type for Groq model: {inference_request.model_inference_type_string}")
         return None, None
 
-async def submit_inference_request_to_claude_api(inference_request):
-    # Integrate with the Claude API to perform the inference task
-    logger.info("Now accessing Claude (Anthropic) API...")
-    client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
-    claude3_model_id_string = get_claude3_model_name(inference_request.requested_model_canonical_string)
-    if inference_request.model_inference_type_string == "text_completion":
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
-        input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-        num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
-        output_results = []
-        total_input_tokens = 0
-        total_output_tokens = 0
-        for i in range(num_completions):
-            async with client.messages.stream(
-                model=claude3_model_id_string,
-                max_tokens=int(model_parameters.get("number_of_tokens_to_generate", 1000)),
-                temperature=float(model_parameters.get("temperature", 0.7)),
-                messages=[{"role": "user", "content": input_prompt}],
-            ) as stream:
-                message = await stream.get_final_message()
-                output_results.append(message.content[0].text)
-                total_input_tokens += message.usage.input_tokens
-                total_output_tokens += message.usage.output_tokens
-        logger.info(f"Total input tokens used with {claude3_model_id_string} model: {total_input_tokens}")
-        logger.info(f"Total output tokens used with {claude3_model_id_string} model: {total_output_tokens}")
-        if num_completions == 1:
-            output_text = output_results[0]
-        else:
-            output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
-        logger.info(f"Generated the following output text using {claude3_model_id_string}: {output_text[:100]} <abbreviated>...")
-        result = magika.identify_bytes(output_text.encode("utf-8"))
-        detected_data_type = result.output.ct_label
-        output_results_file_type_strings = {
-            "output_text": detected_data_type,
-            "output_files": ["NA"]
-        }
-        return output_results, output_results_file_type_strings
-    elif inference_request.model_inference_type_string == "embedding":
-        input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-        response = await client.embed(
-            text=input_text,
-            model=claude3_model_id_string
-        )
-        output_results = response.embedding
-        output_results_file_type_strings = {
-            "output_text": "embedding",
-            "output_files": ["NA"]
-        }
-        return output_results, output_results_file_type_strings
-    else:
-        logger.warning(f"Unsupported inference type for Claude3 Haiku: {inference_request.model_inference_type_string}")
-        return None, None
+async def validate_claude_image_input(image_data: bytes) -> None:
+    """Validates image inputs for Claude API."""
+    try:
+        image = Image.open(io.BytesIO(image_data))
+        if image.format.lower() not in ['png', 'jpeg', 'jpg', 'gif', 'webp']:
+            raise ValueError(f"Unsupported image format: {image.format}")
+        width, height = image.size
+        if width > 4096 or height > 4096:
+            raise ValueError(f"Image dimensions ({width}x{height}) exceed maximum of 4096x4096")
+        if width < 16 or height < 16:
+            raise ValueError(f"Image dimensions ({width}x{height}) below minimum of 16x16")
+        image_size_mb = len(image_data) / (1024 * 1024)
+        if image_size_mb > 100:
+            raise ValueError(f"Image size ({image_size_mb:.1f}MB) exceeds 100MB limit")
+    except Exception as e:
+        logger.error(f"Image validation error: {str(e)}")
+        raise ValueError(f"Invalid image: {str(e)}")
 
+async def validate_claude_pdf_input(pdf_data: bytes) -> None:
+    """Validates PDF inputs for Claude API."""
+    try:
+        pdf_size_mb = len(pdf_data) / (1024 * 1024)
+        if pdf_size_mb > 32:
+            raise ValueError(f"PDF size ({pdf_size_mb:.1f}MB) exceeds 32MB limit")
+        with io.BytesIO(pdf_data) as pdf_file:
+            try:
+                pdf_reader = PyPDF2.PdfReader(pdf_file)
+                page_count = len(pdf_reader.pages)
+                if page_count > 100:
+                    raise ValueError(f"PDF has {page_count} pages, exceeding 100 page limit")
+            except PyPDF2.PdfReadError as e:
+                raise ValueError(f"Invalid or corrupted PDF: {str(e)}")
+    except Exception as e:
+        logger.error(f"PDF validation error: {str(e)}")
+        raise ValueError(f"Invalid PDF: {str(e)}")
+
+async def validate_claude_cache_control(model_name: str, cache_control: Optional[Dict]) -> None:
+    """Validates cache control settings."""
+    if not cache_control:
+        return
+    if not isinstance(cache_control, dict):
+        raise ValueError("cache_control must be a dictionary")
+    cache_type = cache_control.get("type")
+    if cache_type != "ephemeral":
+        raise ValueError("Only 'ephemeral' cache type is supported")
+    if "haiku" in model_name.lower():
+        min_tokens = 2048
+    else:
+        min_tokens = 1024
+    if cache_control.get("token_count", 0) < min_tokens:
+        raise ValueError(f"Cache requires minimum {min_tokens} tokens for {model_name}")
+    
+async def submit_inference_request_to_claude_api(inference_request):
+    logger.info(f"Now accessing Claude (Anthropic) API with model {inference_request.requested_model_canonical_string}")
+    client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
+    try:
+        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        await validate_claude_cache_control(inference_request.requested_model_canonical_string, model_parameters.get("cache_control"))
+        if inference_request.model_inference_type_string == "text_completion":
+            content = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+            message_content = [{"type": "text", "text": content}]
+        elif inference_request.model_inference_type_string == "ask_question_about_an_image":
+            input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
+            image_data = base64.b64decode(input_data_dict["image"])
+            await validate_claude_image_input(image_data)
+            question = input_data_dict["question"]
+            result = magika.identify_bytes(image_data)
+            media_type = result.output.mime_type or "image/jpeg"
+            message_content = [
+                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": input_data_dict["image"]}},
+                {"type": "text", "text": question}
+            ]
+        elif inference_request.model_inference_type_string == "embedding":
+            input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+            message_content = [{"type": "text", "text": input_text}]
+        elif inference_request.model_inference_type_string == "analyze_document":
+            document_data = base64.b64decode(inference_request.model_input_data_json_b64).decode()
+            await validate_claude_pdf_input(base64.b64decode(document_data))
+            message_content = [
+                {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": document_data}}
+            ]
+            if model_parameters.get("query"):
+                message_content.append({"type": "text", "text": model_parameters["query"]})
+        else:
+            raise ValueError(f"Unsupported inference type: {inference_request.model_inference_type_string}")
+        if model_parameters.get("cache_control"):
+            cache_control = model_parameters["cache_control"]
+            for content in message_content:
+                content["cache_control"] = cache_control
+        request_params = {
+            "model": get_claude3_model_name(inference_request.requested_model_canonical_string),
+            "messages": [{"role": "user", "content": message_content}],
+            "max_tokens": int(model_parameters.get("number_of_tokens_to_generate", 1000)),
+            "temperature": float(model_parameters.get("temperature", 0.7)),
+        }
+        if model_parameters.get("system_message"):
+            request_params["system"] = model_parameters["system_message"]
+        if model_parameters.get("top_p") is not None:
+            request_params["top_p"] = float(model_parameters["top_p"])
+        if model_parameters.get("top_k") is not None:
+            request_params["top_k"] = int(model_parameters["top_k"])
+        if model_parameters.get("stop_sequences"):
+            request_params["stop_sequences"] = model_parameters["stop_sequences"]
+        if model_parameters.get("metadata"):
+            request_params["metadata"] = model_parameters["metadata"]
+        if model_parameters.get("response_format"):
+            response_format = model_parameters["response_format"]
+            if response_format.get("type") == "json_object":
+                if "system" in request_params:
+                    request_params["system"] = request_params["system"] + "\nProvide your response as a valid JSON object."
+                else:
+                    request_params["system"] = "Provide your response as a valid JSON object."
+            elif response_format.get("type") == "json_schema" and response_format.get("schema"):
+                schema_prompt = "Return your response as a valid JSON object matching this schema: " + json.dumps(response_format["schema"])
+                if "system" in request_params:
+                    request_params["system"] = request_params["system"] + "\n" + schema_prompt
+                else:
+                    request_params["system"] = schema_prompt
+        response = await client.messages.create(**request_params)
+        if inference_request.model_inference_type_string == "embedding":
+            output_results = response.content[0].embedding
+            output_results_file_type_strings = {"output_text": "embedding", "output_files": ["NA"]}
+        else:
+            output_text = response.content[0].text
+            result = magika.identify_bytes(output_text.encode("utf-8"))
+            detected_data_type = result.output.ct_label
+            output_results = output_text
+            output_results_file_type_strings = {"output_text": detected_data_type, "output_files": ["NA"]}
+        return output_results, output_results_file_type_strings
+    except Exception as e:
+        logger.error(f"Error in Claude API request: {str(e)}")
+        traceback.print_exc()
+        return None, None
+    
 # Swiss Army Llama related functions:
 
 def determine_swiss_army_llama_port():
@@ -6165,6 +6874,8 @@ async def execute_inference_request(inference_request_id: str) -> None:
             output_results, output_results_file_type_strings = await submit_inference_request_to_openrouter(inference_request)
         elif inference_request.requested_model_canonical_string.startswith("swiss_army_llama-"):
             output_results, output_results_file_type_strings = await submit_inference_request_to_swiss_army_llama(inference_request)
+        elif inference_request.requested_model_canonical_string.startswith("deepseek-"):
+            output_results, output_results_file_type_strings = await submit_inference_request_to_deepseek(inference_request)
         else:
             error_message = f"Unsupported provider or model selected for {inference_request.requested_model_canonical_string}: {inference_request.model_inference_type_string}"
             logger.error(error_message)
@@ -6456,6 +7167,235 @@ async def get_transaction_details(txid: str, include_watchonly: bool = False) ->
     except Exception as e:
         logger.error(f"Error retrieving transaction details for {txid}: {e}")
         return {}
+
+# Functionality related to User defined functions for OpenAI models:
+
+async def store_approved_user_defined_function_in_db(
+    fn_hash: str,
+    fn_code: str,
+    approved_flag: bool,
+    rationale: str,
+    function_name: str,
+    schema: Optional[dict]
+):
+    async with db_code.Session() as session:
+        statement = select(db_code.UserDefinedToolFunction).where(db_code.UserDefinedToolFunction.code_hash == fn_hash)
+        result = await session.exec(statement)
+        existing = result.one_or_none()
+        if existing is None:
+            new_entry = db_code.UserDefinedToolFunction(
+                code_hash=fn_hash,
+                code_text=fn_code,
+                approved_flag=approved_flag,
+                rationale=rationale,
+                function_name=function_name,
+                schema_json=json.dumps(schema) if schema else None
+            )
+            session.add(new_entry)
+            await session.commit()
+        else:
+            existing.code_text = fn_code
+            existing.approved_flag = approved_flag
+            existing.rationale = rationale
+            existing.function_name = function_name
+            existing.schema_json = json.dumps(schema) if schema else None
+            await session.commit()
+
+def safe_exec_user_function(fn_code: str, function_name: str) -> Optional[dict]:
+    """
+    Actually 'exec' the code in a minimal environment. Then store the resulting
+    function in AVAILABLE_TOOLS dict. Also parse the docstring to get the JSON schema.
+    Returns the schema or None.
+    """
+    sandbox_globals = {"__builtins__": {"range": range, "len": len, "print": print}}
+    sandbox_locals = {}
+    exec(fn_code, sandbox_globals, sandbox_locals)
+
+    if function_name in sandbox_locals:
+        AVAILABLE_TOOLS[function_name] = sandbox_locals[function_name]
+    else:
+        AVAILABLE_TOOLS[function_name] = lambda *args, **kwargs: "No function defined."
+
+    schema = extract_schema_from_docstring(fn_code)
+    return schema
+        
+async def load_existing_approved_function_into_memory(record: db_code.UserDefinedToolFunction):
+    """
+    Called when we find an already approved function in DB but haven't loaded it yet.
+    """
+    # Double-check it's approved
+    if not record.approved_flag:
+        return
+    safe_exec_user_function(record.code_text, record.function_name)
+
+def extract_schema_from_docstring(fn_code: str) -> Optional[dict]:
+    """
+    Look for a block that starts with '#function_schema:' and parse it as JSON.
+    e.g.:
+
+    def my_add_function(x, y):
+        '''
+        docstring
+
+        #function_schema:
+        {
+            "type": "object",
+            "properties": {
+                "x": {"type": "number", "description": "The first number"},
+                "y": {"type": "number", "description": "The second number"}
+                },
+            "required": ["x", "y"]
+        }
+        '''
+        return x + y
+    """
+    match = re.search(r"#function_schema:\s*(\{.*?\})", fn_code, flags=re.DOTALL)
+    if not match:
+        return None
+    raw_schema_str = match.group(1)
+    try:
+        schema_data = json.loads(raw_schema_str)
+        return schema_data
+    except json.JSONDecodeError:
+        return None
+    
+async def call_gpt4o_to_validate_function_code(fn_code: str) -> dict:
+    validation_prompt = f"""
+Below is a user defined function for use with function calling in openai's API; we can't assume that the user is not malicious, and must very carefully check that the defined function doesn't do anything remotely bad or problematic or even risky for us, that might cause a security breach on our machine the code is running on or cause us to run afoul of any laws or terms of service violations on OpenAI or anywhere else. If we see anything worrisome like that, we reject the request from the user with an explanation of why we can't allow that user defined function string. Examples of reasons why we might reject a user defined function include:
+
+* It inappropriately tries to access any state on the machine that is running the code besides data that is explicitly included as part of the inference request (i.e., supplied as a parameter to the model); for instance, if the user defined function attempted to access particular files on the local machine's hard drives, like ssh keys or a .env file, or tried to access environmental variables directly that could leak secrets, or access a local sqlite database, etc.
+
+* To the extent the user defined function tries to access online resources, these don't do anything suspicious or bad looking. We don't want to completely cut off user defined functions from accessing online resources, because that's obviously very useful; a function that tried to check the weather in a given ZIP code for example might reasonably want to make a GET request to some online weather service; or access mapping data about a particular address, etc.
+
+Below is the user_defined_tool_definition_function_string supplied by the user; note that you can't rely on any documentation or code comments being accurate, since a malicious user could be trying to trick us that way; you have to verify/validate everything based on the code, and we want to err on the side of caution: it's better to refuse an ultimately valid but sketchy/scary looking user defined function than it is to let in a user defined function that could pose a security or legal risk to the owner of the machine processing the request (i.e., the machine running this python fastapi application):
+
+{fn_code}
+
+If the user_defined_tool_definition_function_string looks fine and safe, then simply respond with a JSON response of the form:
+
+{{
+    "user_defined_function_approved": 1,
+    "rationale_for_decision": "Defined function only uses the python standard library to do mathematical operations, doesn't access any local state on the machine, and appears to be totally innocuous and in compliance with OpenAI's rules."
+}}
+
+If you decide for whatever reason that the user defined function definition is too risky to use, reject it with a JSON response of the form:
+
+{{
+    "user_defined_function_approved": 0,
+    "rationale_for_decision": "Defined function appears to access arbitrary files on the host machine using the os and sys standard python libraries; this poses a large security risk and thus must be rejected."
+}}
+
+Another example of a rejection:
+
+{{
+    "user_defined_function_approved": 0,
+    "rationale_for_decision": "Defined function appears to access a suspicious looking REST endpoint that might be part of a malicious command and control server in furtherance of a larger sophisticated malicious attack of some kind; out of an abundance of caution, the user defined function must be rejected"
+}}
+""".strip()
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+    messages = [        {            "role": "system",            "content": "You are an AI specialized in code security. Output only valid JSON as specified, with no extra keys."        },        {"role": "user", "content": validation_prompt}    ]
+    payload = {
+        "model": "gpt-4o",
+        "messages": messages,
+        "max_completion_tokens": 600,
+        "temperature": 0.0
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(url, headers=headers, json=payload, timeout=60)
+        if resp.status_code != 200:
+            logger.error(f"GPT-4o call failed: {resp.text}")
+            return {
+                "user_defined_function_approved": 0,
+                "rationale_for_decision": f"API error {resp.status_code}: {resp.text}"
+            }
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"].strip()
+        try:
+            response_json = json.loads(content)
+        except Exception as parse_err:
+            logger.error(f"Error parsing JSON from GPT-4o: {parse_err}")
+            return {
+                "user_defined_function_approved": 0,
+                "rationale_for_decision": f"Failed to parse JSON: {str(parse_err)}"
+            }
+        if (
+            "user_defined_function_approved" in response_json
+            and "rationale_for_decision" in response_json
+            and isinstance(response_json["user_defined_function_approved"], int)
+        ):
+            return response_json
+        else:
+            return {
+                "user_defined_function_approved": 0,
+                "rationale_for_decision": "Response did not match required JSON schema."
+            }
+    except Exception as e:
+        traceback.print_exc()
+        return {
+            "user_defined_function_approved": 0,
+            "rationale_for_decision": f"Exception during GPT-4o validation: {str(e)}"
+        }
+        
+async def handle_user_defined_function_if_any(model_parameters: dict):
+    """
+    Checks for 'user_defined_tool_definition_function_string' in model_parameters.
+    If present, tries to see if we have it in DB. If not, calls GPT-4o to validate.
+    If approved, we exec() it and add to AVAILABLE_TOOLS. Raises ValueError if rejected.
+    """
+    fn_code = model_parameters.get("user_defined_tool_definition_function_string", "")
+    if not fn_code.strip():
+        return  # no function code provided
+    fn_hash = compute_function_string_hash(fn_code)
+    async with db_code.Session() as session:
+        statement = select(db_code.UserDefinedToolFunction).where(db_code.UserDefinedToolFunction.code_hash == fn_hash)
+        result = await session.exec(statement)
+        existing = result.one_or_none()
+        if existing:
+            # If already in DB
+            if existing.approved_flag:
+                # Already approved. Check if it's in AVAILABLE_TOOLS
+                if existing.function_name not in AVAILABLE_TOOLS:
+                    await load_existing_approved_function_into_memory(existing)
+            else:
+                # Previously rejected
+                msg = f"User-defined function previously rejected. Rationale: {existing.rationale}"
+                raise ValueError(msg)
+        else:
+            # Validate with GPT-4o
+            validation_result = await call_gpt4o_to_validate_function_code(fn_code)
+            approved = validation_result.get("user_defined_function_approved", 0)
+            rationale = validation_result.get("rationale_for_decision", "")
+            if approved == 1:
+                # Extract function name from code
+                match = re.search(r"def\s+([a-zA-Z0-9_]+)\s*\(", fn_code)
+                if match:
+                    function_name = match.group(1)
+                else:
+                    function_name = f"user_fn_{fn_hash[:8]}"
+                # safe_exec_user_function now returns the docstring schema
+                schema = safe_exec_user_function(fn_code, function_name)
+                # Store in DB
+                await store_approved_user_defined_function_in_db(
+                    fn_hash=fn_hash,
+                    fn_code=fn_code,
+                    approved_flag=True,
+                    rationale=rationale,
+                    function_name=function_name,
+                    schema=schema
+                )
+            else:
+                # Rejected
+                await store_approved_user_defined_function_in_db(
+                    fn_hash=fn_hash,
+                    fn_code=fn_code,
+                    approved_flag=False,
+                    rationale=rationale,
+                    function_name="N/A",
+                    schema=None
+                )
+                raise ValueError(f"User-defined function is rejected. Reason: {rationale}")
 
 #Misc helper functions:
 class MyTimer():
@@ -6772,6 +7712,9 @@ use_encrypt_new_secrets = 0
 if use_encrypt_new_secrets:
     encrypted_openai_key = encrypt_sensitive_data("abc123", encryption_key)
     print(f"Encrypted OpenAI key: {encrypted_openai_key}")
+
+    encrypted_deepseek_key = encrypt_sensitive_data("abc123", encryption_key)
+    print(f"Encrypted deepseek key: {encrypted_deepseek_key}")
     
     encrypted_groq_key = encrypt_sensitive_data("abc123", encryption_key)
     print(f"Encrypted groq key: {encrypted_groq_key}")
@@ -6784,7 +7727,7 @@ if use_encrypt_new_secrets:
     
     encrypted_openrouter_key = encrypt_sensitive_data("abc123", encryption_key)
     print(f"Encrypted openrouter key: {encrypted_openrouter_key}")
-    
+        
 use_test_market_price_data = 0
 if use_test_market_price_data:
     current_psl_price = asyncio.run(fetch_current_psl_market_price())
