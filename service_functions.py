@@ -187,7 +187,12 @@ loop = asyncio.get_event_loop()
 warnings.filterwarnings('ignore')
 local_ip = get_local_ip()
 benchmark_results_cache = [] # Global cache to store benchmark results in memory
-performance_data_df = pd.DataFrame(columns=['IP Address', 'Performance Ratio', 'Actual Score', 'Seconds Since Last Updated'])
+performance_data_df = pd.DataFrame([{
+    'IP Address': local_ip,
+    'Performance Ratio': 1.0,  # Default ratio
+    'Actual Score': 1.0,
+    'Seconds Since Last Updated': 0
+}])
 performance_data_history = {}
 local_benchmark_csv_file_path = Path('local_sn_micro_benchmark_results.csv')
 pickle_file_path = Path('performance_data_history.pkl')
