@@ -7847,9 +7847,10 @@ logger.info(f"Using local PastelID: {MY_PASTELID}")
 if 'genpassphrase' in other_flags.keys():
     LOCAL_PASTEL_ID_PASSPHRASE = other_flags['genpassphrase']
 
-# use_encrypt_new_secrets = 0
+# use_encrypt_new_secrets = 1
 # if use_encrypt_new_secrets:
 #     encrypted_openai_key = encrypt_sensitive_data("abc123", encryption_key)
+#     print(f"Encryption key: {encryption_key}")
 #     print(f"Encrypted OpenAI key: {encrypted_openai_key}")
 
 #     encrypted_deepseek_key = encrypt_sensitive_data("abc123", encryption_key)
