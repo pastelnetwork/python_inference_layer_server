@@ -90,6 +90,13 @@ DEEPSEEK_API_KEY = None
 AVAILABLE_TOOLS: Dict[str, callable] = {} # Our global dictionary of available tools for use with OpenAI models
 USER_FUNCTION_SCHEMAS: Dict[str, dict] = {}  # new global or module-level dictionary
 
+try:
+    with open("model_menu.json", "r", encoding="utf-8") as f:
+        MODEL_MENU_DATA = json.load(f)
+except FileNotFoundError:
+    MODEL_MENU_DATA = {}
+    logger.error("Could not load model_menu.json. Please ensure it is present in the current directory.")
+
 def get_local_ip():
     hostname = socket.gethostname()
     return socket.gethostbyname(hostname)
@@ -5706,8 +5713,97 @@ def get_claude3_model_name(model_name: str) -> str:
     }
     return model_mapping.get(model_name, "")
 
+def clean_and_validate_parameter(value, param_def: dict, param_name: str, model_name: str):
+    if value is None or (isinstance(value, str) and not value.strip()):
+        logger.info(f"Empty value for {param_name} in {model_name}, using default: {param_def.get('default')}")
+        return param_def.get("default")
+    # Attempt to parse the value to the correct type
+    param_type = param_def.get("type", "string")
+    try:
+        # Handle synonyms
+        if param_type == "integer":
+            param_type = "int"
+        if param_type == "boolean":
+            param_type = "bool"
+        if param_type == "array":
+            param_type = "list"
+
+        if param_type == "int":
+            cleaned = int(value)
+        elif param_type == "float":
+            cleaned = float(value)
+        elif param_type == "bool":
+            if isinstance(value, str):
+                cleaned = value.strip().lower() in ("true", "1", "yes", "on")
+            else:
+                cleaned = bool(value)
+        elif param_type == "object":
+            if isinstance(value, str):
+                cleaned = json.loads(value)
+            else:
+                cleaned = value
+        elif param_type == "list":
+            if isinstance(value, str):
+                cleaned = json.loads(value)
+                if not isinstance(cleaned, list):
+                    logger.warning(f"{param_name} was expected to be a list but parsing gave {type(cleaned)}")
+                    return param_def.get("default")
+            else:
+                cleaned = list(value) if isinstance(value, (list, tuple)) else param_def.get("default")
+        elif param_type == "string":
+            cleaned = str(value)
+        else:
+            cleaned = str(value)
+        # If there's an enum, enforce membership
+        if "enum" in param_def and param_def["enum"]:
+            if cleaned not in param_def["enum"]:
+                logger.warning(f"{param_name} value {cleaned} not in allowed enum {param_def['enum']}, using default: {param_def.get('default')}")
+                return param_def.get("default")
+        # Handle minimum/maximum
+        minimum = param_def.get("minimum", None)
+        maximum = param_def.get("maximum", None)
+        if (param_type in ("int", "float")) and cleaned is not None:
+            if minimum is not None and cleaned < minimum:
+                logger.warning(f"{param_name} value {cleaned} < min {minimum}, using min.")
+                cleaned = minimum
+            if maximum is not None and cleaned > maximum:
+                logger.warning(f"{param_name} value {cleaned} > max {maximum}, using max.")
+                cleaned = maximum
+        return cleaned
+    except (ValueError, TypeError, json.JSONDecodeError) as e:
+        logger.warning(f"Invalid {param_name} value ({value}) for {model_name}, using default {param_def.get('default')}. Error: {str(e)}")
+        return param_def.get("default")
+
+
+def validate_model_parameters(model_parameters: dict, model_name: str) -> dict:
+    validated_params = {}
+    # 1) Find the model definition in MODEL_MENU_DATA
+    model_defs = [m for m in MODEL_MENU_DATA["models"] if m["model_name"] == model_name]
+    if not model_defs:
+        logger.warning(f"No model definition found for {model_name}, returning parameters as-is.")
+        return model_parameters
+    model_def = model_defs[0]
+    model_param_defs = model_def.get("model_parameters", [])
+    # 2) Convert the list of param defs to a dict keyed by param name
+    param_dict = {}
+    for p in model_param_defs:
+        param_dict[p["name"]] = p
+    # 3) Validate each user-provided parameter if we have a definition
+    for name, val in model_parameters.items():
+        if name in param_dict:
+            validated_params[name] = clean_and_validate_parameter(val, param_dict[name], name, model_name)
+        else:
+            # Keep the parameter if it's not defined but user provided it, no special validation
+            validated_params[name] = val
+    # 4) Fill in defaults for any missing parameters
+    for name, pdef in param_dict.items():
+        if name not in validated_params:
+            validated_params[name] = pdef.get("default")
+    return validated_params
+
 async def submit_inference_request_to_stability_api(inference_request):
-    model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+    raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+    model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)    
     if inference_request.model_inference_type_string == "text_to_image":
         prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
         if "stability-core" in inference_request.requested_model_canonical_string:
@@ -5873,11 +5969,8 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
     logger.info("Now accessing OpenAI API...")
     model_name: str = inference_request.requested_model_canonical_string
     inference_type: str = inference_request.model_inference_type_string
-    try:
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
-    except Exception as e:
-        logger.error(f"Could not decode model_parameters_json_b64: {e}")
-        return None, None
+    raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+    model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
     async def process_tool_calls(client: httpx.AsyncClient, tool_calls: List[dict], current_messages: List[dict], request_params: dict) -> dict:
         updated_messages = current_messages.copy()
         for call_obj in tool_calls:
@@ -6075,7 +6168,8 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
 async def submit_inference_request_to_openrouter(inference_request):
     logger.info("Now accessing OpenRouter...")
     if inference_request.model_inference_type_string == "text_completion":
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))       
+        raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)        
         messages = [{"role": "user", "content": base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")}]
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -6110,7 +6204,8 @@ async def submit_inference_request_to_openrouter(inference_request):
 async def submit_inference_request_to_deepseek(inference_request):
     logger.info("Now accessing DeepSeek API...")
     if inference_request.model_inference_type_string == "text_completion":
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)        
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
         num_completions = int(model_parameters.get("number_of_completions_to_generate [Optional]", 1))
         output_results = []
@@ -6188,7 +6283,8 @@ async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Op
     try:
         client = Mistral(api_key=MISTRAL_API_KEY)
         model_name = inference_request.requested_model_canonical_string
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)        
         # Common parameters for all request types
         request_timeout = model_parameters.get("request_timeout", 60)
         if inference_request.model_inference_type_string == "text_completion":
@@ -6379,7 +6475,8 @@ async def submit_inference_request_to_groq_api(inference_request):
     logger.info("Now accessing Groq API...")
     client = AsyncGroq(api_key=GROQ_API_KEY)
     if inference_request.model_inference_type_string == "text_completion":
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
         num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
         output_results = []
@@ -6481,7 +6578,10 @@ async def submit_inference_request_to_claude_api(inference_request):
     logger.info(f"Now accessing Claude (Anthropic) API with model {inference_request.requested_model_canonical_string}")
     client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
     try:
-        model_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        # Decode and validate parameters
+        raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
+                
         # Validate cache control settings if present
         await validate_claude_cache_control(inference_request.requested_model_canonical_string, model_parameters.get("cache_control"))
         # Prepare content based on inference type
