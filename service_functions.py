@@ -4558,6 +4558,7 @@ async def test_claude_api_key():
     
 async def test_deepseek_api_key():
     try:
+        print(f"Decrypted deepseek api key: {DEEPSEEK_API_KEY}")
         async with httpx.AsyncClient(timeout=httpx.Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
                 "https://api.deepseek.com/v1/chat/completions",  # Add v1/ to URL
