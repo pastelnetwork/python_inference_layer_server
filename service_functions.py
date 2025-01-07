@@ -7708,25 +7708,25 @@ logger.info(f"Using local PastelID: {MY_PASTELID}")
 if 'genpassphrase' in other_flags.keys():
     LOCAL_PASTEL_ID_PASSPHRASE = other_flags['genpassphrase']
 
-use_encrypt_new_secrets = 0
-if use_encrypt_new_secrets:
-    encrypted_openai_key = encrypt_sensitive_data("abc123", encryption_key)
-    print(f"Encrypted OpenAI key: {encrypted_openai_key}")
+# use_encrypt_new_secrets = 0
+# if use_encrypt_new_secrets:
+#     encrypted_openai_key = encrypt_sensitive_data("abc123", encryption_key)
+#     print(f"Encrypted OpenAI key: {encrypted_openai_key}")
 
-    encrypted_deepseek_key = encrypt_sensitive_data("abc123", encryption_key)
-    print(f"Encrypted deepseek key: {encrypted_deepseek_key}")
+#     encrypted_deepseek_key = encrypt_sensitive_data("abc123", encryption_key)
+#     print(f"Encrypted deepseek key: {encrypted_deepseek_key}")
     
-    encrypted_groq_key = encrypt_sensitive_data("abc123", encryption_key)
-    print(f"Encrypted groq key: {encrypted_groq_key}")
+#     encrypted_groq_key = encrypt_sensitive_data("abc123", encryption_key)
+#     print(f"Encrypted groq key: {encrypted_groq_key}")
 
-    encrypted_mistral_key = encrypt_sensitive_data("abc123", encryption_key)
-    print(f"Encrypted mistral key: {encrypted_mistral_key}")
+#     encrypted_mistral_key = encrypt_sensitive_data("abc123", encryption_key)
+#     print(f"Encrypted mistral key: {encrypted_mistral_key}")
     
-    encrypted_stability_key = encrypt_sensitive_data("abc123", encryption_key)
-    print(f"Encrypted stability key: {encrypted_stability_key}")    
+#     encrypted_stability_key = encrypt_sensitive_data("abc123", encryption_key)
+#     print(f"Encrypted stability key: {encrypted_stability_key}")    
     
-    encrypted_openrouter_key = encrypt_sensitive_data("abc123", encryption_key)
-    print(f"Encrypted openrouter key: {encrypted_openrouter_key}")
+#     encrypted_openrouter_key = encrypt_sensitive_data("abc123", encryption_key)
+#     print(f"Encrypted openrouter key: {encrypted_openrouter_key}")
         
 use_test_market_price_data = 0
 if use_test_market_price_data:
