@@ -4559,37 +4559,30 @@ async def test_claude_api_key():
     
 async def test_deepseek_api_key():
     try:
-        print(f"Decrypted deepseek api key: {DEEPSEEK_API_KEY}")
-        async with httpx.AsyncClient(timeout=httpx.Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
-            response = await client.post(
-                "https://api.deepseek.com/v1/chat/completions",  # Add v1/ to URL
-                headers={
-                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": "deepseek-chat",
-                    "messages": [{"role": "user", "content": "Test"}],
-                    "max_tokens": 10,
-                    "temperature": 0.1
-                }
-            )
-            if response.status_code == 200:
-                return True
-            else:
-                error_msg = f"DeepSeek API key test failed with status code {response.status_code}"
-                if response.text:
-                    try:
-                        error_details = response.json()
-                        error_msg += f": {json.dumps(error_details)}"
-                    except json.JSONDecodeError:
-                        error_msg += f": {response.text}"
-                logger.warning(error_msg)
-                return False
-    except httpx.RequestError as e:
-        logger.warning(f"DeepSeek API key test failed due to request error: {str(e)}")
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(
+            api_key=DEEPSEEK_API_KEY,
+            base_url="https://api.deepseek.com"
+        )
+        response = await client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": "Test; just reply with the word yes if you're working!"}],
+            max_tokens=10,
+            temperature=0.1
+        )
+        response_string = response.choices[0].message.content.strip()
+        logger.info(f"DeepSeek API test response: {response_string}")
+        if response_string is not None:
+            test_passed = len(response_string) > 0
+        else:
+            test_passed = False
+        return test_passed
+    except Exception as e:
+        logger.error(f"DeepSeek API key test failed: {str(e)}")
+        if hasattr(e, 'response') and hasattr(e.response, 'text'):
+            logger.error(f"Response details: {e.response.text}")
         return False
-
+    
 async def save_inference_api_usage_request(inference_request_model: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageRequest:
     async with db_code.Session() as db_session:
         db_session.add(inference_request_model)
@@ -6264,56 +6257,29 @@ def build_deepseek_request_params(model_parameters: dict, messages: list) -> dic
     return request_params
 
 async def submit_inference_request_to_deepseek(inference_request):
+    """Submit inference request to DeepSeek API using their OpenAI-compatible format."""
     logger.info("Now accessing DeepSeek API...")
     try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(
+            api_key=DEEPSEEK_API_KEY,
+            base_url="https://api.deepseek.com"
+        )
         if inference_request.model_inference_type_string == "text_completion":
             # Parse and validate parameters
             raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
             model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
-            input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-            num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
             # Build messages array
-            messages = [{"role": "user", "content": input_prompt}]
+            messages = []
             if system_message := model_parameters.get("system_message"):
-                messages.insert(0, {"role": "system", "content": system_message})
-            # Get request parameters using builder
+                messages.append({"role": "system", "content": system_message})
+            input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+            messages.append({"role": "user", "content": input_prompt})
+            # Use the parameter builder function
             request_params = build_deepseek_request_params(model_parameters, messages)
-            output_results = []
-            total_input_tokens = 0
-            total_output_tokens = 0
-            async with httpx.AsyncClient() as client:
-                for _ in range(num_completions):
-                    try:
-                        response = await client.post(
-                            "https://api.deepseek.com/chat/completions",
-                            headers={
-                                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-                                "Content-Type": "application/json",
-                                "Accept": "application/json"
-                            },
-                            json=request_params
-                        )
-                        response.raise_for_status()
-                        response_json = response.json()
-                        output_results.append(response_json["choices"][0]["message"]["content"])
-                        # Track token usage
-                        total_input_tokens += response_json["usage"]["prompt_tokens"]
-                        total_output_tokens += response_json["usage"]["completion_tokens"]
-                        # Log cache statistics if available
-                        for cache_type in ["prompt_cache_hit_tokens", "prompt_cache_miss_tokens"]:
-                            if cache_type in response_json["usage"]:
-                                logger.info(f"{cache_type}: {response_json['usage'][cache_type]}")
-                    except Exception as e:
-                        logger.error(f"Error in DeepSeek API request iteration {_}: {str(e)}")
-                        return None, None
-            logger.info(f"Total input tokens: {total_input_tokens}")
-            logger.info(f"Total output tokens: {total_output_tokens}")
-            # Format final output
-            if num_completions == 1:
-                output_text = output_results[0]
-            else:
-                output_text = json.dumps({f"completion_{i+1:02}": result for i, result in enumerate(output_results)})
-            logger.info(f"Generated output text (abbreviated): {output_text[:100]}...")
+            # Make API call
+            response = await client.chat.completions.create(**request_params)
+            output_text = response.choices[0].message.content
             # Detect output type
             result = magika.identify_bytes(output_text.encode("utf-8"))
             return output_text, {
