@@ -4558,26 +4558,37 @@ async def test_claude_api_key():
     
 async def test_deepseek_api_key():
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(MESSAGING_TIMEOUT_IN_SECONDS)) as client:
             response = await client.post(
-                "https://api.deepseek.com/chat/completions",  # Note: no v1/ in the URL
+                "https://api.deepseek.com/v1/chat/completions",  # Add v1/ to URL
                 headers={
                     "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "deepseek-chat",  # Their API docs specify this exact name
-                    "messages": [{"role": "user", "content": "Test; just reply with the word yes if you're working!"}]
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": "Test"}],
+                    "max_tokens": 10,
+                    "temperature": 0.1
                 }
             )
             if response.status_code == 200:
-                logger.info("DeepSeek API key test passed successfully")
                 return True
             else:
-                logger.warning(f"DeepSeek API key test failed with status code {response.status_code}: {response.text}")
+                error_msg = f"DeepSeek API key test failed with status code {response.status_code}"
+                if response.text:
+                    try:
+                        error_details = response.json()
+                        error_msg += f": {json.dumps(error_details)}"
+                    except json.JSONDecodeError:
+                        error_msg += f": {response.text}"
+                logger.warning(error_msg)
                 return False
+    except httpx.RequestError as e:
+        logger.warning(f"DeepSeek API key test failed due to request error: {str(e)}")
+        return False
     except Exception as e:
-        logger.warning(f"DeepSeek API key test failed with error: {str(e)}")
+        logger.warning(f"DeepSeek API key test failed with unexpected error: {str(e)}")
         return False
 
 async def save_inference_api_usage_request(inference_request_model: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageRequest:
@@ -4973,6 +4984,12 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         logger.warning(f"No pricing data found for model: {model_name}")
         return 0.0
     model_pricing = pricing_data[best_match[0]]
+    # Define reasoning effort multipliers for models that support it
+    reasoning_effort_multipliers = {
+        "low": 0.7,
+        "medium": 1.0,
+        "high": 1.3
+    }
     if "mistralapi-pixtral" in model_name.lower():
         try:
             input_data_dict = json.loads(input_data)
@@ -5012,16 +5029,16 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
             float(model_pricing["input_cost"]) * float(cache_miss_tokens) +
             float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)
         ) / 1000.0
+        # Apply reasoning effort multiplier if applicable
         reasoning_effort_multiplier = 1.0
         if model_name.startswith("openai-o1"):
             reasoning_effort = model_parameters.get("reasoning_effort", "medium")
-            reasoning_effort_multipliers = {
-                "low": 0.7,
-                "medium": 1.0,
-                "high": 1.3
-            }
-        reasoning_effort_multiplier = reasoning_effort_multipliers.get(reasoning_effort, 1.0)
-        output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) * reasoning_effort_multiplier / 1000.0
+            reasoning_effort_multiplier = reasoning_effort_multipliers.get(reasoning_effort, 1.0)
+        output_cost = (
+            float(model_pricing["output_cost"]) * 
+            float(number_of_tokens_to_generate) * 
+            reasoning_effort_multiplier
+        ) / 1000.0
         per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
         estimated_cost = input_cost + output_cost + per_call_cost
     elif model_name.startswith("openai-gpt-4o-vision"):
