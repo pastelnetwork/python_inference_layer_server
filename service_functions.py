@@ -4342,6 +4342,7 @@ async def get_inference_model_menu(use_verbose=0):
             elif model["model_name"].startswith("deepseek-"):
                 logger.info(f"Checking DeepSeek model {model['model_name']}...")
                 logger.info(f"DEEPSEEK_API_KEY exists: {bool(DEEPSEEK_API_KEY)}")
+                logger.info(f"DEEPSEEK_API_KEY is {DEEPSEEK_API_KEY}")
                 if DEEPSEEK_API_KEY:
                     api_key_valid = await is_api_key_valid("deepseek", api_key_tests)
                     logger.info(f"DeepSeek API key valid: {api_key_valid}")
