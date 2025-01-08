@@ -6473,7 +6473,9 @@ async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Op
             image_data = base64.b64decode(input_data["image"])
             question = input_data["question"]
             try:
-                image = Image.open(io.BytesIO(image_data))
+                image_buffer = io.BytesIO(image_data)
+                image_buffer.seek(0)  # Rewind the buffer before reading
+                image = Image.open(image_buffer)
                 if len(image_data) > 10 * 1024 * 1024:
                     raise ValueError("Image exceeds 10MB size limit")
                 if image.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
@@ -6496,6 +6498,7 @@ async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Op
             except Exception as e:
                 logger.error(f"Image validation failed: {str(e)}")
                 return None, None
+            mime_type = f"image/{image.format.lower()}"
             messages = [
                 {
                     "role": "user",
@@ -6506,7 +6509,7 @@ async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Op
                         },
                         {
                             "type": "image_url",
-                            "image_url": f"data:image/jpeg;base64,{base64.b64encode(image_data).decode('utf-8')}"
+                            "image_url": f"data:{mime_type};base64,{base64.b64encode(image_data).decode('utf-8')}"
                         }
                     ]
                 }
