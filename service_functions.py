@@ -44,6 +44,7 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
 from magika import Magika
 import tiktoken
 import anthropic
+from openai import AsyncOpenAI
 from groq import AsyncGroq
 from mistralai import Mistral
 from cryptography.fernet import Fernet
@@ -4559,28 +4560,44 @@ async def test_claude_api_key():
     
 async def test_deepseek_api_key():
     try:
-        from openai import AsyncOpenAI
         client = AsyncOpenAI(
             api_key=DEEPSEEK_API_KEY,
             base_url="https://api.deepseek.com"
         )
-        response = await client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[{"role": "user", "content": "Test; just reply with the word yes if you're working!"}],
-            max_tokens=10,
-            temperature=0.1
-        )
+        logger.info("Attempting DeepSeek API test with key starting with: " + DEEPSEEK_API_KEY[:8] + "...")
+        # Try a minimal test completion with standardized test message
+        test_request = {
+            "model": "deepseek-chat",
+            "messages": [{"role": "user", "content": "Test; just reply with the word yes if you're working!"}],
+            "max_tokens": 10,
+            "temperature": 0.1
+        }
+        logger.info(f"Sending test request to DeepSeek API: {json.dumps(test_request, indent=2)}")
+        response = await client.chat.completions.create(**test_request)
+        # Log full response for debugging
+        logger.info(f"Raw DeepSeek API response: {response}")
         response_string = response.choices[0].message.content.strip()
-        logger.info(f"DeepSeek API test response: {response_string}")
+        logger.info(f"DeepSeek API test response content: {response_string}")
         if response_string is not None:
             test_passed = len(response_string) > 0
+            logger.info(f"DeepSeek API test {'passed' if test_passed else 'failed'} with content length: {len(response_string)}")
         else:
             test_passed = False
+            logger.warning("DeepSeek API test failed: response content is None")
         return test_passed
     except Exception as e:
-        logger.error(f"DeepSeek API key test failed: {str(e)}")
-        if hasattr(e, 'response') and hasattr(e.response, 'text'):
-            logger.error(f"Response details: {e.response.text}")
+        logger.error(f"DeepSeek API key test failed with exception type: {type(e)}")
+        logger.error(f"Exception message: {str(e)}")
+        # Try to extract more error details
+        if hasattr(e, 'response'):
+            logger.error(f"Response status code: {getattr(e.response, 'status_code', 'N/A')}")
+            logger.error(f"Response headers: {getattr(e.response, 'headers', {})}")
+            try:
+                error_body = e.response.json()
+                logger.error(f"Response body: {json.dumps(error_body, indent=2)}")
+            except Exception as e:
+                logger.error(f"Raw response text: {getattr(e.response, 'text', 'N/A')}")
+        traceback.print_exc()
         return False
     
 async def save_inference_api_usage_request(inference_request_model: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageRequest:
@@ -6260,7 +6277,6 @@ async def submit_inference_request_to_deepseek(inference_request):
     """Submit inference request to DeepSeek API using their OpenAI-compatible format."""
     logger.info("Now accessing DeepSeek API...")
     try:
-        from openai import AsyncOpenAI
         client = AsyncOpenAI(
             api_key=DEEPSEEK_API_KEY,
             base_url="https://api.deepseek.com"
@@ -6456,7 +6472,6 @@ async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Op
             input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
             image_data = base64.b64decode(input_data["image"])
             question = input_data["question"]
-            # Validate and process image
             try:
                 image = Image.open(io.BytesIO(image_data))
                 if len(image_data) > 10 * 1024 * 1024:
@@ -6481,34 +6496,27 @@ async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Op
             except Exception as e:
                 logger.error(f"Image validation failed: {str(e)}")
                 return None, None
-            # Prepare content
-            content = [
+            messages = [
                 {
-                    "type": "text",
-                    "text": question
-                },
-                {
-                    "type": "image_url",
-                    "image_url": f"data:image/jpeg;base64,{base64.b64encode(image_data).decode('utf-8')}"
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": question
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": f"data:image/jpeg;base64,{base64.b64encode(image_data).decode('utf-8')}"
+                        }
+                    ]
                 }
             ]
-            # Add task-specific context
-            if task_type := model_parameters.get("task_type"):
-                if task_type == "ocr":
-                    content[0]["text"] = f"Perform OCR on this image and extract all text. Question: {question}"
-                elif task_type == "chart_analysis":
-                    content[0]["text"] = f"Analyze this chart/diagram in detail. Question: {question}"
-                elif task_type == "image_comparison":
-                    content[0]["text"] = f"Compare the images and describe the differences. Question: {question}"
-            messages = [{"role": "user", "content": content}]
-            # Get request parameters
             request_params = build_mistral_request_params(
                 model_parameters,
                 model_name,
                 messages,
                 inference_type
             )
-            # Make API call
             async with httpx.AsyncClient(timeout=request_timeout):
                 completion = await client.chat.complete_async(**request_params)
                 output_text = completion.choices[0].message.content
