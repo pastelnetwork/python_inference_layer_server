@@ -44,7 +44,6 @@ from decouple import Config as DecoupleConfig, RepositoryEnv
 from magika import Magika
 import tiktoken
 import anthropic
-from openai import AsyncOpenAI
 from groq import AsyncGroq
 from mistralai import Mistral
 from cryptography.fernet import Fernet
@@ -4559,72 +4558,44 @@ async def test_claude_api_key():
         return False
     
 async def test_deepseek_api_key():
-    def log_request(request):
-        logger.info(f"DeepSeek request: {request.method} {request.url}")
-        logger.info(f"Request headers: {request.headers}")
-        logger.info(f"Request content: {request.content}")
-
-    def log_response(response):
-        logger.info(f"DeepSeek response status code: {response.status_code}")
-        logger.info(f"DeepSeek response headers: {response.headers}")
-        try:
-            logger.info(f"DeepSeek response JSON: {response.json()}")
-        except Exception:
-            logger.info(f"DeepSeek response text: {response.text}")
+    url = "https://api.deepseek.com/v1/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+    }
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "user", "content": "Test; just reply with the word yes if you're working!"}
+        ],
+        "frequency_penalty": 0,
+        "max_tokens": 2048,
+        "presence_penalty": 0,
+        "response_format": {"type": "text"},
+        "stop": None,
+        "stream": False,
+        "temperature": 1,
+        "top_p": 1,
+        "tools": None,
+        "tool_choice": "none",
+        "logprobs": False,
+        "top_logprobs": None
+    }
+    logger.info(f"Sending async request to: {url}")
+    logger.info(f"Using key starting with: {DEEPSEEK_API_KEY[:8]}...")
     try:
-        # Create your AsyncOpenAI client
-        client = AsyncOpenAI(
-            api_key=DEEPSEEK_API_KEY,
-            base_url="https://api.deepseek.com",
-            timeout=30.0,
-            default_headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
-            }
-        )
-        # Attach debug hooks to log all requests/responses
-        # (The openai/httpx wrapper should have a .http_client that you can use.)
-        if hasattr(client, "http_client") and client.http_client:
-            client.http_client.event_hooks = {
-                "request": [log_request],
-                "response": [log_response]
-            }
-        logger.info(f"Attempting DeepSeek API test with key starting with: {DEEPSEEK_API_KEY[:8]}...")
-        messages = [{"role": "user", "content": "Test; just reply with the word yes if you're working!"}]
-        response = await client.chat.completions.create(
-            model="deepseek-chat",
-            messages=messages,
-            max_tokens=2048,
-            temperature=1,
-            top_p=1,
-            frequency_penalty=0,
-            presence_penalty=0,
-            response_format={"type": "text"},
-            stop=None,
-            stream=False,
-        )
-        logger.info(f"DeepSeek API library raw response: {response}")
-        # Attempt to parse content
-        content_text = None
-        if hasattr(response, "choices") and response.choices:
-            content_text = response.choices[0].message.content.strip()
-        elif isinstance(response, dict) and "choices" in response:
-            content_text = response["choices"][0]["message"]["content"].strip()
-        logger.info(f"DeepSeek API test response content: {content_text}")
-        test_passed = bool(content_text)
-        logger.info(f"DeepSeek API test {'passed' if test_passed else 'failed'} with content: '{content_text}'")
-        return test_passed
-    except Exception as api_error:
-        logger.error(f"DeepSeek API key test failed: {str(api_error)}")
-        if hasattr(api_error, 'response'):
-            resp = api_error.response
-            logger.error(f"Status code: {getattr(resp, 'status_code', 'N/A')}")
-            logger.error(f"Response headers: {getattr(resp, 'headers', {})}")
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=payload)
+            logger.info(f"Response status code: {response.status_code}")
+            # Attempt to parse JSON
             try:
-                error_body = resp.json()
-                logger.error(f"Error response: {json.dumps(error_body, indent=2)}")
+                data = response.json()
+                logger.info("Response JSON:\n", json.dumps(data, indent=2))
             except Exception:
-                logger.error(f"Raw error response: {getattr(resp, 'text', 'N/A')}")
+                logger.error("Response text:\n", response.text)
+            return response.status_code == 200
+    except Exception as e:
+        logger.error(f"DeepSeek API key test raised an exception: {str(e)}")
         return False
     
 async def save_inference_api_usage_request(inference_request_model: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageRequest:
@@ -6262,10 +6233,9 @@ async def submit_inference_request_to_openrouter(inference_request):
     else:
         logger.warning(f"Unsupported inference type for OpenRouter model: {inference_request.model_inference_type_string}")
         return None, None
-
+    
 def build_deepseek_request_params(model_parameters: dict, messages: list) -> dict:
-    # Mimic your Playground usage, pulling keys from model_parameters if needed
-    params = {
+    return {
         "model": "deepseek-chat",
         "messages": messages,
         "frequency_penalty": model_parameters.get("frequency_penalty", 0),
@@ -6279,53 +6249,44 @@ def build_deepseek_request_params(model_parameters: dict, messages: list) -> dic
         "tools": model_parameters.get("tools", None),
         "tool_choice": model_parameters.get("tool_choice", "none"),
         "logprobs": model_parameters.get("logprobs", False),
-        "top_logprobs": model_parameters.get("top_logprobs", None),
+        "top_logprobs": model_parameters.get("top_logprobs", None)
     }
-    return params
 
 async def submit_inference_request_to_deepseek(inference_request):
-    """Submit inference request to DeepSeek API using their OpenAI-compatible format."""
     logger.info("Now accessing DeepSeek API...")
     try:
-        client = AsyncOpenAI(
-            api_key=DEEPSEEK_API_KEY,
-            base_url="https://api.deepseek.com",
-            default_headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
-            }
-        )
-        if inference_request.model_inference_type_string == "text_completion":
-            raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
-            model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
-            messages = []
-            if system_message := model_parameters.get("system_message"):
-                messages.append({"role": "system", "content": system_message})
-            input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-            messages.append({"role": "user", "content": input_prompt})
-            request_params = build_deepseek_request_params(model_parameters, messages)
-            response = await client.chat.completions.create(**request_params)
-            # Attempt to parse the response consistently
-            output_text = None
-            if hasattr(response, "choices") and response.choices:
-                output_text = response.choices[0].message.content
-            else:
-                if isinstance(response, dict) and "choices" in response:
-                    output_text = response["choices"][0]["message"]["content"]
-            if not output_text:
-                logger.warning("No content returned from DeepSeek API.")
-                return None, None
-            result = magika.identify_bytes(output_text.encode("utf-8"))
-            return output_text, {
-                "output_text": result.output.ct_label,
-                "output_files": ["NA"]
-            }
-        else:
+        if inference_request.model_inference_type_string != "text_completion":
             logger.warning(f"Unsupported inference type for DeepSeek model: {inference_request.model_inference_type_string}")
             return None, None
+        raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
+        model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
+        messages = []
+        if system_message := model_parameters.get("system_message"):
+            messages.append({"role": "system", "content": system_message})
+        input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
+        messages.append({"role": "user", "content": input_prompt})
+        request_payload = build_deepseek_request_params(model_parameters, messages)
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
+        async with httpx.AsyncClient() as client:
+            response = await client.post("https://api.deepseek.com/v1/chat/completions", headers=headers, json=request_payload)
+        logger.info(f"DeepSeek status code: {response.status_code}")
+        try:
+            data = response.json()
+            logger.info(f"DeepSeek response JSON: {data}")
+        except Exception:
+            logger.info(f"DeepSeek response text: {response.text}")
+            return None, None
+        if "choices" not in data or not data["choices"]:
+            logger.warning("No choices returned from DeepSeek API.")
+            return None, None
+        output_text = data["choices"][0]["message"].get("content", "")
+        if not output_text:
+            logger.warning("No content returned from DeepSeek API.")
+            return None, None
+        result = magika.identify_bytes(output_text.encode("utf-8"))
+        return output_text, {"output_text": result.output.ct_label, "output_files": ["NA"]}
     except Exception as e:
         logger.error(f"Error in DeepSeek API request: {str(e)}")
-        traceback.print_exc()
         return None, None
     
 def build_mistral_request_params(
