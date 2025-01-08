@@ -4587,10 +4587,9 @@ async def test_deepseek_api_key():
         async with httpx.AsyncClient() as client:
             response = await client.post(url, headers=headers, json=payload)
             logger.info(f"Response status code: {response.status_code}")
-            # Attempt to parse JSON
             try:
                 data = response.json()
-                logger.info("Response JSON:\n", json.dumps(data, indent=2))
+                logger.info("Response JSON:\n%s", json.dumps(data, indent=2))
             except Exception:
                 logger.error("Response text:\n", response.text)
             return response.status_code == 200
@@ -4761,6 +4760,22 @@ def count_tokens(model_name: str, input_data: str) -> int:
             else:
                 input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
         return len(input_tokens)
+    
+def estimate_claude_image_tokens(image_data: bytes) -> int:
+    image = Image.open(io.BytesIO(image_data))
+    width, height = image.size
+    # Base cost for image metadata
+    base_tokens = 85
+    # Calculate patch-based tokens (similar to GPT-4V approach but adjusted)
+    patch_size = 512
+    patches_x = -(-width // patch_size)  # Ceiling division
+    patches_y = -(-height // patch_size)
+    total_patches = patches_x * patches_y
+    # Use a more conservative token count per patch
+    tokens_per_patch = 120  # Adjusted down from GPT-4V's 170
+    patch_tokens = total_patches * tokens_per_patch
+    total_tokens = base_tokens + patch_tokens
+    return total_tokens
     
 def estimate_pixtral_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[int, int]]:
     try:
@@ -5057,8 +5072,8 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         width, height = image.size
         image_file_size_in_mb = len(image_data_binary) / (1024 * 1024)
         logger.info(f"Submitted image file is {image_file_size_in_mb:.2f}MB and has resolution of {width} x {height}")
-        # Resize logic to fit the larger dimension to 1286 pixels
-        target_larger_dimension = 1286
+        # Resize logic to fit the larger dimension to 2048 pixels
+        target_larger_dimension = 2048
         aspect_ratio = width / height
         if width > height:
             resized_width = target_larger_dimension
@@ -5066,84 +5081,77 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         else:
             resized_height = target_larger_dimension
             resized_width = int(target_larger_dimension * aspect_ratio)
-        logger.info(f"Image will be resized automatically by OpenAI to a resolution of {resized_width} x {resized_height}")
-        # Calculate visual tokens
+        logger.info(f"Image will be resized automatically to a resolution of {resized_width} x {resized_height}")
+        # Calculate visual tokens (based on 512x512 tiles)
         tiles_x = -(-resized_width // 512)  # Ceiling division
         tiles_y = -(-resized_height // 512)
         total_tiles = tiles_x * tiles_y
-        base_tokens = 85
-        tile_tokens = 170 * total_tiles
-        total_tokens = base_tokens + tile_tokens
+        base_tokens = 85  # Base token cost for image processing
+        tile_tokens = 170 * total_tiles  # Token cost per tile
+        total_image_tokens = base_tokens + tile_tokens
         # Add question tokens
         question_tokens = count_tokens(model_name, question)
-        input_tokens = total_tokens + question_tokens
+        input_tokens = total_image_tokens + question_tokens
+        # Calculate costs
         input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
         output_tokens = int(model_parameters.get("number_of_tokens_to_generate", 300))
         output_cost = float(model_pricing["output_cost"]) * float(output_tokens) / 1000.0
         estimated_cost = input_cost + output_cost
+        logger.info(f"Vision cost breakdown - Image: ${input_cost:.4f}, Output: ${output_cost:.4f}")
+        return estimated_cost
     elif model_name.startswith("openai-text-embedding"):
         input_tokens = count_tokens(model_name, input_data)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
         input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
         estimated_cost = input_cost * number_of_completions_to_generate
     elif model_name.startswith("claude3"):
-        try:
-            # Determine input type and handle accordingly
-            if isinstance(input_data, dict) and "image" in input_data:
-                # Handle image input
-                image_data_binary = base64.b64decode(input_data["image"])
-                image = Image.open(io.BytesIO(image_data_binary))
-                width, height = image.size
-                
-                # Calculate image tokens using Claude's formula
-                # Approximately 750 pixels per token
-                image_tokens = (width * height) // 750
-                question_tokens = count_tokens(model_name, input_data.get("question", ""))
-                input_tokens = image_tokens + question_tokens
-                
-            elif isinstance(input_data, dict) and "document" in input_data:
-                # Handle PDF input - estimate ~1500-3000 tokens per page
-                pdf_data = base64.b64decode(input_data["document"])
-                with io.BytesIO(pdf_data) as pdf_file:
-                    pdf_reader = PyPDF2.PdfReader(pdf_file)
-                    num_pages = len(pdf_reader.pages)
-                    # Conservative estimate of 2000 tokens per page
-                    input_tokens = num_pages * 2000
-                    if "query" in input_data:
-                        query_tokens = count_tokens(model_name, input_data["query"])
-                        input_tokens += query_tokens
-            else:
-                # Handle regular text input
-                input_tokens = count_tokens(model_name, input_data)
-
-            # Get cache-related parameters
-            cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
-            cache_miss_tokens = input_tokens - cache_hit_tokens
+        # Determine input type and handle accordingly
+        if isinstance(input_data, dict) and "image" in input_data:
+            # Handle image input
+            image_data_binary = base64.b64decode(input_data["image"])
+            image_tokens = estimate_claude_image_tokens(image_data_binary)
+            question_tokens = count_tokens(model_name, input_data.get("question", ""))
+            input_tokens = image_tokens + question_tokens
             
-            # Calculate input costs based on caching
-            input_cost = (
-                float(model_pricing["input_cost_write"]) * float(cache_miss_tokens) +  # New tokens that need caching
-                float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)    # Already cached tokens
-            ) / 1000.0
-
-            # Calculate output costs
-            number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
-            output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
+            # Log token breakdown for debugging
+            logger.info(f"Claude image request token breakdown - Image: {image_tokens}, Question: {question_tokens}")
             
-            # Add system prompt token costs if applicable
-            if model_parameters.get("system_prompt"):
-                system_tokens = count_tokens(model_name, model_parameters["system_prompt"])
-                input_cost += float(model_pricing["input_cost"]) * float(system_tokens) / 1000.0
-                
-            estimated_cost = input_cost + output_cost
-            logger.info(f"Estimated Claude cost breakdown - Input: ${input_cost:.4f}, Output: ${output_cost:.4f}")
-            
-            return estimated_cost
+        elif isinstance(input_data, dict) and "document" in input_data:
+            # Handle PDF input - estimate ~1500-3000 tokens per page
+            pdf_data = base64.b64decode(input_data["document"])
+            with io.BytesIO(pdf_data) as pdf_file:
+                pdf_reader = PyPDF2.PdfReader(pdf_file)
+                num_pages = len(pdf_reader.pages)
+                # Conservative estimate of 2000 tokens per page
+                input_tokens = num_pages * 2000
+                if "query" in input_data:
+                    query_tokens = count_tokens(model_name, input_data["query"])
+                    input_tokens += query_tokens
+        else:
+            # Handle regular text input
+            input_tokens = count_tokens(model_name, input_data)
 
-        except Exception as e:
-            logger.error(f"Error calculating Claude cost: {str(e)}")
-            traceback.print_exc()
-            return 0.0   
+        # Get cache-related parameters
+        cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
+        cache_miss_tokens = input_tokens - cache_hit_tokens
+        
+        # Calculate input costs based on caching
+        input_cost = (
+            float(model_pricing["input_cost_write"]) * float(cache_miss_tokens) +  # New tokens that need caching
+            float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)    # Already cached tokens
+        ) / 1000.0
+        
+        # Calculate output costs
+        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
+        output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
+        
+        # Add system prompt token costs if applicable
+        if model_parameters.get("system_prompt"):
+            system_tokens = count_tokens(model_name, model_parameters["system_prompt"])
+            input_cost += float(model_pricing["input_cost"]) * float(system_tokens) / 1000.0
+            
+        estimated_cost = input_cost + output_cost
+        logger.info(f"Claude cost breakdown - Input: ${input_cost:.4f} ({input_tokens} tokens), Output: ${output_cost:.4f} ({number_of_tokens_to_generate} tokens)")
     elif model_name.startswith("deepseek-"):
         input_tokens = count_tokens(model_name, input_data)
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 4096)
@@ -6535,28 +6543,40 @@ async def submit_inference_request_to_groq_api(inference_request):
         return None, None
 
 async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mistral") -> tuple[bytes, str]:
-    """Validates and preprocesses image data for API submission."""
+    """
+    Validates and preprocesses image data for various AI model APIs.
+    
+    Args:
+        image_data: Raw image bytes
+        model_type: Type of model ("mistral", "claude", etc.)
+        
+    Returns:
+        Tuple of (processed_image_data, mime_type)
+        
+    Raises:
+        ValueError: If image validation fails
+    """
     try:
-        # Create BytesIO object from image data
-        image_file = io.BytesIO(image_data)
-        # Try to open the image to validate it
-        image = Image.open(image_file)
-        # Get original format and size
-        format_lower = (image.format or "JPEG").lower()
-        width, height = image.size
+        image = Image.open(io.BytesIO(image_data))
         image_size_mb = len(image_data) / (1024 * 1024)
-        # Validate format
-        supported_formats = {"png", "jpeg", "jpg", "gif", "webp"}
-        if format_lower not in supported_formats:
-            raise ValueError(f"Unsupported image format: {format_lower}")
+        width, height = image.size
+        # Convert RGBA to RGB if needed to ensure JPEG compatibility
+        if image.mode == 'RGBA':
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[3])  # 3 is the alpha channel
+            image = background
+        # Determine format and mime type
+        format_lower = image.format.lower() if image.format else "jpeg"
+        if format_lower not in {"jpeg", "jpg", "png", "gif", "webp"}:
+            format_lower = "png"  # Default to PNG for unsupported formats
         mime_type = f"image/{format_lower}"
-        # Model-specific preprocessing
+        # Model-specific validations and preprocessing
         if model_type == "mistral":
             if image_size_mb > 10:
                 raise ValueError("Image exceeds 10MB size limit")
-            # Resize if needed
             max_dim = 1024
             if width > max_dim or height > max_dim:
+                # Resize keeping aspect ratio
                 aspect_ratio = width / height
                 if width > height:
                     new_width = max_dim
@@ -6565,30 +6585,27 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
                     new_height = max_dim
                     new_width = int(max_dim * aspect_ratio)
                 image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                # Save resized image
-                buffer = io.BytesIO()
-                image.save(buffer, format=image.format or "JPEG", quality=95)
-                image_data = buffer.getvalue()
         elif model_type == "claude":
             if image_size_mb > 100:
                 raise ValueError("Image exceeds 100MB size limit")
-            # Check dimensions
             if width > 4096 or height > 4096:
                 raise ValueError(f"Image dimensions ({width}x{height}) exceed maximum of 4096x4096")
             if width < 16 or height < 16:
                 raise ValueError(f"Image dimensions ({width}x{height}) below minimum of 16x16")
-            # For Claude, convert non-JPEG images to PNG
-            if format_lower not in ("jpeg", "jpg"):
-                buffer = io.BytesIO()
-                image.save(buffer, format="PNG", quality=95)
-                image_data = buffer.getvalue()
-                mime_type = "image/png"
-        logger.info(f"Image validated and processed. Size: {width}x{height}, Format: {format_lower}")
-        return image_data, mime_type
+        # Convert image to bytes
+        buffer = io.BytesIO()
+        save_format = "PNG" if format_lower == "png" else "JPEG"
+        image.save(buffer, format=save_format, quality=95 if save_format == "JPEG" else None)
+        processed_image_data = buffer.getvalue()
+        # Verify the processed image can be read back
+        try:
+            Image.open(io.BytesIO(processed_image_data))
+        except Exception as e:
+            raise ValueError(f"Failed to verify processed image: {str(e)}")
+        return processed_image_data, mime_type
     except Exception as e:
-        logger.error(f"Image validation/preprocessing error: {str(e)}")
         raise ValueError(f"Invalid image: {str(e)}")
-
+    
 async def validate_claude_pdf_input(pdf_data: bytes) -> None:
     """Validates PDF inputs for Claude API."""
     try:
@@ -6664,23 +6681,21 @@ async def submit_inference_request_to_claude_api(inference_request):
     try:
         raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
-        await validate_claude_cache_control(
-            inference_request.requested_model_canonical_string,
-            model_parameters.get("cache_control")
-        )
+        await validate_claude_cache_control(inference_request.requested_model_canonical_string, model_parameters.get("cache_control"))
+        # Prepare message content based on inference type
         if inference_request.model_inference_type_string == "text_completion":
             content = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             message_content = [{"type": "text", "text": content}]
         elif inference_request.model_inference_type_string == "ask_question_about_an_image":
             try:
                 input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
-                image_data_str = input_data_dict["image"]
-                if image_data_str.startswith("data:image"):
-                    image_data_str = image_data_str.split("base64,")[1]
-                image_data = base64.b64decode(image_data_str)
+                image_data = base64.b64decode(input_data_dict["image"])
                 question = input_data_dict["question"]
                 logger.info("Validating and preprocessing image for Claude...")
                 processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
+                # Log image details
+                with Image.open(io.BytesIO(processed_image_data)) as img:
+                    logger.info(f"Image validated and processed. Size: {img.size[0]}x{img.size[1]}, Format: {img.format.lower()}")
                 message_content = [
                     {
                         "type": "image",
@@ -6690,13 +6705,15 @@ async def submit_inference_request_to_claude_api(inference_request):
                             "data": base64.b64encode(processed_image_data).decode('utf-8')
                         }
                     },
-                    {"type": "text", "text": question}
+                    {
+                        "type": "text",
+                        "text": question
+                    }
                 ]
                 logger.info(f"Image processed successfully. Mime type: {mime_type}")
-            except Exception as e:
-                logger.error(f"Error processing image data: {str(e)}")
-                traceback.print_exc()
-                return None, None
+            except Exception as img_error:
+                logger.error(f"Error processing image: {str(img_error)}")
+                raise
         elif inference_request.model_inference_type_string == "embedding":
             input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             message_content = [{"type": "text", "text": input_text}]
@@ -6717,25 +6734,31 @@ async def submit_inference_request_to_claude_api(inference_request):
                 message_content.append({"type": "text", "text": model_parameters["query"]})
         else:
             raise ValueError(f"Unsupported inference type: {inference_request.model_inference_type_string}")
-        # Apply any optional cache control
+        # Apply cache control if specified
         if cache_control := model_parameters.get("cache_control"):
-            for block in message_content:
-                block["cache_control"] = cache_control
+            for content in message_content:
+                content["cache_control"] = cache_control
+        # Build request parameters
         messages = [{"role": "user", "content": message_content}]
         request_params = build_claude_request_params(
-            model_parameters,
+            model_parameters, 
             inference_request.requested_model_canonical_string,
             messages
         )
-        # Optional debug log redacting binary
+        # Log request parameters for debugging (excluding large data fields)
         debug_params = request_params.copy()
-        for msg in debug_params.get("messages", []):
-            if "content" in msg:
-                for c in msg["content"]:
-                    if c.get("type") in ("image", "document") and "source" in c:
-                        c["source"]["data"] = "[BINARY_DATA]"
+        if 'messages' in debug_params:
+            for msg in debug_params['messages']:
+                if 'content' in msg:
+                    for content in msg['content']:
+                        if content.get('type') in ('image', 'document') and 'source' in content:
+                            # Save a snippet of the base64 data for debugging
+                            data = content['source']['data']
+                            content['source']['data'] = f"{data[:50]}..." if len(data) > 50 else data
         logger.info(f"Claude API request parameters: {json.dumps(debug_params, indent=2)}")
+        # Make the API call
         response = await client.messages.create(**request_params)
+        # Process response based on inference type
         if inference_request.model_inference_type_string == "embedding":
             output_results = response.content[0].embedding
             output_results_file_type_strings = {"output_text": "embedding", "output_files": ["NA"]}
@@ -6748,6 +6771,17 @@ async def submit_inference_request_to_claude_api(inference_request):
         return output_results, output_results_file_type_strings
     except Exception as e:
         logger.error(f"Error in Claude API request: {str(e)}")
+        # For API errors, try to extract more detailed error information
+        if hasattr(e, 'message'):
+            logger.error(f"API Error message: {e.message}")
+        if hasattr(e, 'status_code'):
+            logger.error(f"API Status code: {e.status_code}")
+        if hasattr(e, 'response'):
+            try:
+                error_detail = e.response.json()
+                logger.error(f"API Error details: {json.dumps(error_detail, indent=2)}")
+            except Exception:
+                logger.error(f"Raw API response: {e.response.text}")
         traceback.print_exc()
         return None, None
     
