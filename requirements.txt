@@ -12,6 +12,7 @@ libpastelid
 magika
 mistralai
 mutagen
+openai
 pandas
 picologging
 pillow
