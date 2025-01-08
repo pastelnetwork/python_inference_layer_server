@@ -4559,54 +4559,72 @@ async def test_claude_api_key():
         return False
     
 async def test_deepseek_api_key():
+    def log_request(request):
+        logger.info(f"DeepSeek request: {request.method} {request.url}")
+        logger.info(f"Request headers: {request.headers}")
+        logger.info(f"Request content: {request.content}")
+
+    def log_response(response):
+        logger.info(f"DeepSeek response status code: {response.status_code}")
+        logger.info(f"DeepSeek response headers: {response.headers}")
+        try:
+            logger.info(f"DeepSeek response JSON: {response.json()}")
+        except Exception:
+            logger.info(f"DeepSeek response text: {response.text}")
     try:
-        # Create client with timeout
+        # Create your AsyncOpenAI client
         client = AsyncOpenAI(
             api_key=DEEPSEEK_API_KEY,
             base_url="https://api.deepseek.com",
-            timeout=30.0,  # 30 second timeout
-            default_headers={"Content-Type": "application/json"}
+            timeout=30.0,
+            default_headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+            }
         )
+        # Attach debug hooks to log all requests/responses
+        # (The openai/httpx wrapper should have a .http_client that you can use.)
+        if hasattr(client, "http_client") and client.http_client:
+            client.http_client.event_hooks = {
+                "request": [log_request],
+                "response": [log_response]
+            }
         logger.info(f"Attempting DeepSeek API test with key starting with: {DEEPSEEK_API_KEY[:8]}...")
-        # Build test request
         messages = [{"role": "user", "content": "Test; just reply with the word yes if you're working!"}]
-        try:
-            response = await client.chat.completions.create(
-                model="deepseek-chat",
-                messages=messages,
-                max_tokens=10,
-                temperature=0.1,
-                stream=False
-            )
-            # Log full response for debugging
-            logger.info(f"DeepSeek API raw response type: {type(response)}")
-            logger.info(f"DeepSeek API raw response attributes: {dir(response)}")
-            # Extract content from response
-            if hasattr(response, 'choices') and response.choices:
-                response_message = response.choices[0].message
-                response_string = response_message.content.strip() if response_message else None
-                logger.info(f"DeepSeek API test response content: {response_string}")
-                test_passed = bool(response_string)
-                logger.info(f"DeepSeek API test {'passed' if test_passed else 'failed'} with content: '{response_string}'")
-                return test_passed
-            else:
-                logger.warning("DeepSeek API test failed: Invalid response structure")
-                return False
-        except Exception as api_error:
-            logger.error(f"DeepSeek API call failed: {str(api_error)}")
-            if hasattr(api_error, 'response'):
-                resp = api_error.response
-                logger.error(f"Status code: {getattr(resp, 'status_code', 'N/A')}")
-                logger.error(f"Response headers: {getattr(resp, 'headers', {})}")
-                try:
-                    error_body = resp.json()
-                    logger.error(f"Error response: {json.dumps(error_body, indent=2)}")
-                except Exception:
-                    logger.error(f"Raw error response: {getattr(resp, 'text', 'N/A')}")
-            return False
-    except Exception as e:
-        logger.error(f"DeepSeek API key test failed with exception: {str(e)}")
-        traceback.print_exc()
+        response = await client.chat.completions.create(
+            model="deepseek-chat",
+            messages=messages,
+            max_tokens=2048,
+            temperature=1,
+            top_p=1,
+            frequency_penalty=0,
+            presence_penalty=0,
+            response_format={"type": "text"},
+            stop=None,
+            stream=False,
+        )
+        logger.info(f"DeepSeek API library raw response: {response}")
+        # Attempt to parse content
+        content_text = None
+        if hasattr(response, "choices") and response.choices:
+            content_text = response.choices[0].message.content.strip()
+        elif isinstance(response, dict) and "choices" in response:
+            content_text = response["choices"][0]["message"]["content"].strip()
+        logger.info(f"DeepSeek API test response content: {content_text}")
+        test_passed = bool(content_text)
+        logger.info(f"DeepSeek API test {'passed' if test_passed else 'failed'} with content: '{content_text}'")
+        return test_passed
+    except Exception as api_error:
+        logger.error(f"DeepSeek API key test failed: {str(api_error)}")
+        if hasattr(api_error, 'response'):
+            resp = api_error.response
+            logger.error(f"Status code: {getattr(resp, 'status_code', 'N/A')}")
+            logger.error(f"Response headers: {getattr(resp, 'headers', {})}")
+            try:
+                error_body = resp.json()
+                logger.error(f"Error response: {json.dumps(error_body, indent=2)}")
+            except Exception:
+                logger.error(f"Raw error response: {getattr(resp, 'text', 'N/A')}")
         return False
     
 async def save_inference_api_usage_request(inference_request_model: db_code.InferenceAPIUsageRequest) -> db_code.InferenceAPIUsageRequest:
@@ -6246,95 +6264,62 @@ async def submit_inference_request_to_openrouter(inference_request):
         return None, None
 
 def build_deepseek_request_params(model_parameters: dict, messages: list) -> dict:
-    """
-    Builds request parameters for DeepSeek API calls, only including non-None parameters.
-    """
-    request_params = {
-        "model": "deepseek-chat",  # Always use this exact name
+    # Mimic your Playground usage, pulling keys from model_parameters if needed
+    params = {
+        "model": "deepseek-chat",
         "messages": messages,
-        "stream": False  # This is a fixed parameter
+        "frequency_penalty": model_parameters.get("frequency_penalty", 0),
+        "presence_penalty": model_parameters.get("presence_penalty", 0),
+        "max_tokens": model_parameters.get("number_of_tokens_to_generate", 2048),
+        "response_format": model_parameters.get("response_format", {"type": "text"}),
+        "stop": None,
+        "stream": False,
+        "temperature": model_parameters.get("temperature", 1),
+        "top_p": model_parameters.get("top_p", 1),
+        "tools": model_parameters.get("tools", None),
+        "tool_choice": model_parameters.get("tool_choice", "none"),
+        "logprobs": model_parameters.get("logprobs", False),
+        "top_logprobs": model_parameters.get("top_logprobs", None),
     }
-    # Handle numeric parameters
-    numeric_params = {
-        "max_tokens": ("number_of_tokens_to_generate", 4096, int),
-        "temperature": ("temperature", 1.0, float),
-        "frequency_penalty": ("frequency_penalty", 0.0, float),
-        "presence_penalty": ("presence_penalty", 0.0, float),
-        "top_p": ("top_p", 1.0, float)
-    }
-    for api_param, (param_name, default, converter) in numeric_params.items():
-        if (value := model_parameters.get(param_name)) is not None:
-            request_params[api_param] = converter(value)
-    # Handle response format
-    response_format = {"type": "text"}  # Default
-    if model_parameters.get("response_format") == "json":
-        response_format = {"type": "json_object"}
-    request_params["response_format"] = response_format
-    # Handle tool-related parameters
-    if tools := model_parameters.get("tools"):
-        request_params["tools"] = tools
-        if tool_choice := model_parameters.get("tool_choice"):
-            request_params["tool_choice"] = tool_choice
-    # Handle log probability parameters
-    if model_parameters.get("logprobs"):
-        request_params["logprobs"] = True
-        if top_logprobs := model_parameters.get("top_logprobs"):
-            request_params["top_logprobs"] = top_logprobs
-    return request_params
+    return params
 
 async def submit_inference_request_to_deepseek(inference_request):
+    """Submit inference request to DeepSeek API using their OpenAI-compatible format."""
     logger.info("Now accessing DeepSeek API...")
     try:
-        # Initialize client with timeout and headers
         client = AsyncOpenAI(
             api_key=DEEPSEEK_API_KEY,
             base_url="https://api.deepseek.com",
-            timeout=60.0,  # 60 second timeout for inference
-            default_headers={"Content-Type": "application/json"}
+            default_headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}"
+            }
         )
         if inference_request.model_inference_type_string == "text_completion":
-            # Parse and validate parameters
             raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
             model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
-            # Build messages array
             messages = []
             if system_message := model_parameters.get("system_message"):
                 messages.append({"role": "system", "content": system_message})
             input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             messages.append({"role": "user", "content": input_prompt})
-            try:
-                # Make API call with minimal required parameters
-                response = await client.chat.completions.create(
-                    model="deepseek-chat",
-                    messages=messages,
-                    max_tokens=int(model_parameters.get("number_of_tokens_to_generate", 4096)),
-                    temperature=float(model_parameters.get("temperature", 0.7)),
-                    stream=False
-                )
-                # Extract and validate response
-                if not hasattr(response, 'choices') or not response.choices:
-                    raise ValueError("Invalid response structure from DeepSeek API")
+            request_params = build_deepseek_request_params(model_parameters, messages)
+            response = await client.chat.completions.create(**request_params)
+            # Attempt to parse the response consistently
+            output_text = None
+            if hasattr(response, "choices") and response.choices:
                 output_text = response.choices[0].message.content
-                if not output_text:
-                    raise ValueError("Empty response from DeepSeek API")
-                # Detect output type
-                result = magika.identify_bytes(output_text.encode("utf-8"))
-                return output_text, {
-                    "output_text": result.output.ct_label,
-                    "output_files": ["NA"]
-                }
-            except Exception as api_error:
-                logger.error(f"DeepSeek API call failed: {str(api_error)}")
-                if hasattr(api_error, 'response'):
-                    resp = api_error.response
-                    logger.error(f"Status code: {getattr(resp, 'status_code', 'N/A')}")
-                    logger.error(f"Response headers: {getattr(resp, 'headers', {})}")
-                    try:
-                        error_body = resp.json()
-                        logger.error(f"Error response: {json.dumps(error_body, indent=2)}")
-                    except Exception:
-                        logger.error(f"Raw error response: {getattr(resp, 'text', 'N/A')}")
+            else:
+                if isinstance(response, dict) and "choices" in response:
+                    output_text = response["choices"][0]["message"]["content"]
+            if not output_text:
+                logger.warning("No content returned from DeepSeek API.")
                 return None, None
+            result = magika.identify_bytes(output_text.encode("utf-8"))
+            return output_text, {
+                "output_text": result.output.ct_label,
+                "output_files": ["NA"]
+            }
         else:
             logger.warning(f"Unsupported inference type for DeepSeek model: {inference_request.model_inference_type_string}")
             return None, None
@@ -6388,6 +6373,7 @@ def build_mistral_request_params(
             if top_logprobs := model_parameters.get("top_logprobs"):
                 request_params["top_logprobs"] = top_logprobs
     elif inference_type == "embedding":
+        # For embedding calls
         request_params = {
             "model": "mistral-embed",
             "inputs": [input_text]
@@ -6397,7 +6383,7 @@ def build_mistral_request_params(
         if batch_size := model_parameters.get("batch_size"):
             request_params["batch_size"] = int(batch_size)
     elif inference_type == "ask_question_about_an_image":
-        # The doc suggests using "pixtral-12b-2409" as the model
+        # For vision calls, e.g. "pixtral-12b-2409"
         request_params = {
             "model": model_name.replace("mistralapi-", ""),
             "messages": messages or [],
@@ -6413,8 +6399,9 @@ def build_mistral_request_params(
                 request_params["response_format"] = {"type": "json_object"}
     return {k: v for k, v in request_params.items() if v is not None}
 
-async def handle_mistral_image_analysis(input_data_dict: dict, model_parameters: dict) -> tuple[dict, dict]:
+async def handle_mistral_image_analysis(input_data_dict: dict, model_parameters: dict) -> tuple[Optional[str], Optional[dict]]:
     try:
+        # Convert the b64 image data if it has "data:image" prefix
         image_data_str = input_data_dict["image"]
         if image_data_str.startswith("data:image"):
             image_data_str = image_data_str.split("base64,")[1]
@@ -6425,10 +6412,7 @@ async def handle_mistral_image_analysis(input_data_dict: dict, model_parameters:
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "text",
-                        "text": question
-                    },
+                    {"type": "text", "text": question},
                     {
                         "type": "image_url",
                         "image_url": f"data:{mime_type};base64,{base64.b64encode(processed_image_data).decode('utf-8')}"
@@ -6436,34 +6420,34 @@ async def handle_mistral_image_analysis(input_data_dict: dict, model_parameters:
                 ]
             }
         ]
-        # Build request parameters with the correct argument order
+        # The recommended model is "pixtral-12b-2409" for vision
         request_params = build_mistral_request_params(
             model_parameters,
             "pixtral-12b-2409",
             messages,
             "ask_question_about_an_image"
         )
-        async with httpx.AsyncClient(timeout=float(model_parameters.get("request_timeout_seconds", 90))) as client:
-            completion = await client.chat.complete_async(**request_params)
-            output_text = completion.choices[0].message.content
-            result = magika.identify_bytes(output_text.encode("utf-8"))
-            return output_text, {
-                "output_text": result.output.ct_label,
-                "output_files": ["NA"]
-            }
+        # Use the Mistral client, not httpx
+        client = Mistral(api_key=MISTRAL_API_KEY)
+        completion = await client.chat.complete_async(**request_params)
+        # Get final text and do content detection
+        output_text = completion.choices[0].message.content
+        result = magika.identify_bytes(output_text.encode("utf-8"))
+        return output_text, {
+            "output_text": result.output.ct_label,
+            "output_files": ["NA"]
+        }
     except Exception as e:
         logger.error(f"Error in Mistral image analysis: {str(e)}")
         traceback.print_exc()
         return None, None
     
-
 async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Optional[Any], Optional[Dict]]:
     logger.info("Now accessing Mistral API...")
     try:
         client = Mistral(api_key=MISTRAL_API_KEY)
         raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
-        request_timeout = model_parameters.get("request_timeout", 60)
         inference_type = inference_request.model_inference_type_string
         if inference_type == "text_completion":
             input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
@@ -6473,40 +6457,41 @@ async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Op
             messages.append({"role": "user", "content": input_prompt})
             model_name = inference_request.requested_model_canonical_string
             request_params = build_mistral_request_params(
-                model_parameters, 
+                model_parameters,
                 model_name,
                 messages,
                 inference_type
             )
-            async with httpx.AsyncClient(timeout=request_timeout):
+            chat_completion = await client.chat.complete_async(**request_params)
+            # If the output includes tool calls, handle them
+            if (hasattr(chat_completion.choices[0].message, "tool_calls") and
+                chat_completion.choices[0].message.tool_calls):
+                tool_calls = chat_completion.choices[0].message.tool_calls
+                messages.append({
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": tool_calls
+                })
+                for tool_call in tool_calls:
+                    if tool_call.type == "function":
+                        function_name = tool_call.function.name
+                        function_args = json.loads(tool_call.function.arguments)
+                        if function_name in AVAILABLE_TOOLS:
+                            function_response = AVAILABLE_TOOLS[function_name](**function_args)
+                            messages.append({
+                                "role": "tool",
+                                "content": json.dumps(function_response),
+                                "tool_call_id": tool_call.id
+                            })
+                # Re-complete with updated messages
+                request_params["messages"] = messages
                 chat_completion = await client.chat.complete_async(**request_params)
-                if (hasattr(chat_completion.choices[0].message, "tool_calls") and
-                    chat_completion.choices[0].message.tool_calls):
-                    tool_calls = chat_completion.choices[0].message.tool_calls
-                    messages.append({
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": tool_calls
-                    })
-                    for tool_call in tool_calls:
-                        if tool_call.type == "function":
-                            function_name = tool_call.function.name
-                            function_args = json.loads(tool_call.function.arguments)
-                            if function_name in AVAILABLE_TOOLS:
-                                function_response = AVAILABLE_TOOLS[function_name](**function_args)
-                                messages.append({
-                                    "role": "tool",
-                                    "content": json.dumps(function_response),
-                                    "tool_call_id": tool_call.id
-                                })
-                    request_params["messages"] = messages
-                    chat_completion = await client.chat.complete_async(**request_params)
-                output_text = chat_completion.choices[0].message.content
-                result = magika.identify_bytes(output_text.encode("utf-8"))
-                return output_text, {
-                    "output_text": result.output.ct_label,
-                    "output_files": ["NA"]
-                }
+            output_text = chat_completion.choices[0].message.content
+            result = magika.identify_bytes(output_text.encode("utf-8"))
+            return output_text, {
+                "output_text": result.output.ct_label,
+                "output_files": ["NA"]
+            }
         elif inference_type == "embedding":
             model_name = inference_request.requested_model_canonical_string
             input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
@@ -6517,12 +6502,11 @@ async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Op
                 inference_type,
                 input_text
             )
-            async with httpx.AsyncClient(timeout=request_timeout):
-                embed_response = await client.embeddings.create_async(**request_params)
-                return embed_response.data[0].embedding, {
-                    "output_text": "embedding",
-                    "output_files": ["NA"]
-                }
+            embed_response = await client.embeddings.create_async(**request_params)
+            return embed_response.data[0].embedding, {
+                "output_text": "embedding",
+                "output_files": ["NA"]
+            }
         elif inference_type == "ask_question_about_an_image":
             input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
             return await handle_mistral_image_analysis(input_data, model_parameters)
@@ -6591,11 +6575,13 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
         image = Image.open(io.BytesIO(image_data))
         image_size_mb = len(image_data) / (1024 * 1024)
         width, height = image.size
-        format_lower = image.format.lower() if image.format else "jpeg"
+        format_lower = (image.format or "jpeg").lower()
         mime_type = f"image/{format_lower}"
+        # For consistency
         supported_formats = {"png", "jpeg", "jpg", "gif", "webp"}
         if format_lower not in supported_formats:
             raise ValueError(f"Unsupported image format: {format_lower}")
+        # Mistral image checks
         if model_type == "mistral":
             if image_size_mb > 10:
                 raise ValueError("Image exceeds 10MB size limit")
@@ -6610,8 +6596,11 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
                     new_width = int(max_dim * aspect_ratio)
                 image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
                 buffer = io.BytesIO()
+                # Re-encode as JPEG for Mistral if needed
                 image.save(buffer, format=image.format or "JPEG")
                 image_data = buffer.getvalue()
+                mime_type = f"image/{(image.format or 'jpeg').lower()}"
+        # Claude image checks
         elif model_type == "claude":
             if image_size_mb > 100:
                 raise ValueError("Image exceeds 100MB size limit")
@@ -6619,10 +6608,16 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
                 raise ValueError(f"Image dimensions ({width}x{height}) exceed maximum of 4096x4096")
             if width < 16 or height < 16:
                 raise ValueError(f"Image dimensions ({width}x{height}) below minimum of 16x16")
+            # Force re-encode as PNG for Claude if not already JPEG (because Claude can reject certain base64 data, such as WebP)
+            if format_lower not in ("jpeg", "jpg"):
+                buffer = io.BytesIO()
+                image.save(buffer, format="PNG")
+                image_data = buffer.getvalue()
+                mime_type = "image/png"
         return image_data, mime_type
     except Exception as e:
         raise ValueError(f"Invalid image: {str(e)}")
-
+    
 async def validate_claude_pdf_input(pdf_data: bytes) -> None:
     """Validates PDF inputs for Claude API."""
     try:
@@ -6698,7 +6693,10 @@ async def submit_inference_request_to_claude_api(inference_request):
     try:
         raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
-        await validate_claude_cache_control(inference_request.requested_model_canonical_string, model_parameters.get("cache_control"))
+        await validate_claude_cache_control(
+            inference_request.requested_model_canonical_string,
+            model_parameters.get("cache_control")
+        )
         if inference_request.model_inference_type_string == "text_completion":
             content = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             message_content = [{"type": "text", "text": content}]
@@ -6720,10 +6718,7 @@ async def submit_inference_request_to_claude_api(inference_request):
                         "data": base64.b64encode(processed_image_data).decode('utf-8')
                     }
                 },
-                {
-                    "type": "text",
-                    "text": question
-                }
+                {"type": "text", "text": question}
             ]
             logger.info(f"Image processed successfully. Mime type: {mime_type}")
         elif inference_request.model_inference_type_string == "embedding":
@@ -6746,22 +6741,23 @@ async def submit_inference_request_to_claude_api(inference_request):
                 message_content.append({"type": "text", "text": model_parameters["query"]})
         else:
             raise ValueError(f"Unsupported inference type: {inference_request.model_inference_type_string}")
+        # Apply any optional cache control
         if cache_control := model_parameters.get("cache_control"):
-            for content in message_content:
-                content["cache_control"] = cache_control
+            for block in message_content:
+                block["cache_control"] = cache_control
         messages = [{"role": "user", "content": message_content}]
         request_params = build_claude_request_params(
             model_parameters,
             inference_request.requested_model_canonical_string,
             messages
         )
+        # Optional debug log redacting binary
         debug_params = request_params.copy()
-        if 'messages' in debug_params:
-            for msg in debug_params['messages']:
-                if 'content' in msg:
-                    for c in msg['content']:
-                        if c.get('type') in ('image', 'document') and 'source' in c:
-                            c['source']['data'] = '[BINARY_DATA]'
+        for msg in debug_params.get("messages", []):
+            if "content" in msg:
+                for c in msg["content"]:
+                    if c.get("type") in ("image", "document") and "source" in c:
+                        c["source"]["data"] = "[BINARY_DATA]"
         logger.info(f"Claude API request parameters: {json.dumps(debug_params, indent=2)}")
         response = await client.messages.create(**request_params)
         if inference_request.model_inference_type_string == "embedding":
