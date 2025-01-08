@@ -6400,14 +6400,17 @@ def build_mistral_request_params(
     return {k: v for k, v in request_params.items() if v is not None}
 
 async def handle_mistral_image_analysis(input_data_dict: dict, model_parameters: dict) -> tuple[Optional[str], Optional[dict]]:
+    """Handle image analysis requests for Mistral API."""
     try:
-        # Convert the b64 image data if it has "data:image" prefix
+        # Get image data
         image_data_str = input_data_dict["image"]
         if image_data_str.startswith("data:image"):
             image_data_str = image_data_str.split("base64,")[1]
         image_data_binary = base64.b64decode(image_data_str)
         question = input_data_dict["question"]
+        # Validate and preprocess image
         processed_image_data, mime_type = await validate_and_preprocess_image(image_data_binary, "mistral")
+        # Prepare messages
         messages = [
             {
                 "role": "user",
@@ -6420,17 +6423,17 @@ async def handle_mistral_image_analysis(input_data_dict: dict, model_parameters:
                 ]
             }
         ]
-        # The recommended model is "pixtral-12b-2409" for vision
+        # Prepare request parameters
         request_params = build_mistral_request_params(
             model_parameters,
             "pixtral-12b-2409",
             messages,
             "ask_question_about_an_image"
         )
-        # Use the Mistral client, not httpx
+        # Make API call
         client = Mistral(api_key=MISTRAL_API_KEY)
         completion = await client.chat.complete_async(**request_params)
-        # Get final text and do content detection
+        # Process response
         output_text = completion.choices[0].message.content
         result = magika.identify_bytes(output_text.encode("utf-8"))
         return output_text, {
@@ -6571,20 +6574,26 @@ async def submit_inference_request_to_groq_api(inference_request):
         return None, None
 
 async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mistral") -> tuple[bytes, str]:
+    """Validates and preprocesses image data for API submission."""
     try:
-        image = Image.open(io.BytesIO(image_data))
-        image_size_mb = len(image_data) / (1024 * 1024)
+        # Create BytesIO object from image data
+        image_file = io.BytesIO(image_data)
+        # Try to open the image to validate it
+        image = Image.open(image_file)
+        # Get original format and size
+        format_lower = (image.format or "JPEG").lower()
         width, height = image.size
-        format_lower = (image.format or "jpeg").lower()
-        mime_type = f"image/{format_lower}"
-        # For consistency
+        image_size_mb = len(image_data) / (1024 * 1024)
+        # Validate format
         supported_formats = {"png", "jpeg", "jpg", "gif", "webp"}
         if format_lower not in supported_formats:
             raise ValueError(f"Unsupported image format: {format_lower}")
-        # Mistral image checks
+        mime_type = f"image/{format_lower}"
+        # Model-specific preprocessing
         if model_type == "mistral":
             if image_size_mb > 10:
                 raise ValueError("Image exceeds 10MB size limit")
+            # Resize if needed
             max_dim = 1024
             if width > max_dim or height > max_dim:
                 aspect_ratio = width / height
@@ -6595,29 +6604,30 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
                     new_height = max_dim
                     new_width = int(max_dim * aspect_ratio)
                 image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                # Save resized image
                 buffer = io.BytesIO()
-                # Re-encode as JPEG for Mistral if needed
-                image.save(buffer, format=image.format or "JPEG")
+                image.save(buffer, format=image.format or "JPEG", quality=95)
                 image_data = buffer.getvalue()
-                mime_type = f"image/{(image.format or 'jpeg').lower()}"
-        # Claude image checks
         elif model_type == "claude":
             if image_size_mb > 100:
                 raise ValueError("Image exceeds 100MB size limit")
+            # Check dimensions
             if width > 4096 or height > 4096:
                 raise ValueError(f"Image dimensions ({width}x{height}) exceed maximum of 4096x4096")
             if width < 16 or height < 16:
                 raise ValueError(f"Image dimensions ({width}x{height}) below minimum of 16x16")
-            # Force re-encode as PNG for Claude if not already JPEG (because Claude can reject certain base64 data, such as WebP)
+            # For Claude, convert non-JPEG images to PNG
             if format_lower not in ("jpeg", "jpg"):
                 buffer = io.BytesIO()
-                image.save(buffer, format="PNG")
+                image.save(buffer, format="PNG", quality=95)
                 image_data = buffer.getvalue()
                 mime_type = "image/png"
+        logger.info(f"Image validated and processed. Size: {width}x{height}, Format: {format_lower}")
         return image_data, mime_type
     except Exception as e:
+        logger.error(f"Image validation/preprocessing error: {str(e)}")
         raise ValueError(f"Invalid image: {str(e)}")
-    
+
 async def validate_claude_pdf_input(pdf_data: bytes) -> None:
     """Validates PDF inputs for Claude API."""
     try:
@@ -6701,26 +6711,31 @@ async def submit_inference_request_to_claude_api(inference_request):
             content = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             message_content = [{"type": "text", "text": content}]
         elif inference_request.model_inference_type_string == "ask_question_about_an_image":
-            input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
-            image_data_str = input_data_dict["image"]
-            if image_data_str.startswith("data:image"):
-                image_data_str = image_data_str.split("base64,")[1]
-            image_data = base64.b64decode(image_data_str)
-            question = input_data_dict["question"]
-            logger.info("Validating and preprocessing image for Claude...")
-            processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
-            message_content = [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": mime_type,
-                        "data": base64.b64encode(processed_image_data).decode('utf-8')
-                    }
-                },
-                {"type": "text", "text": question}
-            ]
-            logger.info(f"Image processed successfully. Mime type: {mime_type}")
+            try:
+                input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
+                image_data_str = input_data_dict["image"]
+                if image_data_str.startswith("data:image"):
+                    image_data_str = image_data_str.split("base64,")[1]
+                image_data = base64.b64decode(image_data_str)
+                question = input_data_dict["question"]
+                logger.info("Validating and preprocessing image for Claude...")
+                processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
+                message_content = [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": base64.b64encode(processed_image_data).decode('utf-8')
+                        }
+                    },
+                    {"type": "text", "text": question}
+                ]
+                logger.info(f"Image processed successfully. Mime type: {mime_type}")
+            except Exception as e:
+                logger.error(f"Error processing image data: {str(e)}")
+                traceback.print_exc()
+                return None, None
         elif inference_request.model_inference_type_string == "embedding":
             input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             message_content = [{"type": "text", "text": input_text}]
