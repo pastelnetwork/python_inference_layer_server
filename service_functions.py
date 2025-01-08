@@ -6392,6 +6392,49 @@ def build_mistral_request_params(
                 request_params["response_format"] = {"type": "json_object"}
     return {k: v for k, v in request_params.items() if v is not None}
 
+async def handle_mistral_image_analysis(input_data_dict: dict, model_parameters: dict) -> tuple[dict, dict]:
+    """Handle image analysis with the Mistral API"""
+    try:
+        # Get the image data and question
+        image_data_binary = base64.b64decode(input_data_dict["image"])
+        question = input_data_dict["question"]
+        # Validate and preprocess the image
+        processed_image_data, mime_type = await validate_and_preprocess_image(image_data_binary, "mistral")
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": question
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": f"data:{mime_type};base64,{base64.b64encode(processed_image_data).decode('utf-8')}"
+                    }
+                ]
+            }
+        ]
+        # Build request parameters
+        request_params = build_mistral_request_params(
+            model_parameters,
+            messages,
+            "ask_question_about_an_image"
+        )
+        # Make the API call using request parameters
+        async with httpx.AsyncClient(timeout=float(model_parameters.get("request_timeout_seconds", 90))) as client:
+            completion = await client.chat.complete_async(**request_params)
+            output_text = completion.choices[0].message.content
+            result = magika.identify_bytes(output_text.encode("utf-8"))
+            return output_text, {
+                "output_text": result.output.ct_label,
+                "output_files": ["NA"]
+            }
+    except Exception as e:
+        logger.error(f"Error in Mistral image analysis: {str(e)}")
+        traceback.print_exc()
+        return None, None
+    
 async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Optional[Any], Optional[Dict]]:
     """Submit inference request to Mistral API, with complete parameter support."""
     logger.info("Now accessing Mistral API...")
@@ -6466,68 +6509,10 @@ async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Op
                     "output_text": "embedding",
                     "output_files": ["NA"]
                 }
-        elif inference_type == "ask_question_about_an_image":
-            # Parse and validate input
-            model_name = inference_request.requested_model_canonical_string            
+        elif inference_request.model_inference_type_string == "ask_question_about_an_image":
+            # Parse input data
             input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
-            image_data = base64.b64decode(input_data["image"])
-            question = input_data["question"]
-            try:
-                image_buffer = io.BytesIO(image_data)
-                image_buffer.seek(0)  # Rewind the buffer before reading
-                image = Image.open(image_buffer)
-                if len(image_data) > 10 * 1024 * 1024:
-                    raise ValueError("Image exceeds 10MB size limit")
-                if image.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
-                    raise ValueError("Unsupported image format")
-                # Resize if needed
-                width, height = image.size
-                max_dim = 1024
-                if width > max_dim or height > max_dim:
-                    aspect_ratio = width / height
-                    if width > height:
-                        new_width = max_dim
-                        new_height = int(max_dim / aspect_ratio)
-                    else:
-                        new_height = max_dim
-                        new_width = int(max_dim * aspect_ratio)
-                    image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                    buffer = io.BytesIO()
-                    image.save(buffer, format=image.format)
-                    image_data = buffer.getvalue()
-            except Exception as e:
-                logger.error(f"Image validation failed: {str(e)}")
-                return None, None
-            mime_type = f"image/{image.format.lower()}"
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": question
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": f"data:{mime_type};base64,{base64.b64encode(image_data).decode('utf-8')}"
-                        }
-                    ]
-                }
-            ]
-            request_params = build_mistral_request_params(
-                model_parameters,
-                model_name,
-                messages,
-                inference_type
-            )
-            async with httpx.AsyncClient(timeout=request_timeout):
-                completion = await client.chat.complete_async(**request_params)
-                output_text = completion.choices[0].message.content
-                result = magika.identify_bytes(output_text.encode("utf-8"))
-                return output_text, {
-                    "output_text": result.output.ct_label,
-                    "output_files": ["NA"]
-                }
+            return await handle_mistral_image_analysis(input_data, model_parameters)
         else:
             logger.warning(f"Unsupported inference type for Mistral model: {inference_type}")
             return None, None
@@ -6588,22 +6573,58 @@ async def submit_inference_request_to_groq_api(inference_request):
         logger.warning(f"Unsupported inference type for Groq model: {inference_request.model_inference_type_string}")
         return None, None
 
-async def validate_claude_image_input(image_data: bytes) -> None:
-    """Validates image inputs for Claude API."""
+async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mistral") -> tuple[bytes, str]:
+    """
+    Validates and preprocesses image data for various AI model APIs.
+    
+    Args:
+        image_data: Raw image bytes
+        model_type: Type of model ("mistral", "claude", etc.)
+        
+    Returns:
+        Tuple of (processed_image_data, mime_type)
+        
+    Raises:
+        ValueError: If image validation fails
+    """
     try:
         image = Image.open(io.BytesIO(image_data))
-        if image.format.lower() not in ['png', 'jpeg', 'jpg', 'gif', 'webp']:
-            raise ValueError(f"Unsupported image format: {image.format}")
-        width, height = image.size
-        if width > 4096 or height > 4096:
-            raise ValueError(f"Image dimensions ({width}x{height}) exceed maximum of 4096x4096")
-        if width < 16 or height < 16:
-            raise ValueError(f"Image dimensions ({width}x{height}) below minimum of 16x16")
         image_size_mb = len(image_data) / (1024 * 1024)
-        if image_size_mb > 100:
-            raise ValueError(f"Image size ({image_size_mb:.1f}MB) exceeds 100MB limit")
+        width, height = image.size
+        format_lower = image.format.lower() if image.format else "jpeg"
+        mime_type = f"image/{format_lower}"
+        # Validate format
+        supported_formats = {"png", "jpeg", "jpg", "gif", "webp"}
+        if format_lower not in supported_formats:
+            raise ValueError(f"Unsupported image format: {format_lower}")
+        # Model-specific validations and preprocessing
+        if model_type == "mistral":
+            if image_size_mb > 10:
+                raise ValueError("Image exceeds 10MB size limit")
+            max_dim = 1024
+            if width > max_dim or height > max_dim:
+                # Resize keeping aspect ratio
+                aspect_ratio = width / height
+                if width > height:
+                    new_width = max_dim
+                    new_height = int(max_dim / aspect_ratio)
+                else:
+                    new_height = max_dim
+                    new_width = int(max_dim * aspect_ratio)
+                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                # Convert back to bytes
+                buffer = io.BytesIO()
+                image.save(buffer, format=image.format or "JPEG")
+                image_data = buffer.getvalue()
+        elif model_type == "claude":
+            if image_size_mb > 100:
+                raise ValueError("Image exceeds 100MB size limit")
+            if width > 4096 or height > 4096:
+                raise ValueError(f"Image dimensions ({width}x{height}) exceed maximum of 4096x4096")
+            if width < 16 or height < 16:
+                raise ValueError(f"Image dimensions ({width}x{height}) below minimum of 16x16")
+        return image_data, mime_type
     except Exception as e:
-        logger.error(f"Image validation error: {str(e)}")
         raise ValueError(f"Invalid image: {str(e)}")
 
 async def validate_claude_pdf_input(pdf_data: bytes) -> None:
@@ -6706,7 +6727,7 @@ async def submit_inference_request_to_claude_api(inference_request):
         elif inference_request.model_inference_type_string == "ask_question_about_an_image":
             input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
             image_data = base64.b64decode(input_data_dict["image"])
-            await validate_claude_image_input(image_data)
+            await validate_and_preprocess_image(image_data, "claude")
             question = input_data_dict["question"]
             result = magika.identify_bytes(image_data)
             media_type = result.output.mime_type or "image/jpeg"
