@@ -4762,20 +4762,48 @@ def count_tokens(model_name: str, input_data: str) -> int:
         return len(input_tokens)
     
 def estimate_claude_image_tokens(image_data: bytes) -> int:
-    image = Image.open(io.BytesIO(image_data))
-    width, height = image.size
-    # Base cost for image metadata
-    base_tokens = 85
-    # Calculate patch-based tokens (similar to GPT-4V approach but adjusted)
-    patch_size = 512
-    patches_x = -(-width // patch_size)  # Ceiling division
-    patches_y = -(-height // patch_size)
-    total_patches = patches_x * patches_y
-    # Use a more conservative token count per patch
-    tokens_per_patch = 120  # Adjusted down from GPT-4V's 170
-    patch_tokens = total_patches * tokens_per_patch
-    total_tokens = base_tokens + patch_tokens
-    return total_tokens
+    try:
+        # First preprocess the image
+        image = Image.open(io.BytesIO(image_data))
+        width, height = image.size
+        # Convert RGBA to RGB if needed
+        if image.mode == 'RGBA':
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[3])
+            image = background
+        # Resize if necessary (Claude's limits)
+        max_dim = 4096
+        if width > max_dim or height > max_dim:
+            aspect_ratio = width / height
+            if width > height:
+                new_width = max_dim
+                new_height = int(max_dim / aspect_ratio)
+            else:
+                new_height = max_dim
+                new_width = int(max_dim * aspect_ratio)
+            image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            width, height = new_width, new_height
+        # Base cost for image metadata and encoding
+        base_tokens = 85
+        # Calculate tiles - Claude uses 512x512 tiles similar to GPT-4V
+        # but is slightly more efficient in token usage per tile
+        patch_size = 512
+        patches_x = -(-width // patch_size)  # Ceiling division
+        patches_y = -(-height // patch_size)
+        total_patches = patches_x * patches_y
+        # Claude is more efficient than GPT-4V in token usage per tile
+        # Using 85 tokens per patch instead of GPT-4V's 170
+        tokens_per_patch = 85  # More efficient than GPT-4V
+        patch_tokens = total_patches * tokens_per_patch
+        total_tokens = base_tokens + patch_tokens
+        # Log for debugging
+        logger.info(f"Claude image token calculation: {width}x{height} image, "
+                    f"{total_patches} patches ({patches_x}x{patches_y}), "
+                    f"{total_tokens} total tokens")
+        return total_tokens
+    except Exception as e:
+        logger.error(f"Error estimating Claude image tokens: {str(e)}")
+        return 0  # Return 0 tokens on error to avoid overcharging
     
 def estimate_pixtral_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[int, int]]:
     try:
@@ -5041,16 +5069,54 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
         per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
         estimated_cost = input_cost + output_cost + per_call_cost
-    elif model_name.startswith("openai-gpt-4o") or model_name.startswith("openai-o1"):
-        input_tokens = count_tokens(model_name, input_data)
-        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
-        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-        cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
-        cache_miss_tokens = input_tokens - cache_hit_tokens
-        input_cost = (
-            float(model_pricing["input_cost"]) * float(cache_miss_tokens) +
-            float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)
-        ) / 1000.0
+    elif model_name.startswith("openai-gpt-4") or model_name.startswith("openai-o1"):
+        input_data_dict = json.loads(input_data)
+        if "image" in input_data_dict:
+            # Handle image + text input
+            image_data_binary = base64.b64decode(input_data_dict["image"])
+            question = input_data_dict["question"]
+            # Calculate image resolution and tokens
+            image = Image.open(io.BytesIO(image_data_binary))
+            width, height = image.size
+            image_file_size_in_mb = len(image_data_binary) / (1024 * 1024)
+            logger.info(f"Submitted image file is {image_file_size_in_mb:.2f}MB and has resolution of {width} x {height}")
+            # Resize logic to fit the larger dimension to 2048 pixels
+            target_larger_dimension = 2048
+            aspect_ratio = width / height
+            if width > height:
+                resized_width = target_larger_dimension
+                resized_height = int(target_larger_dimension / aspect_ratio)
+            else:
+                resized_height = target_larger_dimension
+                resized_width = int(target_larger_dimension * aspect_ratio)
+            logger.info(f"Image will be resized automatically to a resolution of {resized_width} x {resized_height}")
+            # Calculate visual tokens (based on 512x512 tiles)
+            tiles_x = -(-resized_width // 512)  # Ceiling division
+            tiles_y = -(-resized_height // 512)
+            total_tiles = tiles_x * tiles_y
+            base_tokens = 85  # Base token cost for image processing
+            tile_tokens = 170 * total_tiles  # Token cost per tile
+            total_image_tokens = base_tokens + tile_tokens
+            # Add question tokens
+            question_tokens = count_tokens(model_name, question)
+            input_tokens = total_image_tokens + question_tokens
+            logger.info(f"Vision input token breakdown - Image: {total_image_tokens}, Question: {question_tokens}")
+        else:
+            # Handle text-only input
+            input_tokens = count_tokens(model_name, input_data)
+        # Calculate costs based on whether it's a vision or text-only request
+        if "image" in input_data_dict:
+            input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
+        else:
+            # Use cached pricing for text-only requests
+            cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
+            cache_miss_tokens = input_tokens - cache_hit_tokens
+            input_cost = (
+                float(model_pricing["input_cost"]) * float(cache_miss_tokens) +
+                float(model_pricing.get("input_cost_cached", model_pricing["input_cost"])) * float(cache_hit_tokens)
+            ) / 1000.0
+        # Calculate output costs
+        output_tokens = int(model_parameters.get("number_of_tokens_to_generate", 300))
         # Apply reasoning effort multiplier if applicable
         reasoning_effort_multiplier = 1.0
         if model_name.startswith("openai-o1"):
@@ -5058,46 +5124,17 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
             reasoning_effort_multiplier = reasoning_effort_multipliers.get(reasoning_effort, 1.0)
         output_cost = (
             float(model_pricing["output_cost"]) * 
-            float(number_of_tokens_to_generate) * 
+            float(output_tokens) * 
             reasoning_effort_multiplier
         ) / 1000.0
-        per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
+        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+        per_call_cost = float(model_pricing.get("per_call_cost", 0.0)) * float(number_of_completions_to_generate)
         estimated_cost = input_cost + output_cost + per_call_cost
-    elif model_name.startswith("openai-gpt-4o-vision"):
-        input_data_dict = json.loads(input_data)
-        image_data_binary = base64.b64decode(input_data_dict["image"])
-        question = input_data_dict["question"]
-        # Calculate image resolution and tokens
-        image = Image.open(io.BytesIO(image_data_binary))
-        width, height = image.size
-        image_file_size_in_mb = len(image_data_binary) / (1024 * 1024)
-        logger.info(f"Submitted image file is {image_file_size_in_mb:.2f}MB and has resolution of {width} x {height}")
-        # Resize logic to fit the larger dimension to 2048 pixels
-        target_larger_dimension = 2048
-        aspect_ratio = width / height
-        if width > height:
-            resized_width = target_larger_dimension
-            resized_height = int(target_larger_dimension / aspect_ratio)
+        # Log cost breakdown
+        if "image" in input_data_dict:
+            logger.info(f"Vision cost breakdown - Image: ${input_cost:.4f}, Output: ${output_cost:.4f}")
         else:
-            resized_height = target_larger_dimension
-            resized_width = int(target_larger_dimension * aspect_ratio)
-        logger.info(f"Image will be resized automatically to a resolution of {resized_width} x {resized_height}")
-        # Calculate visual tokens (based on 512x512 tiles)
-        tiles_x = -(-resized_width // 512)  # Ceiling division
-        tiles_y = -(-resized_height // 512)
-        total_tiles = tiles_x * tiles_y
-        base_tokens = 85  # Base token cost for image processing
-        tile_tokens = 170 * total_tiles  # Token cost per tile
-        total_image_tokens = base_tokens + tile_tokens
-        # Add question tokens
-        question_tokens = count_tokens(model_name, question)
-        input_tokens = total_image_tokens + question_tokens
-        # Calculate costs
-        input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
-        output_tokens = int(model_parameters.get("number_of_tokens_to_generate", 300))
-        output_cost = float(model_pricing["output_cost"]) * float(output_tokens) / 1000.0
-        estimated_cost = input_cost + output_cost
-        logger.info(f"Vision cost breakdown - Image: ${input_cost:.4f}, Output: ${output_cost:.4f}")
+            logger.info(f"Text cost breakdown - Input: ${input_cost:.4f}, Output: ${output_cost:.4f}")
         return estimated_cost
     elif model_name.startswith("openai-text-embedding"):
         input_tokens = count_tokens(model_name, input_data)
@@ -5115,7 +5152,6 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
             
             # Log token breakdown for debugging
             logger.info(f"Claude image request token breakdown - Image: {image_tokens}, Question: {question_tokens}")
-            
         elif isinstance(input_data, dict) and "document" in input_data:
             # Handle PDF input - estimate ~1500-3000 tokens per page
             pdf_data = base64.b64decode(input_data["document"])
@@ -5130,26 +5166,21 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         else:
             # Handle regular text input
             input_tokens = count_tokens(model_name, input_data)
-
         # Get cache-related parameters
         cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
         cache_miss_tokens = input_tokens - cache_hit_tokens
-        
         # Calculate input costs based on caching
         input_cost = (
             float(model_pricing["input_cost_write"]) * float(cache_miss_tokens) +  # New tokens that need caching
             float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)    # Already cached tokens
         ) / 1000.0
-        
         # Calculate output costs
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
         output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
-        
         # Add system prompt token costs if applicable
         if model_parameters.get("system_prompt"):
             system_tokens = count_tokens(model_name, model_parameters["system_prompt"])
             input_cost += float(model_pricing["input_cost"]) * float(system_tokens) / 1000.0
-            
         estimated_cost = input_cost + output_cost
         logger.info(f"Claude cost breakdown - Input: ${input_cost:.4f} ({input_tokens} tokens), Output: ${output_cost:.4f} ({number_of_tokens_to_generate} tokens)")
     elif model_name.startswith("deepseek-"):
@@ -6688,21 +6719,21 @@ async def submit_inference_request_to_claude_api(inference_request):
             message_content = [{"type": "text", "text": content}]
         elif inference_request.model_inference_type_string == "ask_question_about_an_image":
             try:
+                # Parse input data
                 input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
-                image_data = base64.b64decode(input_data_dict["image"])
+                # Get image and question
+                base64_image = input_data_dict["image"]  # Already in base64 format
                 question = input_data_dict["question"]
-                logger.info("Validating and preprocessing image for Claude...")
-                processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
-                # Log image details
-                with Image.open(io.BytesIO(processed_image_data)) as img:
-                    logger.info(f"Image validated and processed. Size: {img.size[0]}x{img.size[1]}, Format: {img.format.lower()}")
+                # Log for debugging
+                logger.info("Processing image data for Claude...")
+                # Create the message content
                 message_content = [
                     {
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": mime_type,
-                            "data": base64.b64encode(processed_image_data).decode('utf-8')
+                            "media_type": "image/jpeg",  # Default to JPEG if not specified
+                            "data": base64_image
                         }
                     },
                     {
@@ -6710,9 +6741,9 @@ async def submit_inference_request_to_claude_api(inference_request):
                         "text": question
                     }
                 ]
-                logger.info(f"Image processed successfully. Mime type: {mime_type}")
+                logger.info("Image message content created successfully")
             except Exception as img_error:
-                logger.error(f"Error processing image: {str(img_error)}")
+                logger.error(f"Error processing image data: {str(img_error)}")
                 raise
         elif inference_request.model_inference_type_string == "embedding":
             input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
@@ -6745,16 +6776,14 @@ async def submit_inference_request_to_claude_api(inference_request):
             inference_request.requested_model_canonical_string,
             messages
         )
-        # Log request parameters for debugging (excluding large data fields)
+        # Log request parameters for debugging (excluding image data)
         debug_params = request_params.copy()
         if 'messages' in debug_params:
             for msg in debug_params['messages']:
                 if 'content' in msg:
                     for content in msg['content']:
                         if content.get('type') in ('image', 'document') and 'source' in content:
-                            # Save a snippet of the base64 data for debugging
-                            data = content['source']['data']
-                            content['source']['data'] = f"{data[:50]}..." if len(data) > 50 else data
+                            content['source']['data'] = '[BINARY_DATA]'
         logger.info(f"Claude API request parameters: {json.dumps(debug_params, indent=2)}")
         # Make the API call
         response = await client.messages.create(**request_params)
@@ -6771,7 +6800,6 @@ async def submit_inference_request_to_claude_api(inference_request):
         return output_results, output_results_file_type_strings
     except Exception as e:
         logger.error(f"Error in Claude API request: {str(e)}")
-        # For API errors, try to extract more detailed error information
         if hasattr(e, 'message'):
             logger.error(f"API Error message: {e.message}")
         if hasattr(e, 'status_code'):
