@@ -1584,10 +1584,24 @@ def is_model_supported(model_menu, desired_model_canonical_string, desired_model
                         for param in matched_model["model_parameters"]:
                             if param["name"] == desired_param:
                                 if "type" in param:
-                                    if param["type"] == "int" and isinstance(int(desired_value), int):
-                                        param_found = True
-                                    elif param["type"] == "float" and isinstance(float(desired_value), float):
-                                        param_found = True
+                                    if param["type"] == "int":
+                                        if desired_value == "" or desired_value is None:
+                                            param_found = True  # Skip empty values, will use default
+                                        else:
+                                            try:
+                                                int(desired_value)  # Just test conversion
+                                                param_found = True
+                                            except (ValueError, TypeError):
+                                                return False
+                                    elif param["type"] == "float":
+                                        if desired_value == "" or desired_value is None:
+                                            param_found = True  # Skip empty values, will use default
+                                        else:
+                                            try:
+                                                float(desired_value)  # Just test conversion
+                                                param_found = True
+                                            except (ValueError, TypeError):
+                                                return False
                                     elif param["type"] == "string" and isinstance(str(desired_value), str):
                                         if "options" in param and desired_value in param["options"]:
                                             param_found = True
