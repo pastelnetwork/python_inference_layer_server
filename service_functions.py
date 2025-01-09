@@ -4700,7 +4700,7 @@ def super_approximate_token_count(input_data: Any) -> int:
             return 1500
     return 500 # Default fallback
     
-def count_tokens(model_name: str, input_data: str) -> int:
+async def count_tokens(model_name: str, input_data: str) -> int:
     tokenizer_name = get_tokenizer(model_name)
     logger.info(f"Selected tokenizer {tokenizer_name} for model {model_name}")
     try:
@@ -4724,7 +4724,7 @@ def count_tokens(model_name: str, input_data: str) -> int:
         elif 'claude' in model_name.lower():
             # Try to use Claude's token counting API first
             try:
-                token_count = asyncio.run(count_tokens_claude(model_name, input_data))
+                token_count = await count_tokens_claude(model_name, input_data)
                 logger.info(f"Using Claude's token counting API: {token_count} tokens")
                 return token_count
             except Exception as claude_err:
@@ -4741,7 +4741,7 @@ def count_tokens(model_name: str, input_data: str) -> int:
                             logger.warning("Image token estimation failed, using fallback calculation")
                             total_img_tokens = 85  # Base token cost
                         question = input_data.get("question", "")
-                        question_tokens = count_tokens(model_name, question)
+                        question_tokens = await count_tokens(model_name, question)
                         input_tokens = total_img_tokens + question_tokens
                         logger.info(f"Token breakdown - Image: {total_img_tokens}, Question: {question_tokens}, Total: {input_tokens}")
                 except (json.JSONDecodeError, KeyError):
@@ -5101,7 +5101,7 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
             image_tokens, _ = estimate_pixtral_image_tokens(image_data_binary)
             image_cost = float(model_pricing["image_cost"]) * float(image_tokens)
             # Calculate text costs
-            question_tokens = count_tokens(model_name, question)
+            question_tokens = await count_tokens(model_name, question)
             input_cost = float(model_pricing["input_cost"]) * float(question_tokens) / 1000.0
             # Calculate output costs
             output_tokens = int(model_parameters.get("number_of_tokens_to_generate", 300))
@@ -5111,10 +5111,10 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
             logger.error(f"Error calculating Pixtral cost: {str(e)}")
             return 0.0
     elif "mistralapi-mistral-embed" in model_name.lower():
-        input_tokens = count_tokens(model_name, input_data)
+        input_tokens = await count_tokens(model_name, input_data)
         estimated_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
     elif model_name.startswith("mistralapi-"):
-        input_tokens = count_tokens(model_name, input_data)
+        input_tokens = await count_tokens(model_name, input_data)
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
         input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
@@ -5129,14 +5129,14 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
                 question = input_data_dict["question"]
                 # Calculate tokens for image and question
                 total_image_tokens, _ = estimate_openai_image_tokens(image_data_binary)
-                question_tokens = count_tokens(model_name, question)
+                question_tokens = await count_tokens(model_name, question)
                 input_tokens = total_image_tokens + question_tokens
                 logger.info(f"Vision input token breakdown - Image: {total_image_tokens}, Question: {question_tokens}")
                 # Calculate image + text costs
                 input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
             else:
                 # Handle text-only input with cache support
-                input_tokens = count_tokens(model_name, input_data)
+                input_tokens = await count_tokens(model_name, input_data)
                 cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
                 cache_miss_tokens = input_tokens - cache_hit_tokens
                 input_cost = (
@@ -5164,14 +5164,14 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
                 logger.info(f"Text cost breakdown - Input: ${input_cost:.4f}, Output: ${output_cost:.4f}")
             return estimated_cost
     elif model_name.startswith("openai-text-embedding"):
-        input_tokens = count_tokens(model_name, input_data)
+        input_tokens = await count_tokens(model_name, input_data)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
         input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
         estimated_cost = input_cost * number_of_completions_to_generate
     elif "claude" in model_name.lower():
             try:
                 # Try to get tokens using Claude's API first
-                input_tokens = count_tokens(model_name, input_data)
+                input_tokens = await count_tokens(model_name, input_data)
                 logger.info(f"Using Claude token count: {input_tokens}")
                 # Get cache-related parameters
                 cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
@@ -5186,7 +5186,7 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
                 output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
                 # Add system prompt token costs if applicable
                 if model_parameters.get("system_prompt"):
-                    system_tokens = count_tokens(model_name, model_parameters["system_prompt"])
+                    system_tokens = await count_tokens(model_name, model_parameters["system_prompt"])
                     input_cost += float(model_pricing["input_cost"]) * float(system_tokens) / 1000.0
                     logger.info(f"System prompt tokens: {system_tokens}")
                 estimated_cost = input_cost + output_cost
@@ -5197,7 +5197,7 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
                 traceback.print_exc()
                 return 0.0
     elif model_name.startswith("deepseek-"):
-        input_tokens = count_tokens(model_name, input_data)
+        input_tokens = await count_tokens(model_name, input_data)
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 4096)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
         input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
@@ -5205,7 +5205,7 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
         per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
         estimated_cost = input_cost + output_cost + per_call_cost
     elif model_name.startswith("groq-"):
-        input_tokens = count_tokens(model_name, input_data)
+        input_tokens = await count_tokens(model_name, input_data)
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
         input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
@@ -5217,7 +5217,7 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
         estimated_cost = credits_per_call * number_of_completions_to_generate
     else:
         # Default cost calculation for other models
-        input_tokens = count_tokens(model_name, input_data)
+        input_tokens = await count_tokens(model_name, input_data)
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
         input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
@@ -5279,7 +5279,7 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
         if model_inference_type_string == "ask_question_about_an_image":
             input_tokens = 3000
         else:
-            input_tokens = count_tokens(model_name, input_data) if model_inference_type_string != "embedding_document" else 0
+            input_tokens = await count_tokens(model_name, input_data) if model_inference_type_string != "embedding_document" else 0
         compute_cost = float(credit_costs["compute_cost"])
         memory_cost = float(credit_costs["memory_cost"])
         if model_inference_type_string == "text_completion" or model_inference_type_string == "ask_question_about_an_image":
@@ -5305,7 +5305,7 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
                 sentences = document_stats["individual_sentences"]
                 total_sentences = document_stats["total_number_of_sentences"]
                 concatenated_sentences = " ".join(sentences)
-                total_tokens = count_tokens(model_name, concatenated_sentences)
+                total_tokens = await count_tokens(model_name, concatenated_sentences)
                 proposed_cost_in_credits = (
                     (total_tokens * float(credit_costs["average_tokens_per_sentence"])) +
                     (total_sentences * float(credit_costs["total_sentences"])) +
