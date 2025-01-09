@@ -4340,12 +4340,8 @@ async def get_inference_model_menu(use_verbose=0):
                     if use_verbose:
                         logger.info(f"Added OpenRouter model: {model['model_name']} to the filtered model menu.")
             elif model["model_name"].startswith("deepseek-"):
-                logger.info(f"Checking DeepSeek model {model['model_name']}...")
-                logger.info(f"DEEPSEEK_API_KEY exists: {bool(DEEPSEEK_API_KEY)}")
-                logger.info(f"DEEPSEEK_API_KEY is {DEEPSEEK_API_KEY}")
                 if DEEPSEEK_API_KEY:
                     api_key_valid = await is_api_key_valid("deepseek", api_key_tests)
-                    logger.info(f"DeepSeek API key valid: {api_key_valid}")
                     if api_key_valid:
                         filtered_model_menu["models"].append(model)
                         if use_verbose:
@@ -4581,17 +4577,15 @@ async def test_deepseek_api_key():
         "logprobs": False,
         "top_logprobs": None
     }
-    logger.info(f"Sending async request to: {url}")
-    logger.info(f"Using key starting with: {DEEPSEEK_API_KEY[:8]}...")
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(url, headers=headers, json=payload)
-            logger.info(f"Response status code: {response.status_code}")
+            logger.info(f"Deepseek test response status code: {response.status_code}")
             try:
                 data = response.json()
-                logger.info("Response JSON:\n%s", json.dumps(data, indent=2))
+                logger.info("Deepseek test response JSON:\n%s", json.dumps(data, indent=2))
             except Exception:
-                logger.error("Response text:\n", response.text)
+                logger.error("Deepseek test response text:\n", response.text)
             return response.status_code == 200
     except Exception as e:
         logger.error(f"DeepSeek API key test raised an exception: {str(e)}")
@@ -5145,13 +5139,24 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         # Determine input type and handle accordingly
         if isinstance(input_data, dict) and "image" in input_data:
             # Handle image input
-            image_data_binary = base64.b64decode(input_data["image"])
-            image_tokens = estimate_claude_image_tokens(image_data_binary)
-            question_tokens = count_tokens(model_name, input_data.get("question", ""))
-            input_tokens = image_tokens + question_tokens
-            
-            # Log token breakdown for debugging
-            logger.info(f"Claude image request token breakdown - Image: {image_tokens}, Question: {question_tokens}")
+            try:
+                image_data_binary = base64.b64decode(input_data["image"])
+                # Log pre-token calculation
+                logger.info("Calculating Claude vision tokens...")
+                # Calculate image tokens
+                image_tokens = estimate_claude_image_tokens(image_data_binary)
+                logger.info(f"Image tokens calculated: {image_tokens}")
+                # Calculate question tokens
+                question = input_data.get("question", "")
+                question_tokens = count_tokens(model_name, question)
+                logger.info(f"Question tokens calculated: {question_tokens}")
+                # Total input tokens
+                input_tokens = image_tokens + question_tokens
+                logger.info(f"Total input tokens (image + question): {input_tokens}")
+            except Exception as e:
+                logger.error(f"Error in Claude vision token calculation: {str(e)}")
+                traceback.print_exc()
+                return 0.0
         elif isinstance(input_data, dict) and "document" in input_data:
             # Handle PDF input - estimate ~1500-3000 tokens per page
             pdf_data = base64.b64decode(input_data["document"])
@@ -5163,9 +5168,11 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
                 if "query" in input_data:
                     query_tokens = count_tokens(model_name, input_data["query"])
                     input_tokens += query_tokens
+                logger.info(f"PDF document tokens calculated: {input_tokens}")
         else:
             # Handle regular text input
             input_tokens = count_tokens(model_name, input_data)
+            logger.info(f"Text input tokens calculated: {input_tokens}")
         # Get cache-related parameters
         cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
         cache_miss_tokens = input_tokens - cache_hit_tokens
@@ -5181,8 +5188,10 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         if model_parameters.get("system_prompt"):
             system_tokens = count_tokens(model_name, model_parameters["system_prompt"])
             input_cost += float(model_pricing["input_cost"]) * float(system_tokens) / 1000.0
+            logger.info(f"System prompt tokens: {system_tokens}")
         estimated_cost = input_cost + output_cost
-        logger.info(f"Claude cost breakdown - Input: ${input_cost:.4f} ({input_tokens} tokens), Output: ${output_cost:.4f} ({number_of_tokens_to_generate} tokens)")
+        logger.info(f"Claude cost breakdown - Input: ${input_cost:.4f} ({input_tokens:,} tokens), Output: ${output_cost:.4f} ({number_of_tokens_to_generate:,} tokens)")
+        return estimated_cost
     elif model_name.startswith("deepseek-"):
         input_tokens = count_tokens(model_name, input_data)
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 4096)
