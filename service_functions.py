@@ -4341,20 +4341,12 @@ async def get_inference_model_menu(use_verbose=0):
                     if use_verbose:
                         logger.info(f"Added OpenRouter model: {model['model_name']} to the filtered model menu.")
             elif model["model_name"].startswith("deepseek-"):
-                logger.info(f"Checking DeepSeek model {model['model_name']}...")
-                logger.info(f"DEEPSEEK_API_KEY exists: {bool(DEEPSEEK_API_KEY)}")
-                logger.info(f"DEEPSEEK_API_KEY is {DEEPSEEK_API_KEY}")
                 if DEEPSEEK_API_KEY:
                     api_key_valid = await is_api_key_valid("deepseek", api_key_tests)
-                    logger.info(f"DeepSeek API key valid: {api_key_valid}")
                     if api_key_valid:
                         filtered_model_menu["models"].append(model)
                         if use_verbose:
                             logger.info(f"Added DeepSeek model: {model['model_name']} to the filtered model menu.")
-                    else:
-                        logger.warning("DeepSeek API key validation failed")
-                else:
-                    logger.warning("DEEPSEEK_API_KEY is not set")
             else:
                 # Models that don't require API keys can be automatically included
                 filtered_model_menu["models"].append(model)
@@ -4572,15 +4564,11 @@ async def test_deepseek_api_key():
             "max_tokens": 10,
             "temperature": 0.1
         }
-        logger.info(f"Sending test request to DeepSeek API: {json.dumps(test_request, indent=2)}")
         response = await client.chat.completions.create(**test_request)
-        # Log full response for debugging
-        logger.info(f"Raw DeepSeek API response: {response}")
         response_string = response.choices[0].message.content.strip()
         logger.info(f"DeepSeek API test response content: {response_string}")
         if response_string is not None:
             test_passed = len(response_string) > 0
-            logger.info(f"DeepSeek API test {'passed' if test_passed else 'failed'} with content length: {len(response_string)}")
         else:
             test_passed = False
             logger.warning("DeepSeek API test failed: response content is None")
