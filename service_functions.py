@@ -4881,7 +4881,7 @@ def estimate_openai_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[i
         logger.error(f"Error estimating OpenAI image tokens: {str(e)}")
         return 0, (0, 0)
     
-def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict) -> float:
+async def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict) -> float:
     # Define the pricing data for each API service and model
     logger.info(f"Evaluating API cost for model: {model_name}")
     pricing_data = {
@@ -5266,7 +5266,7 @@ async def convert_document_to_sentences(file_content: bytes, tried_local=False) 
 async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dict, model_parameters: Dict, model_inference_type_string: str, input_data: str) -> float:
     model_name = requested_model_data["model_name"]
     if 'swiss_army_llama-' not in model_name:
-        api_cost = calculate_api_cost(model_name, input_data, model_parameters)
+        api_cost = await calculate_api_cost(model_name, input_data, model_parameters)
         if api_cost > 0.0:
             target_value_per_credit = TARGET_VALUE_PER_CREDIT_IN_USD
             target_profit_margin = TARGET_PROFIT_MARGIN
