@@ -4733,16 +4733,17 @@ def count_tokens(model_name: str, input_data: str) -> int:
                 try:
                     input_data_dict = json.loads(input_data)
                     if "image" in input_data_dict:
-                        # Calculate image tokens using our estimator
-                        image_data_binary = base64.b64decode(input_data_dict["image"])
-                        image_tokens = estimate_claude_image_tokens(image_data_binary)
-                        # Calculate question tokens using GPT2 tokenizer
-                        question = input_data_dict.get("question", "")
-                        tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_name)
-                        question_tokens = len(tokenizer.encode(question))
-                        total_tokens = image_tokens + question_tokens
-                        logger.info(f"Fallback Claude token calculation - Image: {image_tokens}, Question: {question_tokens}")
-                        return total_tokens
+                        image_data_binary = base64.b64decode(input_data["image"])
+                        logger.info("Calculating Claude vision tokens...")
+                        # Use existing estimate_claude_image_tokens function
+                        total_img_tokens = await estimate_claude_image_tokens(image_data_binary)
+                        if total_img_tokens == 0:  # Fallback if image token estimation fails
+                            logger.warning("Image token estimation failed, using fallback calculation")
+                            total_img_tokens = 85  # Base token cost
+                        question = input_data.get("question", "")
+                        question_tokens = count_tokens(model_name, question)
+                        input_tokens = total_img_tokens + question_tokens
+                        logger.info(f"Token breakdown - Image: {total_img_tokens}, Question: {question_tokens}, Total: {input_tokens}")
                 except (json.JSONDecodeError, KeyError):
                     pass
                 # Fall back to GPT2 tokenizer for text-only input
@@ -6048,11 +6049,15 @@ def build_openai_request_params(model_parameters: dict, model_name: str) -> dict
         "model": model_name.replace("openai-", ""),
         "n": 1,  # Handle multiple completions at our level
     }
-    # Required parameters with defaults
-    if tokens := model_parameters.get("number_of_tokens_to_generate"):
-        request_params["max_tokens"] = int(tokens)
-    if temp := model_parameters.get("temperature"):
-        request_params["temperature"] = float(temp)
+    # Set required parameters with appropriate defaults based on model type
+    is_vision_model = "vision" in model_name.lower() or request_params["model"].endswith("-vision")
+    # Handle max tokens - vision models have lower limits
+    default_max_tokens = 300 if is_vision_model else 1000
+    max_token_limit = 4096 if is_vision_model else 8192
+    tokens = model_parameters.get("number_of_tokens_to_generate", default_max_tokens)
+    request_params["max_tokens"] = min(int(tokens), max_token_limit)
+    # Set temperature with default
+    request_params["temperature"] = float(model_parameters.get("temperature", 0.7))
     # Optional parameters - only add if they exist and are not None/empty
     optional_float_params = [
         "top_p",
@@ -6071,8 +6076,8 @@ def build_openai_request_params(model_parameters: dict, model_name: str) -> dict
     if stop := model_parameters.get("stop"):
         if isinstance(stop, (list, tuple)) and stop:  # Only include if it's a non-empty list
             request_params["stop"] = stop
-    # Handle tools and related parameters
-    if tools := model_parameters.get("tools"):
+    # Handle tools and related parameters (not applicable for vision models)
+    if not is_vision_model and (tools := model_parameters.get("tools")):
         if isinstance(tools, list) and tools:  # Only include if it's a non-empty list
             request_params["tools"] = tools
             # Only include tool_choice if tools are present
@@ -6083,10 +6088,16 @@ def build_openai_request_params(model_parameters: dict, model_name: str) -> dict
                 request_params["parallel_tool_calls"] = bool(model_parameters["parallel_tool_calls"])
     # Handle response format
     if response_format := model_parameters.get("response_format"):
-        if isinstance(response_format, dict) and response_format.get("type") in ["text", "json_object", "json_schema"]:
-            request_params["response_format"] = response_format
-    # Handle log probabilities
-    if model_parameters.get("logprobs"):
+        if isinstance(response_format, dict):
+            if is_vision_model:
+                # Vision models only support 'text' or 'json_object'
+                if response_format.get("type") in ["text", "json_object"]:
+                    request_params["response_format"] = response_format
+            else:
+                if response_format.get("type") in ["text", "json_object", "json_schema"]:
+                    request_params["response_format"] = response_format
+    # Handle log probabilities (not applicable for vision models)
+    if not is_vision_model and model_parameters.get("logprobs"):
         request_params["logprobs"] = True
         if top_logprobs := model_parameters.get("top_logprobs"):
             request_params["top_logprobs"] = int(top_logprobs)
