@@ -4637,49 +4637,72 @@ def get_tokenizer(model_name: str):
 
 async def count_tokens_claude(model_name: str, input_data: Any) -> int:
     """
-    Use Claude's token counting API to accurately count tokens for any input type
+    Use Claude's token counting API to accurately count tokens for any input type.
+    For images, uses the same preprocessing logic as the actual submission to ensure accuracy.
     """
     client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
-    # Convert input data into message format based on type
-    if isinstance(input_data, str):
-        messages = [{"role": "user", "content": input_data}]
-    elif isinstance(input_data, dict) and input_data.get('document'):
-        # Handle PDF input
-        messages = [{
-            "role": "user",
-            "content": [{
-                "type": "document",
-                "source": {
-                    "type": "base64",
-                    "media_type": "application/pdf",
-                    "data": input_data['document']
-                }
-            }]
-        }]
-    elif isinstance(input_data, dict) and input_data.get('image'):
-        # Handle image input
-        messages = [{
-            "role": "user", 
-            "content": [{
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/jpeg", # Adjust based on actual type
-                    "data": input_data['image']
-                }
-            }]
-        }]
-    else:
-        messages = [{"role": "user", "content": str(input_data)}]
     try:
+        if isinstance(input_data, str):
+            messages = [{"role": "user", "content": input_data}]
+        elif isinstance(input_data, dict) and input_data.get('document'):
+            messages = [{
+                "role": "user",
+                "content": [{
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": input_data['document']
+                    }
+                }]
+            }]
+        elif isinstance(input_data, dict) and input_data.get('image'):
+            # Process image using the same logic as actual submission
+            image_data = base64.b64decode(input_data["image"])
+            processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
+            # Create message with processed image and correct mime type
+            messages = [{
+                "role": "user",
+                "content": [{
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": mime_type,
+                        "data": base64.b64encode(processed_image_data).decode()
+                    }
+                }]
+            }]
+            # If there's a question, add it
+            if "question" in input_data:
+                messages[0]["content"].append({
+                    "type": "text",
+                    "text": input_data["question"]
+                })
+        else:
+            messages = [{"role": "user", "content": str(input_data)}]
         response = await client.messages.count_tokens(
             model=get_claude3_model_name(model_name),
             messages=messages
         )
         return response.input_tokens
     except Exception as e:
-        logger.warning(f"Claude token counting API failed: {e}")
-        # Fall back to approximate counting
+        logger.error(f"Claude token counting API failed: {str(e)}")
+        if isinstance(input_data, dict) and input_data.get('image'):
+            # For images, use a more sophisticated fallback based on image dimensions
+            try:
+                image_data = base64.b64decode(input_data["image"])
+                image = Image.open(io.BytesIO(image_data))
+                width, height = image.size
+                # Calculate base tokens plus tokens for image dimensions
+                base_tokens = 85
+                pixels_per_token = 750  # Claude's approximation
+                image_tokens = (width * height) // pixels_per_token
+                # Add tokens for question if present
+                question_tokens = len(input_data.get("question", "").split()) * 2
+                return base_tokens + image_tokens + question_tokens
+            except Exception as img_err:
+                logger.error(f"Image fallback token estimation failed: {str(img_err)}")
+                return 1500  # Conservative fallback for images
         return super_approximate_token_count(input_data)
     
 def super_approximate_token_count(input_data: Any) -> int:
@@ -4775,8 +4798,75 @@ def estimate_pixtral_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[
     except Exception as e:
         logger.error(f"Error estimating Pixtral image tokens: {str(e)}")
         return 0, (0, 0)
+    
+async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mistral", detail: str = "auto") -> tuple[bytes, str]:
+    try:
+        image = Image.open(io.BytesIO(image_data))
+        image_size_mb = len(image_data) / (1024 * 1024)
+        width, height = image.size
+        # Validate format
+        format_lower = image.format.lower() if image.format else "jpeg"
+        if format_lower not in {"jpeg", "jpg", "png", "gif", "webp"}:
+            format_lower = "png"  # Default to PNG for unsupported formats
+        mime_type = f"image/{format_lower}"
+        # Convert RGBA to RGB if needed
+        if image.mode == 'RGBA':
+            background = Image.new('RGB', image.size, (255, 255, 255))
+            background.paste(image, mask=image.split()[3])
+            image = background
+        # Model-specific validations and preprocessing
+        if model_type == "openai":
+            if image_size_mb > 20:
+                raise ValueError("Image exceeds OpenAI's 20MB size limit")
+            if detail == "low" or (detail == "auto" and (width <= 512 and height <= 512)):
+                # Low detail mode: resize to 512x512
+                aspect_ratio = width / height
+                if aspect_ratio > 1:
+                    new_width = 512
+                    new_height = int(512 / aspect_ratio)
+                else:
+                    new_height = 512
+                    new_width = int(512 * aspect_ratio)
+                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            elif detail == "high" or detail == "auto":
+                # High detail mode
+                # First scale to fit within 2048x2048 if needed
+                if width > 2048 or height > 2048:
+                    scale = min(2048/width, 2048/height)
+                    new_width = int(width * scale)
+                    new_height = int(height * scale)
+                    image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    width, height = new_width, new_height
+                # Then scale shortest side to 768px while maintaining aspect ratio
+                scale = 768 / min(width, height)
+                new_width = int(width * scale)
+                new_height = int(height * scale)
+                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        elif model_type == "claude":
+            if image_size_mb > 100:
+                raise ValueError("Image exceeds Claude's 100MB size limit")
+            if width > 4096 or height > 4096:
+                raise ValueError(f"Image dimensions ({width}x{height}) exceed maximum of 4096x4096")
+            if width < 16 or height < 16:
+                raise ValueError(f"Image dimensions ({width}x{height}) below minimum of 16x16")
+        # Convert processed image to bytes
+        buffer = io.BytesIO()
+        save_format = "PNG" if format_lower == "png" else "JPEG"
+        save_kwargs = {"format": save_format}
+        if save_format == "JPEG":
+            save_kwargs["quality"] = 95
+            save_kwargs["optimize"] = True
+        image.save(buffer, **save_kwargs)
+        processed_image_data = buffer.getvalue()
+        # Final size check after processing
+        final_size_mb = len(processed_image_data) / (1024 * 1024)
+        if model_type == "openai" and final_size_mb > 20:
+            raise ValueError(f"Processed image size ({final_size_mb:.1f}MB) still exceeds OpenAI's 20MB limit. Try reducing image quality or dimensions.")
+        return processed_image_data, mime_type
+    except Exception as e:
+        raise ValueError(f"Image validation/processing failed: {str(e)}")
 
-def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict) -> float:
+async def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict) -> float:
     # Define the pricing data for each API service and model
     logger.info(f"Evaluating API cost for model: {model_name}")
     pricing_data = {
@@ -5076,64 +5166,65 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
         input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
         estimated_cost = input_cost * number_of_completions_to_generate
-    elif model_name.startswith("claude3"):
-        try:
-            # Determine input type and handle accordingly
-            if isinstance(input_data, dict) and "image" in input_data:
-                # Handle image input
-                image_data_binary = base64.b64decode(input_data["image"])
-                image = Image.open(io.BytesIO(image_data_binary))
-                width, height = image.size
-                
-                # Calculate image tokens using Claude's formula
-                # Approximately 750 pixels per token
-                image_tokens = (width * height) // 750
-                question_tokens = count_tokens(model_name, input_data.get("question", ""))
-                input_tokens = image_tokens + question_tokens
-                
-            elif isinstance(input_data, dict) and "document" in input_data:
-                # Handle PDF input - estimate ~1500-3000 tokens per page
-                pdf_data = base64.b64decode(input_data["document"])
-                with io.BytesIO(pdf_data) as pdf_file:
-                    pdf_reader = PyPDF2.PdfReader(pdf_file)
-                    num_pages = len(pdf_reader.pages)
-                    # Conservative estimate of 2000 tokens per page
-                    input_tokens = num_pages * 2000
-                    if "query" in input_data:
-                        query_tokens = count_tokens(model_name, input_data["query"])
-                        input_tokens += query_tokens
-            else:
-                # Handle regular text input
-                input_tokens = count_tokens(model_name, input_data)
-
+    elif "claude" in model_name.lower():
+        try: # First try using Claude's official token counting API
+            try:
+                input_tokens = await count_tokens_claude(model_name, input_data)
+                logger.info(f"Successfully used Claude's token counting API: {input_tokens} tokens")
+            except Exception as token_api_err:
+                logger.warning(f"Claude token counting API failed, falling back to calculation: {token_api_err}")
+                # Fall back to manual calculation if API fails
+                if isinstance(input_data, dict) and "image" in input_data:
+                    # Handle image input
+                    image_data_binary = base64.b64decode(input_data["image"])
+                    image = Image.open(io.BytesIO(image_data_binary))
+                    width, height = image.size
+                    # Calculate image tokens using Claude's formula
+                    # Approximately 750 pixels per token
+                    image_tokens = (width * height) // 750
+                    question_tokens = await count_tokens(model_name, input_data.get("question", ""))
+                    input_tokens = image_tokens + question_tokens
+                    logger.info(f"Calculated image tokens: {image_tokens}, question tokens: {question_tokens}")
+                elif isinstance(input_data, dict) and "document" in input_data:
+                    # Handle PDF input - estimate ~1500-3000 tokens per page
+                    pdf_data = base64.b64decode(input_data["document"])
+                    with io.BytesIO(pdf_data) as pdf_file:
+                        pdf_reader = PyPDF2.PdfReader(pdf_file)
+                        num_pages = len(pdf_reader.pages)
+                        # Conservative estimate of 2000 tokens per page
+                        input_tokens = num_pages * 2000
+                        if "query" in input_data:
+                            query_tokens = await count_tokens(model_name, input_data["query"])
+                            input_tokens += query_tokens
+                    logger.info(f"Calculated PDF tokens: {input_tokens} for {num_pages} pages")
+                else:
+                    # Handle regular text input
+                    input_tokens = await count_tokens(model_name, input_data)
             # Get cache-related parameters
             cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
             cache_miss_tokens = input_tokens - cache_hit_tokens
-            
             # Calculate input costs based on caching
             input_cost = (
                 float(model_pricing["input_cost_write"]) * float(cache_miss_tokens) +  # New tokens that need caching
                 float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)    # Already cached tokens
             ) / 1000.0
-
             # Calculate output costs
             number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
             output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
-            
             # Add system prompt token costs if applicable
             if model_parameters.get("system_prompt"):
-                system_tokens = count_tokens(model_name, model_parameters["system_prompt"])
+                system_tokens = await count_tokens(model_name, model_parameters["system_prompt"])
                 input_cost += float(model_pricing["input_cost"]) * float(system_tokens) / 1000.0
-                
             estimated_cost = input_cost + output_cost
             logger.info(f"Estimated Claude cost breakdown - Input: ${input_cost:.4f}, Output: ${output_cost:.4f}")
-            
+            if estimated_cost <= 0.0:  # Final safeguard
+                logger.warning("Calculated cost was 0 or negative, using minimum cost")
+                estimated_cost = float(MINIMUM_COST_IN_CREDITS)
             return estimated_cost
-
         except Exception as e:
             logger.error(f"Error calculating Claude cost: {str(e)}")
             traceback.print_exc()
-            return 0.0   
+            return float(MINIMUM_COST_IN_CREDITS)  # Return minimum instead of 0.0 to avoid None comparison issues
     elif model_name.startswith("deepseek-"):
         input_tokens = count_tokens(model_name, input_data)
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 4096)
@@ -5204,7 +5295,7 @@ async def convert_document_to_sentences(file_content: bytes, tried_local=False) 
 async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dict, model_parameters: Dict, model_inference_type_string: str, input_data: str) -> float:
     model_name = requested_model_data["model_name"]
     if 'swiss_army_llama-' not in model_name:
-        api_cost = calculate_api_cost(model_name, input_data, model_parameters)
+        api_cost = await calculate_api_cost(model_name, input_data, model_parameters)
         if api_cost > 0.0:
             target_value_per_credit = TARGET_VALUE_PER_CREDIT_IN_USD
             target_profit_margin = TARGET_PROFIT_MARGIN
@@ -5485,6 +5576,9 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
             input_data = base64.b64decode(input_data)
             input_data = input_data.decode('utf-8')     
         proposed_cost_in_credits = await calculate_proposed_inference_cost_in_credits(requested_model_data, model_parameters_dict, model_inference_type_string, input_data)
+        if proposed_cost_in_credits is None or not isinstance(proposed_cost_in_credits, (int, float)):
+            logger.error(f"Invalid cost calculation result: {proposed_cost_in_credits}")
+            return False, float(MINIMUM_COST_IN_CREDITS), 0.0
         validation_results = await validate_existing_credit_pack_ticket(credit_pack_ticket_pastel_txid)
         if not validation_results["credit_pack_ticket_is_valid"]:
             logger.warning(f"Invalid credit pack ticket: {validation_results['validation_failure_reasons_list']}")
@@ -5492,7 +5586,10 @@ async def validate_inference_api_usage_request(inference_api_usage_request: db_c
         else:
             logger.info(f"Credit pack ticket with txid {credit_pack_ticket_pastel_txid} passed all validation checks: {abbreviated_pretty_json_func(validation_results['validation_checks'])}")
         current_credit_balance, number_of_confirmation_transactions_from_tracking_address_to_burn_address = await determine_current_credit_pack_balance_based_on_tracking_transactions(credit_pack_ticket_pastel_txid)
-        if proposed_cost_in_credits >= current_credit_balance:
+        if current_credit_balance is None or not isinstance(current_credit_balance, (int, float)):
+            logger.error(f"Invalid credit balance result: {current_credit_balance}")
+            return False, float(MINIMUM_COST_IN_CREDITS), 0.0        
+        if float(proposed_cost_in_credits) >= float(current_credit_balance):
             logger.warning(f"Insufficient credits for the request. Required: {proposed_cost_in_credits:,}, Available: {current_credit_balance:,}")
             return False, proposed_cost_in_credits, current_credit_balance
         else:
@@ -6079,7 +6176,6 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
                     headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
                     json={"messages": messages, **request_params}
                 )
-                
                 if response.status_code != 200:
                     logger.error(f"OpenAI error: {response.text}")
                     return None, None
@@ -6124,66 +6220,100 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
             return resp.json()["data"][0]["embedding"], {"output_text": "embedding", "output_files": ["NA"]}
     elif inference_type == "ask_question_about_an_image":
         try:
+            # Decode input data
             input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
             image_data_binary = base64.b64decode(input_data["image"])
             question = input_data["question"]
-        except Exception as exc:
-            logger.error(f"Error decoding image or question: {exc}")
+            # Get detail parameter from model parameters or default to "auto"
+            detail_level = model_parameters.get("detail", "auto")
+            # Validate and preprocess the image using our improved function
+            try:
+                processed_image_data, mime_type = await validate_and_preprocess_image(
+                    image_data_binary,
+                    model_type="openai",
+                    detail=detail_level
+                )
+                logger.info(f"Successfully processed image with {detail_level} detail mode and mime type {mime_type}")
+            except ValueError as ve:
+                logger.error(f"Image validation/processing failed: {ve}")
+                return None, None
+            # Set up for completion generation
+            num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
+            output_results = []
+            total_input_tokens = 0
+            total_output_tokens = 0
+            # Create requests
+            async with httpx.AsyncClient(timeout=float(model_parameters.get("request_timeout_seconds", 90))) as client:
+                for _ in range(num_completions):
+                    # Construct the base64 data URL with correct mime type
+                    image_b64 = base64.b64encode(processed_image_data).decode("utf-8")
+                    image_url = f"data:{mime_type};base64,{image_b64}"
+                    # Build the payload
+                    payload = {
+                        "model": model_name.replace("openai-", ""),
+                        "messages": [{
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": question},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": image_url,
+                                        "detail": detail_level
+                                    }
+                                }
+                            ]
+                        }],
+                        "max_tokens": int(model_parameters.get("number_of_tokens_to_generate", 300)),
+                        "temperature": float(model_parameters.get("temperature", 0.7))
+                    }
+                    # Add response format if specified
+                    if response_format := model_parameters.get("response_format"):
+                        if isinstance(response_format, dict):
+                            if response_format.get("type") in ["json_schema", "json_object"]:
+                                payload["response_format"] = response_format
+                    # Add any other model parameters that should be included
+                    for param in ["top_p", "n", "stream", "stop", "presence_penalty", "frequency_penalty"]:
+                        if param_value := model_parameters.get(param):
+                            payload[param] = param_value
+                    # Make the API call
+                    resp = await client.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {OPENAI_API_KEY}",
+                            "Content-Type": "application/json"
+                        },
+                        json=payload
+                    )
+                    # Handle API response
+                    if resp.status_code != 200:
+                        logger.error(f"Error with ask_question_about_an_image: {resp.text}")
+                        return None, None
+                    # Process response
+                    resp_json = resp.json()
+                    output_results.append(resp_json["choices"][0]["message"]["content"])
+                    # Track token usage
+                    usage_info = resp_json.get("usage", {})
+                    total_input_tokens += usage_info.get("prompt_tokens", 0)
+                    total_output_tokens += usage_info.get("completion_tokens", 0)
+            # Log token usage
+            logger.info(f"Total input tokens used with {model_name}: {total_input_tokens}")
+            logger.info(f"Total output tokens used with {model_name}: {total_output_tokens}")
+            # Format output
+            if num_completions == 1:
+                output_text = output_results[0]
+            else:
+                output_text = json.dumps({f"completion_{i+1:02}": val for i, val in enumerate(output_results)})
+            # Determine output type
+            data_type_result = magika.identify_bytes(output_text.encode("utf-8"))
+            return output_text, {
+                "output_text": data_type_result.output.ct_label,
+                "output_files": ["NA"]
+            }
+        except Exception as e:
+            logger.error(f"Error processing image request: {str(e)}")
+            traceback.print_exc()
             return None, None
-        def optimize_image(image_binary):
-            image = Image.open(io.BytesIO(image_binary))
-            width, height = image.size
-            target_dim = 1286
-            if max(width, height) > target_dim:
-                ratio = width / height
-                if width > height:
-                    width = target_dim
-                    height = int(target_dim / ratio)
-                else:
-                    height = target_dim
-                    width = int(target_dim * ratio)
-                image = image.resize((width, height))
-                buffer = io.BytesIO()
-                image.save(buffer, format=image.format or 'JPEG')
-                return buffer.getvalue()
-            return image_binary
-        optimized_image = optimize_image(image_data_binary)
-        num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
-        output_results = []
-        total_input_tokens = 0
-        total_output_tokens = 0
-        async with httpx.AsyncClient(timeout=float(model_parameters.get("request_timeout_seconds", 90))) as client:
-            for _ in range(num_completions):
-                payload = {
-                    "model": model_name.replace("openai-", ""),
-                    "messages": [{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": question},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(optimized_image).decode('utf-8')}"}}
-                        ]
-                    }],
-                    "max_completion_tokens": int(model_parameters.get("number_of_tokens_to_generate", 300)),
-                    "temperature": float(model_parameters.get("temperature", 0.7))
-                }
-                if response_format := model_parameters.get("response_format"):
-                    if isinstance(response_format, dict):
-                        if response_format.get("type") in ["json_schema", "json_object"]:
-                            payload["response_format"] = response_format
-                resp = await client.post("https://api.openai.com/v1/chat/completions", headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}, json=payload)
-                if resp.status_code != 200:
-                    logger.error(f"Error with ask_question_about_an_image: {resp.text}")
-                    return None, None
-                resp_json = resp.json()
-                output_results.append(resp_json["choices"][0]["message"]["content"])
-                usage_info = resp_json.get("usage", {})
-                total_input_tokens += usage_info.get("prompt_tokens", 0)
-                total_output_tokens += usage_info.get("completion_tokens", 0)
-        logger.info(f"Total input tokens used with {model_name}: {total_input_tokens}")
-        logger.info(f"Total output tokens used with {model_name}: {total_output_tokens}")
-        output_text = output_results[0] if num_completions == 1 else json.dumps({f"completion_{i+1:02}": val for i, val in enumerate(output_results)})
-        data_type_result = magika.identify_bytes(output_text.encode("utf-8"))
-        return output_text, {"output_text": data_type_result.output.ct_label, "output_files": ["NA"]}
     else:
         logger.warning(f"Unsupported inference type '{inference_type}' for OpenAI model '{model_name}'")
         return None, None
