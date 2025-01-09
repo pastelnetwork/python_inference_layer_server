@@ -6054,8 +6054,15 @@ def build_openai_request_params(model_parameters: dict, model_name: str) -> dict
     # Handle max tokens - vision models have lower limits
     default_max_tokens = 300 if is_vision_model else 1000
     max_token_limit = 4096 if is_vision_model else 8192
-    tokens = model_parameters.get("number_of_tokens_to_generate", default_max_tokens)
-    request_params["max_tokens"] = min(int(tokens), max_token_limit)
+    max_tokens = model_parameters.get("number_of_tokens_to_generate")
+    if max_tokens is not None and str(max_tokens).strip():  # Check if value exists and is not empty
+        try:
+            max_tokens = int(max_tokens)
+        except (ValueError, TypeError):
+            max_tokens = default_max_tokens
+    else:
+        max_tokens = default_max_tokens
+    request_params["max_tokens"] = min(max_tokens, max_token_limit)
     # Set temperature with default
     request_params["temperature"] = float(model_parameters.get("temperature", 0.7))
     # Optional parameters - only add if they exist and are not None/empty
