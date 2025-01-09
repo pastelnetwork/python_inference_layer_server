@@ -4699,87 +4699,132 @@ def super_approximate_token_count(input_data: Any) -> int:
             # Rough image estimate
             return 1500
     return 500 # Default fallback
-    
+
 async def count_tokens(model_name: str, input_data: str) -> int:
-    tokenizer_name = get_tokenizer(model_name)
-    logger.info(f"Selected tokenizer {tokenizer_name} for model {model_name}")
     try:
+        tokenizer_name = get_tokenizer(model_name)
+        logger.info(f"Selected tokenizer {tokenizer_name} for model {model_name}")
         if "mistralapi-pixtral" in model_name.lower():
-            input_data_dict = json.loads(input_data)
-            image_data_binary = base64.b64decode(input_data_dict["image"])
-            question = input_data_dict["question"]
-            # Calculate image tokens
-            image_tokens, _ = estimate_pixtral_image_tokens(image_data_binary)
-            # Calculate question tokens using text tokenizer
-            if 'openai' in tokenizer_name.lower():
-                encoding = tiktoken.get_encoding(tokenizer_name)
-                question_tokens = len(encoding.encode(question))
-            else:
-                tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-                if hasattr(tokenizer, "encode"):
-                    question_tokens = len(tokenizer.encode(question))
-                else:
-                    question_tokens = len(tokenizer.convert_tokens_to_ids(tokenizer.tokenize(question)))
-            return image_tokens + question_tokens
+            try:
+                input_data_dict = json.loads(input_data)
+                image_data_binary = base64.b64decode(input_data_dict["image"])
+                question = input_data_dict["question"]
+                # Calculate image tokens
+                image_tokens, _ = await estimate_pixtral_image_tokens(image_data_binary)
+                if image_tokens is None:
+                    image_tokens = 1000  # Safe default for image tokens
+                # Calculate question tokens using text tokenizer
+                try:
+                    if 'openai' in tokenizer_name.lower():
+                        encoding = tiktoken.get_encoding(tokenizer_name)
+                        question_tokens = len(encoding.encode(question))
+                    else:
+                        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+                        if hasattr(tokenizer, "encode"):
+                            question_tokens = len(tokenizer.encode(question))
+                        else:
+                            question_tokens = len(tokenizer.convert_tokens_to_ids(tokenizer.tokenize(question)))
+                except Exception as e:
+                    logger.error(f"Error counting question tokens: {e}")
+                    question_tokens = 100  # Safe default for question tokens
+                return image_tokens + question_tokens
+            except Exception as e:
+                logger.error(f"Error processing Pixtral input: {e}")
+                return 1100  # Safe default total for Pixtral
         elif 'claude' in model_name.lower():
-            # Try to use Claude's token counting API first
             try:
                 token_count = await count_tokens_claude(model_name, input_data)
                 logger.info(f"Using Claude's token counting API: {token_count} tokens")
                 return token_count
             except Exception as claude_err:
                 logger.warning(f"Failed to use Claude token counting API: {claude_err}. Using fallback method.")
-                # Handle vision requests in fallback
                 try:
                     input_data_dict = json.loads(input_data)
                     if "image" in input_data_dict:
-                        image_data_binary = base64.b64decode(input_data["image"])
-                        logger.info("Calculating Claude vision tokens...")
-                        # Use existing estimate_claude_image_tokens function
-                        total_img_tokens = await estimate_claude_image_tokens(image_data_binary)
-                        if total_img_tokens == 0:  # Fallback if image token estimation fails
-                            logger.warning("Image token estimation failed, using fallback calculation")
-                            total_img_tokens = 85  # Base token cost
-                        question = input_data.get("question", "")
-                        question_tokens = await count_tokens(model_name, question)
-                        input_tokens = total_img_tokens + question_tokens
-                        logger.info(f"Token breakdown - Image: {total_img_tokens}, Question: {question_tokens}, Total: {input_tokens}")
-                except (json.JSONDecodeError, KeyError):
-                    pass
-                # Fall back to GPT2 tokenizer for text-only input
-                tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_name)
-                return len(tokenizer.encode(input_data))
+                        try:
+                            image_data_binary = base64.b64decode(input_data_dict["image"])
+                            logger.info("Calculating Claude vision tokens...")
+                            total_img_tokens = await estimate_claude_image_tokens(image_data_binary)
+                            if total_img_tokens == 0:
+                                logger.warning("Image token estimation failed, using fallback calculation")
+                                total_img_tokens = 85  # Base token cost
+                            question = input_data_dict.get("question", "")
+                            try:
+                                question_tokens = await count_tokens(model_name, question)
+                            except Exception as e:
+                                logger.error(f"Error counting question tokens: {e}")
+                                question_tokens = 100
+                            return total_img_tokens + question_tokens
+                        except Exception as e:
+                            logger.error(f"Error processing Claude vision input: {e}")
+                            return 1000  # Safe default for vision
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.error(f"Error parsing input data: {e}")
+                try:
+                    # Fall back to GPT2 tokenizer for text-only input
+                    tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_name)
+                    return len(tokenizer.encode(input_data))
+                except Exception as e:
+                    logger.error(f"Error with GPT2 fallback tokenizer: {e}")
+                    return 500  # Final fallback for Claude
         elif 'whisper' in model_name.lower():
-            tokenizer = WhisperTokenizer.from_pretrained(tokenizer_name)
+            try:
+                tokenizer = WhisperTokenizer.from_pretrained(tokenizer_name)
+                if hasattr(tokenizer, "encode"):
+                    return len(tokenizer.encode(input_data))
+                return len(tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data)))
+            except Exception as e:
+                logger.error(f"Error with Whisper tokenizer: {e}")
+                return 500
         elif 'clip-interrogator' in model_name.lower() or 'stability' in model_name.lower():
             return 0
         elif 'videocap-transformer' in model_name.lower():
-            tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+                if hasattr(tokenizer, "encode"):
+                    return len(tokenizer.encode(input_data))
+                return len(tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data)))
+            except Exception as e:
+                logger.error(f"Error with videocap tokenizer: {e}")
+                return 500
         elif 'openai' in model_name.lower():
-            encoding = tiktoken.get_encoding(tokenizer_name)
-            input_tokens = encoding.encode(input_data)
-            return len(input_tokens)
+            try:
+                encoding = tiktoken.get_encoding(tokenizer_name)
+                input_tokens = encoding.encode(input_data)
+                return len(input_tokens)
+            except Exception as e:
+                logger.error(f"Error with OpenAI tokenizer: {e}")
+                return 500
         else:
-            tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        if hasattr(tokenizer, "encode"):
-            input_tokens = tokenizer.encode(input_data)
-        else:
-            input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
-        return len(input_tokens)
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+                if hasattr(tokenizer, "encode"):
+                    input_tokens = tokenizer.encode(input_data)
+                else:
+                    input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
+                return len(input_tokens)
+            except Exception as e:
+                logger.error(f"Error with default tokenizer path: {e}")
+                return 500
     except Exception as e:
-        logger.error(f"Failed to load tokenizer {tokenizer_name} for model {model_name}: {e}")
-        fallback_tokenizer_name = get_fallback_tokenizer()
-        logger.info(f"Falling back to tokenizer {fallback_tokenizer_name}")
-        if 'openai' in fallback_tokenizer_name.lower():
-            encoding = tiktoken.get_encoding(fallback_tokenizer_name)
-            input_tokens = encoding.encode(input_data)
-        else:
-            tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_name)
-            if hasattr(tokenizer, "encode"):
-                input_tokens = tokenizer.encode(input_data)
+        logger.error(f"Top-level error in count_tokens for {model_name}: {e}")
+        try:
+            # Final fallback attempt with GPT2
+            fallback_tokenizer_name = get_fallback_tokenizer()
+            logger.info(f"Using final fallback tokenizer {fallback_tokenizer_name}")
+            if 'openai' in fallback_tokenizer_name.lower():
+                encoding = tiktoken.get_encoding(fallback_tokenizer_name)
+                input_tokens = encoding.encode(input_data)
             else:
-                input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
-        return len(input_tokens)
+                tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_name)
+                if hasattr(tokenizer, "encode"):
+                    input_tokens = tokenizer.encode(input_data)
+                else:
+                    input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
+            return len(input_tokens)
+        except Exception as final_e:
+            logger.error(f"Final fallback tokenizer failed: {final_e}")
+            return 500  # Absolute final fallback
     
 def estimate_claude_image_tokens(image_data: bytes) -> int:
     try:
@@ -5084,7 +5129,8 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
     best_match = process.extractOne(model_name.lower(), pricing_data.keys())
     if best_match is None or best_match[1] < 60:
         logger.warning(f"No pricing data found for model: {model_name}")
-        return 0.0
+        logger.warning("Returning minimum credit cost instead!")
+        return float(MINIMUM_COST_IN_CREDITS)  # Return minimum cost instead of 0.0
     model_pricing = pricing_data[best_match[0]]
     # Define reasoning effort multipliers for models that support it
     reasoning_effort_multipliers = {
@@ -5267,6 +5313,9 @@ async def calculate_proposed_inference_cost_in_credits(requested_model_data: Dic
     model_name = requested_model_data["model_name"]
     if 'swiss_army_llama-' not in model_name:
         api_cost = await calculate_api_cost(model_name, input_data, model_parameters)
+        if api_cost is None:
+            logger.warning(f"No API cost could be calculated for model {model_name}")
+            return MINIMUM_COST_IN_CREDITS        
         if api_cost > 0.0:
             target_value_per_credit = TARGET_VALUE_PER_CREDIT_IN_USD
             target_profit_margin = TARGET_PROFIT_MARGIN
