@@ -4722,7 +4722,32 @@ def count_tokens(model_name: str, input_data: str) -> int:
                     question_tokens = len(tokenizer.convert_tokens_to_ids(tokenizer.tokenize(question)))
             return image_tokens + question_tokens
         elif 'claude' in model_name.lower():
-            tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_name)
+            # Try to use Claude's token counting API first
+            try:
+                token_count = asyncio.run(count_tokens_claude(model_name, input_data))
+                logger.info(f"Using Claude's token counting API: {token_count} tokens")
+                return token_count
+            except Exception as claude_err:
+                logger.warning(f"Failed to use Claude token counting API: {claude_err}. Using fallback method.")
+                # Handle vision requests in fallback
+                try:
+                    input_data_dict = json.loads(input_data)
+                    if "image" in input_data_dict:
+                        # Calculate image tokens using our estimator
+                        image_data_binary = base64.b64decode(input_data_dict["image"])
+                        image_tokens = estimate_claude_image_tokens(image_data_binary)
+                        # Calculate question tokens using GPT2 tokenizer
+                        question = input_data_dict.get("question", "")
+                        tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_name)
+                        question_tokens = len(tokenizer.encode(question))
+                        total_tokens = image_tokens + question_tokens
+                        logger.info(f"Fallback Claude token calculation - Image: {image_tokens}, Question: {question_tokens}")
+                        return total_tokens
+                except (json.JSONDecodeError, KeyError):
+                    pass
+                # Fall back to GPT2 tokenizer for text-only input
+                tokenizer = GPT2TokenizerFast.from_pretrained(tokenizer_name)
+                return len(tokenizer.encode(input_data))
         elif 'whisper' in model_name.lower():
             tokenizer = WhisperTokenizer.from_pretrained(tokenizer_name)
         elif 'clip-interrogator' in model_name.lower() or 'stability' in model_name.lower():
@@ -4823,6 +4848,38 @@ def estimate_pixtral_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[
         logger.error(f"Error estimating Pixtral image tokens: {str(e)}")
         return 0, (0, 0)
 
+def estimate_openai_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[int, int]]:
+    try:
+        image = Image.open(io.BytesIO(image_data_binary))
+        width, height = image.size
+        image_file_size_in_mb = len(image_data_binary) / (1024 * 1024)
+        logger.info(f"Submitted image file is {image_file_size_in_mb:.2f}MB and has resolution of {width} x {height}")
+        # First resize to fit within max dimensions (2048px)
+        target_larger_dimension = 2048
+        aspect_ratio = width / height
+        if width > height:
+            resized_width = target_larger_dimension
+            resized_height = int(target_larger_dimension / aspect_ratio)
+        else:
+            resized_height = target_larger_dimension
+            resized_width = int(target_larger_dimension * aspect_ratio)
+        logger.info(f"Image will be resized automatically to a resolution of {resized_width} x {resized_height}")
+        # Calculate visual tokens (based on 512x512 tiles)
+        tiles_x = -(-resized_width // 512)  # Ceiling division
+        tiles_y = -(-resized_height // 512)
+        total_tiles = tiles_x * tiles_y
+        # OpenAI uses 170 tokens per tile plus 85 base tokens
+        base_tokens = 85
+        tile_tokens = 170 * total_tiles
+        total_tokens = base_tokens + tile_tokens
+        logger.info(f"OpenAI vision token calculation: {resized_width}x{resized_height} image, "
+                    f"{total_tiles} tiles ({tiles_x}x{tiles_y}), "
+                    f"{total_tokens} total tokens")
+        return total_tokens, (resized_width, resized_height)
+    except Exception as e:
+        logger.error(f"Error estimating OpenAI image tokens: {str(e)}")
+        return 0, (0, 0)
+    
 def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict) -> float:
     # Define the pricing data for each API service and model
     logger.info(f"Evaluating API cost for model: {model_name}")
@@ -5064,134 +5121,80 @@ def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict)
         per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
         estimated_cost = input_cost + output_cost + per_call_cost
     elif model_name.startswith("openai-gpt-4") or model_name.startswith("openai-o1"):
-        input_data_dict = json.loads(input_data)
-        if "image" in input_data_dict:
-            # Handle image + text input
-            image_data_binary = base64.b64decode(input_data_dict["image"])
-            question = input_data_dict["question"]
-            # Calculate image resolution and tokens
-            image = Image.open(io.BytesIO(image_data_binary))
-            width, height = image.size
-            image_file_size_in_mb = len(image_data_binary) / (1024 * 1024)
-            logger.info(f"Submitted image file is {image_file_size_in_mb:.2f}MB and has resolution of {width} x {height}")
-            # Resize logic to fit the larger dimension to 2048 pixels
-            target_larger_dimension = 2048
-            aspect_ratio = width / height
-            if width > height:
-                resized_width = target_larger_dimension
-                resized_height = int(target_larger_dimension / aspect_ratio)
+            input_data_dict = json.loads(input_data)
+            if "image" in input_data_dict:
+                # Handle image + text input
+                image_data_binary = base64.b64decode(input_data_dict["image"])
+                question = input_data_dict["question"]
+                # Calculate tokens for image and question
+                total_image_tokens, _ = estimate_openai_image_tokens(image_data_binary)
+                question_tokens = count_tokens(model_name, question)
+                input_tokens = total_image_tokens + question_tokens
+                logger.info(f"Vision input token breakdown - Image: {total_image_tokens}, Question: {question_tokens}")
+                # Calculate image + text costs
+                input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
             else:
-                resized_height = target_larger_dimension
-                resized_width = int(target_larger_dimension * aspect_ratio)
-            logger.info(f"Image will be resized automatically to a resolution of {resized_width} x {resized_height}")
-            # Calculate visual tokens (based on 512x512 tiles)
-            tiles_x = -(-resized_width // 512)  # Ceiling division
-            tiles_y = -(-resized_height // 512)
-            total_tiles = tiles_x * tiles_y
-            base_tokens = 85  # Base token cost for image processing
-            tile_tokens = 170 * total_tiles  # Token cost per tile
-            total_image_tokens = base_tokens + tile_tokens
-            # Add question tokens
-            question_tokens = count_tokens(model_name, question)
-            input_tokens = total_image_tokens + question_tokens
-            logger.info(f"Vision input token breakdown - Image: {total_image_tokens}, Question: {question_tokens}")
-        else:
-            # Handle text-only input
-            input_tokens = count_tokens(model_name, input_data)
-        # Calculate costs based on whether it's a vision or text-only request
-        if "image" in input_data_dict:
-            input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
-        else:
-            # Use cached pricing for text-only requests
-            cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
-            cache_miss_tokens = input_tokens - cache_hit_tokens
-            input_cost = (
-                float(model_pricing["input_cost"]) * float(cache_miss_tokens) +
-                float(model_pricing.get("input_cost_cached", model_pricing["input_cost"])) * float(cache_hit_tokens)
+                # Handle text-only input with cache support
+                input_tokens = count_tokens(model_name, input_data)
+                cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
+                cache_miss_tokens = input_tokens - cache_hit_tokens
+                input_cost = (
+                    float(model_pricing["input_cost"]) * float(cache_miss_tokens) +
+                    float(model_pricing.get("input_cost_cached", model_pricing["input_cost"])) * float(cache_hit_tokens)
+                ) / 1000.0
+            # Calculate output costs
+            output_tokens = int(model_parameters.get("number_of_tokens_to_generate", 300))
+            reasoning_effort_multiplier = 1.0
+            if model_name.startswith("openai-o1"):
+                reasoning_effort = model_parameters.get("reasoning_effort", "medium")
+                reasoning_effort_multiplier = reasoning_effort_multipliers.get(reasoning_effort, 1.0)
+            output_cost = (
+                float(model_pricing["output_cost"]) * 
+                float(output_tokens) * 
+                reasoning_effort_multiplier
             ) / 1000.0
-        # Calculate output costs
-        output_tokens = int(model_parameters.get("number_of_tokens_to_generate", 300))
-        # Apply reasoning effort multiplier if applicable
-        reasoning_effort_multiplier = 1.0
-        if model_name.startswith("openai-o1"):
-            reasoning_effort = model_parameters.get("reasoning_effort", "medium")
-            reasoning_effort_multiplier = reasoning_effort_multipliers.get(reasoning_effort, 1.0)
-        output_cost = (
-            float(model_pricing["output_cost"]) * 
-            float(output_tokens) * 
-            reasoning_effort_multiplier
-        ) / 1000.0
-        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-        per_call_cost = float(model_pricing.get("per_call_cost", 0.0)) * float(number_of_completions_to_generate)
-        estimated_cost = input_cost + output_cost + per_call_cost
-        # Log cost breakdown
-        if "image" in input_data_dict:
-            logger.info(f"Vision cost breakdown - Image: ${input_cost:.4f}, Output: ${output_cost:.4f}")
-        else:
-            logger.info(f"Text cost breakdown - Input: ${input_cost:.4f}, Output: ${output_cost:.4f}")
-        return estimated_cost
+            number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+            per_call_cost = float(model_pricing.get("per_call_cost", 0.0)) * float(number_of_completions_to_generate)
+            estimated_cost = input_cost + output_cost + per_call_cost
+            # Log cost breakdown
+            if "image" in input_data_dict:
+                logger.info(f"Vision cost breakdown - Image: ${input_cost:.4f}, Output: ${output_cost:.4f}")
+            else:
+                logger.info(f"Text cost breakdown - Input: ${input_cost:.4f}, Output: ${output_cost:.4f}")
+            return estimated_cost
     elif model_name.startswith("openai-text-embedding"):
         input_tokens = count_tokens(model_name, input_data)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
         input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
         estimated_cost = input_cost * number_of_completions_to_generate
-    elif model_name.startswith("claude3"):
-        # Determine input type and handle accordingly
-        if isinstance(input_data, dict) and "image" in input_data:
-            # Handle image input
+    elif "claude" in model_name.lower():
             try:
-                image_data_binary = base64.b64decode(input_data["image"])
-                # Log pre-token calculation
-                logger.info("Calculating Claude vision tokens...")
-                # Calculate image tokens
-                image_tokens = estimate_claude_image_tokens(image_data_binary)
-                logger.info(f"Image tokens calculated: {image_tokens}")
-                # Calculate question tokens
-                question = input_data.get("question", "")
-                question_tokens = count_tokens(model_name, question)
-                logger.info(f"Question tokens calculated: {question_tokens}")
-                # Total input tokens
-                input_tokens = image_tokens + question_tokens
-                logger.info(f"Total input tokens (image + question): {input_tokens}")
+                # Try to get tokens using Claude's API first
+                input_tokens = count_tokens(model_name, input_data)
+                logger.info(f"Using Claude token count: {input_tokens}")
+                # Get cache-related parameters
+                cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
+                cache_miss_tokens = input_tokens - cache_hit_tokens
+                # Calculate input costs based on caching
+                input_cost = (
+                    float(model_pricing["input_cost_write"]) * float(cache_miss_tokens) +
+                    float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)
+                ) / 1000.0
+                # Calculate output costs
+                number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
+                output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
+                # Add system prompt token costs if applicable
+                if model_parameters.get("system_prompt"):
+                    system_tokens = count_tokens(model_name, model_parameters["system_prompt"])
+                    input_cost += float(model_pricing["input_cost"]) * float(system_tokens) / 1000.0
+                    logger.info(f"System prompt tokens: {system_tokens}")
+                estimated_cost = input_cost + output_cost
+                logger.info(f"Claude cost breakdown - Input: ${input_cost:.4f} ({input_tokens:,} tokens), Output: ${output_cost:.4f} ({number_of_tokens_to_generate:,} tokens)")
+                return estimated_cost
             except Exception as e:
-                logger.error(f"Error in Claude vision token calculation: {str(e)}")
+                logger.error(f"Error in Claude cost calculation: {str(e)}")
                 traceback.print_exc()
                 return 0.0
-        elif isinstance(input_data, dict) and "document" in input_data:
-            # Handle PDF input - estimate ~1500-3000 tokens per page
-            pdf_data = base64.b64decode(input_data["document"])
-            with io.BytesIO(pdf_data) as pdf_file:
-                pdf_reader = PyPDF2.PdfReader(pdf_file)
-                num_pages = len(pdf_reader.pages)
-                # Conservative estimate of 2000 tokens per page
-                input_tokens = num_pages * 2000
-                if "query" in input_data:
-                    query_tokens = count_tokens(model_name, input_data["query"])
-                    input_tokens += query_tokens
-                logger.info(f"PDF document tokens calculated: {input_tokens}")
-        else:
-            # Handle regular text input
-            input_tokens = count_tokens(model_name, input_data)
-            logger.info(f"Text input tokens calculated: {input_tokens}")
-        # Get cache-related parameters
-        cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
-        cache_miss_tokens = input_tokens - cache_hit_tokens
-        # Calculate input costs based on caching
-        input_cost = (
-            float(model_pricing["input_cost_write"]) * float(cache_miss_tokens) +  # New tokens that need caching
-            float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)    # Already cached tokens
-        ) / 1000.0
-        # Calculate output costs
-        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
-        output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
-        # Add system prompt token costs if applicable
-        if model_parameters.get("system_prompt"):
-            system_tokens = count_tokens(model_name, model_parameters["system_prompt"])
-            input_cost += float(model_pricing["input_cost"]) * float(system_tokens) / 1000.0
-            logger.info(f"System prompt tokens: {system_tokens}")
-        estimated_cost = input_cost + output_cost
-        logger.info(f"Claude cost breakdown - Input: ${input_cost:.4f} ({input_tokens:,} tokens), Output: ${output_cost:.4f} ({number_of_tokens_to_generate:,} tokens)")
-        return estimated_cost
     elif model_name.startswith("deepseek-"):
         input_tokens = count_tokens(model_name, input_data)
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 4096)
