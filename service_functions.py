@@ -6084,11 +6084,22 @@ def build_openai_request_params(model_parameters: dict, model_name: str) -> dict
         "model": model_name.replace("openai-", ""),
         "n": 1,  # Handle multiple completions at our level
     }
-    # Required parameters with defaults
-    if tokens := model_parameters.get("number_of_tokens_to_generate"):
-        request_params["max_tokens"] = int(tokens)
-    if temp := model_parameters.get("temperature"):
-        request_params["temperature"] = float(temp)
+    # Set required parameters with appropriate defaults
+    # First check if tokens parameter exists and has a non-empty value
+    tokens = model_parameters.get("number_of_tokens_to_generate")
+    if tokens is not None and str(tokens).strip():  # Check if value exists and is not empty
+        try:
+            request_params["max_tokens"] = int(tokens)
+        except (ValueError, TypeError):
+            request_params["max_tokens"] = 1000  # Default if conversion fails
+    else:
+        request_params["max_tokens"] = 1000  # Default if no value provided
+    # Handle temperature with better error handling
+    temp = model_parameters.get("temperature", 0.7)  # Default to 0.7 if not provided
+    try:
+        request_params["temperature"] = float(temp) if temp is not None else 0.7
+    except (ValueError, TypeError):
+        request_params["temperature"] = 0.7  # Default if conversion fails
     # Optional parameters - only add if they exist and are not None/empty
     optional_float_params = [
         "top_p",
@@ -6097,9 +6108,12 @@ def build_openai_request_params(model_parameters: dict, model_name: str) -> dict
     ]
     for param in optional_float_params:
         if model_parameters.get(param) is not None:
-            value = float(model_parameters[param])
-            if value != 0.0:  # Don't include if it's the default value
-                request_params[param] = value
+            try:
+                value = float(model_parameters[param])
+                if value != 0.0:  # Don't include if it's the default value
+                    request_params[param] = value
+            except (ValueError, TypeError):
+                continue  # Skip if conversion fails
     # Handle structured parameters that need validation
     if logit_bias := model_parameters.get("logit_bias"):
         if isinstance(logit_bias, dict) and logit_bias:  # Only include if it's a non-empty dict
