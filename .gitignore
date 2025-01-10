@@ -56,3 +56,10 @@ old_logs/
 super_node_inference_layer.sqlite*
 .python-version
 inference_server_code_as_single_file.txt
+
+# Local runtime and cache files
+local_credit_pack_cache/
+*.pkl
+supernode_inference_ip_blacklist.txt
+supernode_performance_data.csv
+valid_supernode_list.txt

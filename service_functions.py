@@ -4650,34 +4650,19 @@ def get_tokenizer(model_name: str):
     return model_to_tokenizer_mapping.get(best_match[0], get_fallback_tokenizer())  # Default to fallback tokenizer if no match found
 
 async def count_tokens_claude(model_name: str, input_data: Any) -> int:
-    """
-    Use Claude's token counting API to accurately count tokens for any input type.
-    For images, uses the same preprocessing logic as the actual submission to ensure accuracy.
-    """
+    """Use Claude's token counting API to accurately count tokens for any input type."""
     client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
     try:
         if isinstance(input_data, str):
-            messages = [{"role": "user", "content": input_data}]
-        elif isinstance(input_data, dict) and input_data.get('document'):
             messages = [{
                 "role": "user",
-                "content": [{
-                    "type": "document",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "application/pdf",
-                        "data": input_data['document']
-                    }
-                }]
+                "content": [{"type": "text", "text": input_data}]
             }]
-        elif isinstance(input_data, dict) and input_data.get('image'):
-            # Process image using the same logic as actual submission
-            image_data = base64.b64decode(input_data["image"])
-            processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
-            # Create message with processed image and correct mime type
-            messages = [{
-                "role": "user",
-                "content": [{
+        elif isinstance(input_data, dict):
+            if input_data.get('image'):
+                image_data = base64.b64decode(input_data["image"])
+                processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
+                content = [{
                     "type": "image",
                     "source": {
                         "type": "base64",
@@ -4685,39 +4670,75 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
                         "data": base64.b64encode(processed_image_data).decode()
                     }
                 }]
-            }]
-            # If there's a question, add it
-            if "question" in input_data:
-                messages[0]["content"].append({
-                    "type": "text",
-                    "text": input_data["question"]
-                })
+                if "question" in input_data:
+                    content.append({
+                        "type": "text",
+                        "text": input_data["question"]
+                    })
+                messages = [{
+                    "role": "user",
+                    "content": content
+                }]
+            elif input_data.get('document'):
+                content = [{
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": input_data['document']
+                    }
+                }]
+                if "query" in input_data:
+                    content.append({
+                        "type": "text",
+                        "text": input_data["query"]
+                    })
+                messages = [{
+                    "role": "user",
+                    "content": content
+                }]
+            else:
+                messages = [{
+                    "role": "user",
+                    "content": [{"type": "text", "text": str(input_data)}]
+                }]
         else:
-            messages = [{"role": "user", "content": str(input_data)}]
+            messages = [{
+                "role": "user",
+                "content": [{"type": "text", "text": str(input_data)}]
+            }]
         response = await client.messages.count_tokens(
             model=get_claude3_model_name(model_name),
             messages=messages
         )
-        return response.input_tokens
+        input_tokens = response.input_tokens
+        logger.info(f"Token count from Claude API: {input_tokens}")
+        if isinstance(input_data, dict) and input_data.get('image'):
+            image_data = base64.b64decode(input_data["image"])
+            with Image.open(io.BytesIO(image_data)) as img:
+                width, height = img.size
+                expected_tokens = (width * height) / 750
+                logger.info(f"Expected image tokens based on dimensions {width}x{height}: {expected_tokens:.0f}")
+        return input_tokens
     except Exception as e:
         logger.error(f"Claude token counting API failed: {str(e)}")
         if isinstance(input_data, dict) and input_data.get('image'):
-            # For images, use a more sophisticated fallback based on image dimensions
             try:
                 image_data = base64.b64decode(input_data["image"])
-                image = Image.open(io.BytesIO(image_data))
-                width, height = image.size
-                # Calculate base tokens plus tokens for image dimensions
-                base_tokens = 85
-                pixels_per_token = 750  # Claude's approximation
-                image_tokens = (width * height) // pixels_per_token
-                # Add tokens for question if present
-                question_tokens = len(input_data.get("question", "").split()) * 2
-                return base_tokens + image_tokens + question_tokens
+                with Image.open(io.BytesIO(image_data)) as image:
+                    width, height = image.size
+                    image_tokens = (width * height) / 750
+                    base_tokens = 85
+                    question_tokens = len(input_data.get("question", "").split()) * 2
+                    total_tokens = int(image_tokens + base_tokens + question_tokens)
+                    logger.info(f"Fallback image token estimation: {total_tokens} (image: {int(image_tokens)}, base: {base_tokens}, question: {question_tokens})")
+                    return total_tokens
             except Exception as img_err:
-                logger.error(f"Image fallback token estimation failed: {str(img_err)}")
-                return 1500  # Conservative fallback for images
-        return super_approximate_token_count(input_data)
+                logger.error(f"Image fallback estimation failed: {str(img_err)}")
+                return 1500
+        if isinstance(input_data, str):
+            return len(input_data.split()) * 1.3
+        return 500
     
 def super_approximate_token_count(input_data: Any) -> int:
     """
@@ -4789,6 +4810,38 @@ def count_tokens(model_name: str, input_data: str) -> int:
                 input_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(input_data))
         return len(input_tokens)
     
+def estimate_openai_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[int, int]]:
+    try:
+        image = Image.open(io.BytesIO(image_data_binary))
+        width, height = image.size
+        image_file_size_in_mb = len(image_data_binary) / (1024 * 1024)
+        logger.info(f"Submitted image file is {image_file_size_in_mb:.2f}MB and has resolution of {width} x {height}")
+        # First resize to fit within max dimensions (2048px)
+        target_larger_dimension = 2048
+        aspect_ratio = width / height
+        if width > height:
+            resized_width = target_larger_dimension
+            resized_height = int(target_larger_dimension / aspect_ratio)
+        else:
+            resized_height = target_larger_dimension
+            resized_width = int(target_larger_dimension * aspect_ratio)
+        logger.info(f"Image will be resized automatically to a resolution of {resized_width} x {resized_height}")
+        # Calculate visual tokens (based on 512x512 tiles)
+        tiles_x = -(-resized_width // 512)  # Ceiling division
+        tiles_y = -(-resized_height // 512)
+        total_tiles = tiles_x * tiles_y
+        # OpenAI uses 170 tokens per tile plus 85 base tokens
+        base_tokens = 85
+        tile_tokens = 170 * total_tiles
+        total_tokens = base_tokens + tile_tokens
+        logger.info(f"OpenAI vision token calculation: {resized_width}x{resized_height} image, "
+                    f"{total_tiles} tiles ({tiles_x}x{tiles_y}), "
+                    f"{total_tokens} total tokens")
+        return total_tokens, (resized_width, resized_height)
+    except Exception as e:
+        logger.error(f"Error estimating OpenAI image tokens: {str(e)}")
+        return 0, (0, 0)
+        
 def estimate_pixtral_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[int, int]]:
     try:
         image = Image.open(io.BytesIO(image_data_binary))
@@ -4815,7 +4868,10 @@ def estimate_pixtral_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[
     
 async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mistral", detail: str = "auto") -> tuple[bytes, str]:
     try:
-        image = Image.open(io.BytesIO(image_data))
+        # Create BytesIO buffer and load image
+        image_buffer = io.BytesIO(image_data)
+        image_buffer.seek(0)  # Ensure we're at start of buffer
+        image = Image.open(image_buffer)
         image_size_mb = len(image_data) / (1024 * 1024)
         width, height = image.size
         # Validate format
@@ -4851,18 +4907,26 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
                     new_height = int(height * scale)
                     image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
                     width, height = new_width, new_height
+                
                 # Then scale shortest side to 768px while maintaining aspect ratio
                 scale = 768 / min(width, height)
                 new_width = int(width * scale)
                 new_height = int(height * scale)
                 image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
         elif model_type == "claude":
-            if image_size_mb > 100:
-                raise ValueError("Image exceeds Claude's 100MB size limit")
-            if width > 4096 or height > 4096:
-                raise ValueError(f"Image dimensions ({width}x{height}) exceed maximum of 4096x4096")
             if width < 16 or height < 16:
                 raise ValueError(f"Image dimensions ({width}x{height}) below minimum of 16x16")
+            # Optimize for Claude's recommended size
+            max_dimension = 1568
+            if width > max_dimension or height > max_dimension:
+                aspect_ratio = width / height
+                if width > height:
+                    new_width = max_dimension
+                    new_height = int(max_dimension / aspect_ratio)
+                else:
+                    new_height = max_dimension
+                    new_width = int(max_dimension * aspect_ratio)
+                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
         # Convert processed image to bytes
         buffer = io.BytesIO()
         save_format = "PNG" if format_lower == "png" else "JPEG"
@@ -4876,6 +4940,13 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
         final_size_mb = len(processed_image_data) / (1024 * 1024)
         if model_type == "openai" and final_size_mb > 20:
             raise ValueError(f"Processed image size ({final_size_mb:.1f}MB) still exceeds OpenAI's 20MB limit. Try reducing image quality or dimensions.")
+        # Debug logging for image processing
+        with Image.open(io.BytesIO(processed_image_data)) as final_img:
+            final_width, final_height = final_img.size
+            final_size_mb = len(processed_image_data) / (1024 * 1024)
+            logger.info(f"Image after processing: {final_width}x{final_height} pixels, {final_size_mb:.2f}MB")
+            expected_tokens = (final_width * final_height) / 750
+            logger.info(f"Expected token count based on dimensions: {expected_tokens:.0f}")
         return processed_image_data, mime_type
     except Exception as e:
         raise ValueError(f"Image validation/processing failed: {str(e)}")
@@ -5091,90 +5162,91 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
         "medium": 1.0,
         "high": 1.3
     }
-    if "mistralapi-pixtral" in model_name.lower():
+    if model_name.startswith("mistralapi-"):
         try:
-            input_data_dict = json.loads(input_data)
-            image_data_binary = base64.b64decode(input_data_dict["image"])
-            question = input_data_dict["question"]
-            # Calculate image costs
-            image_tokens, _ = estimate_pixtral_image_tokens(image_data_binary)
-            image_cost = float(model_pricing["image_cost"]) * float(image_tokens)
-            # Calculate text costs
-            question_tokens = count_tokens(model_name, question)
-            input_cost = float(model_pricing["input_cost"]) * float(question_tokens) / 1000.0
-            # Calculate output costs
-            output_tokens = int(model_parameters.get("number_of_tokens_to_generate", 300))
-            output_cost = float(model_pricing["output_cost"]) * float(output_tokens) / 1000.0
-            estimated_cost = image_cost + input_cost + output_cost
+            if isinstance(input_data, dict) and input_data.get('image'):
+                # Process and validate image for Pixtral models
+                image_data = base64.b64decode(input_data["image"])
+                processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "mistral")
+                question = input_data.get("question", "")
+                # Calculate image tokens/costs
+                image_tokens, _ = estimate_pixtral_image_tokens(processed_image_data)
+                if "image_cost" in model_pricing:  # Pixtral models with per-image cost
+                    image_cost = float(model_pricing["image_cost"]) * float(image_tokens)
+                else:
+                    image_cost = 0.0
+                # Calculate question tokens/costs
+                question_tokens = count_tokens(model_name, question)
+                input_cost = float(model_pricing["input_cost"]) * float(question_tokens) / 1000.0
+                output_tokens = int(model_parameters.get("number_of_tokens_to_generate", 300))
+                output_cost = float(model_pricing["output_cost"]) * float(output_tokens) / 1000.0
+                estimated_cost = image_cost + input_cost + output_cost
+                logger.info(f"Mistral vision cost breakdown - Image tokens: {image_tokens}, Question tokens: {question_tokens}," f"Image cost: ${image_cost:.4f}, Input cost: ${input_cost:.4f}, Output cost: ${output_cost:.4f}")
+            elif "mistralapi-mistral-embed" in model_name.lower():
+                # Handle embeddings
+                input_tokens = count_tokens(model_name, input_data)
+                estimated_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
+                logger.info(f"Mistral embedding cost breakdown - Input tokens: {input_tokens}, Cost: ${estimated_cost:.4f}")
+            else:
+                # Handle regular text completion
+                input_tokens = count_tokens(model_name, input_data)
+                number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
+                number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+                input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
+                output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
+                per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
+                estimated_cost = input_cost + output_cost + per_call_cost
+                logger.info(f"Mistral text cost breakdown - Input tokens: {input_tokens}, Cost: ${estimated_cost:.4f}")
+            return estimated_cost
         except Exception as e:
-            logger.error(f"Error calculating Pixtral cost: {str(e)}")
-            return 0.0
-    elif "mistralapi-mistral-embed" in model_name.lower():
-        input_tokens = count_tokens(model_name, input_data)
-        estimated_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
-    elif model_name.startswith("mistralapi-"):
-        input_tokens = count_tokens(model_name, input_data)
-        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
-        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-        input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
-        output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
-        per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
-        estimated_cost = input_cost + output_cost + per_call_cost
-    elif model_name.startswith("openai-gpt-4o") or model_name.startswith("openai-o1"):
-        input_tokens = count_tokens(model_name, input_data)
-        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
-        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-        cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
-        cache_miss_tokens = input_tokens - cache_hit_tokens
-        input_cost = (
-            float(model_pricing["input_cost"]) * float(cache_miss_tokens) +
-            float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)
-        ) / 1000.0
-        # Apply reasoning effort multiplier if applicable
-        reasoning_effort_multiplier = 1.0
-        if model_name.startswith("openai-o1"):
-            reasoning_effort = model_parameters.get("reasoning_effort", "medium")
-            reasoning_effort_multiplier = reasoning_effort_multipliers.get(reasoning_effort, 1.0)
-        output_cost = (
-            float(model_pricing["output_cost"]) * 
-            float(number_of_tokens_to_generate) * 
-            reasoning_effort_multiplier
-        ) / 1000.0
-        per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
-        estimated_cost = input_cost + output_cost + per_call_cost
-    elif model_name.startswith("openai-gpt-4o-vision"):
-        input_data_dict = json.loads(input_data)
-        image_data_binary = base64.b64decode(input_data_dict["image"])
-        question = input_data_dict["question"]
-        # Calculate image resolution and tokens
-        image = Image.open(io.BytesIO(image_data_binary))
-        width, height = image.size
-        image_file_size_in_mb = len(image_data_binary) / (1024 * 1024)
-        logger.info(f"Submitted image file is {image_file_size_in_mb:.2f}MB and has resolution of {width} x {height}")
-        # Resize logic to fit the larger dimension to 1286 pixels
-        target_larger_dimension = 1286
-        aspect_ratio = width / height
-        if width > height:
-            resized_width = target_larger_dimension
-            resized_height = int(target_larger_dimension / aspect_ratio)
-        else:
-            resized_height = target_larger_dimension
-            resized_width = int(target_larger_dimension * aspect_ratio)
-        logger.info(f"Image will be resized automatically by OpenAI to a resolution of {resized_width} x {resized_height}")
-        # Calculate visual tokens
-        tiles_x = -(-resized_width // 512)  # Ceiling division
-        tiles_y = -(-resized_height // 512)
-        total_tiles = tiles_x * tiles_y
-        base_tokens = 85
-        tile_tokens = 170 * total_tiles
-        total_tokens = base_tokens + tile_tokens
-        # Add question tokens
-        question_tokens = count_tokens(model_name, question)
-        input_tokens = total_tokens + question_tokens
-        input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
-        output_tokens = int(model_parameters.get("number_of_tokens_to_generate", 300))
-        output_cost = float(model_pricing["output_cost"]) * float(output_tokens) / 1000.0
-        estimated_cost = input_cost + output_cost
+            logger.error(f"Error calculating Mistral cost: {str(e)}")
+            return float(MINIMUM_COST_IN_CREDITS)
+    elif model_name.startswith("openai-"):
+        try:
+            if isinstance(input_data, dict) and input_data.get('image'):
+                image_data = base64.b64decode(input_data["image"])
+                processed_image_data, _ = await validate_and_preprocess_image(image_data, "openai")
+                image_tokens, _ = estimate_openai_image_tokens(processed_image_data)
+                question = input_data.get("question", "")
+                question_tokens = count_tokens(model_name, question)
+                input_tokens = image_tokens + question_tokens
+            else:
+                input_tokens = count_tokens(model_name, input_data)
+            # Get generation parameters
+            number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000 if not input_data.get('image') else 300)
+            number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+            # Calculate input cost with caching if supported
+            if "input_cost_cached" in model_pricing:
+                cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
+                cache_miss_tokens = input_tokens - cache_hit_tokens
+                input_cost = (
+                    float(model_pricing["input_cost"]) * float(cache_miss_tokens) +
+                    float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)
+                ) / 1000.0
+            else:
+                input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
+            # Apply reasoning effort multiplier for O1 models
+            reasoning_effort_multiplier = 1.0
+            if model_name.startswith("openai-o1"):
+                reasoning_effort = model_parameters.get("reasoning_effort", "medium")
+                reasoning_effort_multiplier = reasoning_effort_multipliers.get(reasoning_effort, 1.0)
+            # Calculate output cost 
+            output_cost = (
+                float(model_pricing["output_cost"]) * 
+                float(number_of_tokens_to_generate) * 
+                reasoning_effort_multiplier
+            ) / 1000.0
+            per_call_cost = float(model_pricing.get("per_call_cost", 0.0)) * float(number_of_completions_to_generate)
+            estimated_cost = input_cost + output_cost + per_call_cost
+            # Log appropriate cost breakdown
+            if isinstance(input_data, dict) and input_data.get('image'):
+                logger.info(f"OpenAI vision cost breakdown - Image tokens: {image_tokens}, Question tokens: {question_tokens}, Input cost: ${input_cost:.4f}, Output cost: ${output_cost:.4f}")
+            else:
+                logger.info(f"OpenAI text cost breakdown - Input tokens: {input_tokens}, Cost: ${estimated_cost:.4f}")
+            return estimated_cost
+        except Exception as e:
+            logger.error(f"Error calculating OpenAI cost: {str(e)}")
+            return float(MINIMUM_COST_IN_CREDITS)
     elif model_name.startswith("openai-text-embedding"):
         input_tokens = count_tokens(model_name, input_data)
         number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
@@ -6734,24 +6806,6 @@ async def submit_inference_request_to_groq_api(inference_request):
         logger.warning(f"Unsupported inference type for Groq model: {inference_request.model_inference_type_string}")
         return None, None
 
-async def validate_claude_image_input(image_data: bytes) -> None:
-    """Validates image inputs for Claude API."""
-    try:
-        image = Image.open(io.BytesIO(image_data))
-        if image.format.lower() not in ['png', 'jpeg', 'jpg', 'gif', 'webp']:
-            raise ValueError(f"Unsupported image format: {image.format}")
-        width, height = image.size
-        if width > 4096 or height > 4096:
-            raise ValueError(f"Image dimensions ({width}x{height}) exceed maximum of 4096x4096")
-        if width < 16 or height < 16:
-            raise ValueError(f"Image dimensions ({width}x{height}) below minimum of 16x16")
-        image_size_mb = len(image_data) / (1024 * 1024)
-        if image_size_mb > 100:
-            raise ValueError(f"Image size ({image_size_mb:.1f}MB) exceeds 100MB limit")
-    except Exception as e:
-        logger.error(f"Image validation error: {str(e)}")
-        raise ValueError(f"Invalid image: {str(e)}")
-
 async def validate_claude_pdf_input(pdf_data: bytes) -> None:
     """Validates PDF inputs for Claude API."""
     try:
@@ -6844,59 +6898,75 @@ async def submit_inference_request_to_claude_api(inference_request):
         raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
         await validate_claude_cache_control(inference_request.requested_model_canonical_string, model_parameters.get("cache_control"))
-        # Prepare message content based on inference type
         if inference_request.model_inference_type_string == "text_completion":
             content = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-            message_content = [{"type": "text", "text": content}]
-            
+            messages = [{
+                "role": "user",
+                "content": [{"type": "text", "text": content}]
+            }]
         elif inference_request.model_inference_type_string == "ask_question_about_an_image":
             input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
             image_data = base64.b64decode(input_data_dict["image"])
-            await validate_claude_image_input(image_data)
             question = input_data_dict["question"]
-            result = magika.identify_bytes(image_data)
-            media_type = result.output.mime_type or "image/jpeg"
-            message_content = [
-                {"type": "image", 
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": input_data_dict["image"]
-                    }},
-                {"type": "text", "text": question}
-            ]
+            processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
+            messages = [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": base64.b64encode(processed_image_data).decode()
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": question
+                    }
+                ]
+            }]
         elif inference_request.model_inference_type_string == "embedding":
             input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
-            message_content = [{"type": "text", "text": input_text}]
+            messages = [{
+                "role": "user",
+                "content": [{"type": "text", "text": input_text}]
+            }]
         elif inference_request.model_inference_type_string == "analyze_document":
             document_data = base64.b64decode(inference_request.model_input_data_json_b64).decode()
             await validate_claude_pdf_input(base64.b64decode(document_data))
-            message_content = [
-                {"type": "document",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "application/pdf",
-                        "data": document_data
-                    }}
-            ]
+            content = [{
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": document_data
+                }
+            }]
             if model_parameters.get("query"):
-                message_content.append({"type": "text", "text": model_parameters["query"]})
+                content.append({
+                    "type": "text",
+                    "text": model_parameters["query"]
+                })
+            messages = [{
+                "role": "user",
+                "content": content
+            }]
         else:
             raise ValueError(f"Unsupported inference type: {inference_request.model_inference_type_string}")
-        # Apply cache control if specified
         if cache_control := model_parameters.get("cache_control"):
-            for content in message_content:
-                content["cache_control"] = cache_control
-        # Build request parameters
-        messages = [{"role": "user", "content": message_content}]
-        request_params = build_claude_request_params(
-            model_parameters, 
-            inference_request.requested_model_canonical_string,
-            messages
-        )
-        # Make the API call
+            for msg in messages:
+                if isinstance(msg["content"], list):
+                    for content in msg["content"]:
+                        content["cache_control"] = cache_control
+                else:
+                    msg["content"] = {
+                        "type": "text",
+                        "text": msg["content"],
+                        "cache_control": cache_control
+                    }
+        request_params = build_claude_request_params(model_parameters, inference_request.requested_model_canonical_string, messages)
         response = await client.messages.create(**request_params)
-        # Process response based on inference type
         if inference_request.model_inference_type_string == "embedding":
             output_results = response.content[0].embedding
             output_results_file_type_strings = {"output_text": "embedding", "output_files": ["NA"]}
