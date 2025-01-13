@@ -4685,7 +4685,7 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
                 messages = [{
                     "role": "user",
                     "content": content
-                }]                
+                }]
             elif input_data.get('document'):
                 content = [{
                     "type": "document",
@@ -4732,8 +4732,11 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
         logger.error(f"Claude token counting API failed: {str(e)}")
         if isinstance(input_data, dict) and input_data.get('image'):
             try:
+                # Process image first
                 image_data = base64.b64decode(input_data["image"])
-                with Image.open(io.BytesIO(image_data)) as image:
+                processed_image_data, _ = await validate_and_preprocess_image(image_data, "claude")
+                # Use processed image dimensions for fallback calculation
+                with Image.open(io.BytesIO(processed_image_data)) as image:
                     width, height = image.size
                     image_tokens = (width * height) / 750
                     base_tokens = 85
@@ -4744,10 +4747,7 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
             except Exception as img_err:
                 logger.error(f"Image fallback estimation failed: {str(img_err)}")
                 return 1500
-        if isinstance(input_data, str):
-            return len(input_data.split()) * 1.3
-        return 500
-    
+
 def super_approximate_token_count(input_data: Any) -> int:
     """
     Very rough approximation used only as fallback if Anthropic token counting API fails
@@ -4882,11 +4882,12 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
         image = Image.open(image_buffer)
         image_size_mb = len(image_data) / (1024 * 1024)
         width, height = image.size
+        # Log original dimensions and size
+        logger.info(f"Original image: {image.format}, {width}x{height}, {image_size_mb:.2f}MB")
         # Validate format
         format_lower = image.format.lower() if image.format else "jpeg"
         if format_lower not in {"jpeg", "jpg", "png", "gif", "webp"}:
-            format_lower = "png"  # Default to PNG for unsupported formats
-        mime_type = f"image/{format_lower}"
+            format_lower = "png"
         # Convert RGBA to RGB if needed
         if image.mode == 'RGBA':
             background = Image.new('RGB', image.size, (255, 255, 255))
@@ -4896,7 +4897,7 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
         if model_type == "openai":
             if image_size_mb > 20:
                 raise ValueError("Image exceeds OpenAI's 20MB size limit")
-            if detail == "low" or (detail == "auto" and (width <= 512 and height <= 512)):
+            if detail == "low":
                 # Low detail mode: resize to 512x512
                 aspect_ratio = width / height
                 if aspect_ratio > 1:
@@ -4906,25 +4907,40 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
                     new_height = 512
                     new_width = int(512 * aspect_ratio)
                 image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            elif detail == "high" or detail == "auto":
+                logger.info(f"Resized for low detail: {new_width}x{new_height}")
+            else:
                 # High detail mode
-                # First scale to fit within 2048x2048 if needed
-                if width > 2048 or height > 2048:
-                    scale = min(2048/width, 2048/height)
+                max_dimension = 2048
+                target_short_side = 768
+                # First ensure within max_dimension
+                if width > max_dimension or height > max_dimension:
+                    scale = min(max_dimension/width, max_dimension/height)
                     new_width = int(width * scale)
                     new_height = int(height * scale)
                     image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
                     width, height = new_width, new_height
-                
-                # Then scale shortest side to 768px while maintaining aspect ratio
-                scale = 768 / min(width, height)
-                new_width = int(width * scale)
-                new_height = int(height * scale)
-                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    logger.info(f"Resized to fit max dimension: {width}x{height}")
+                # Then scale shortest side to target
+                if min(width, height) != target_short_side:
+                    scale = target_short_side / min(width, height)
+                    new_width = int(width * scale)
+                    new_height = int(height * scale)
+                    image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    logger.info(f"Resized to target short side: {new_width}x{new_height}")
+                # Calculate expected tokens for logging
+                tiles_x = -(-new_width // 512)  # Ceiling division
+                tiles_y = -(-new_height // 512)
+                total_tiles = tiles_x * tiles_y
+                base_tokens = 85
+                tile_tokens = 170 * total_tiles
+                total_tokens = base_tokens + tile_tokens
+                logger.info(f"Expected token calculation: {new_width}x{new_height} image, "
+                            f"{total_tiles} tiles ({tiles_x}x{tiles_y}), "
+                            f"{total_tokens} total tokens")
+            save_format = "JPEG"
+            mime_type = "image/jpeg"
+            save_kwargs = {"format": save_format, "quality": 85, "optimize": True}
         elif model_type == "claude":
-            if width < 16 or height < 16:
-                raise ValueError(f"Image dimensions ({width}x{height}) below minimum of 16x16")
-            # Optimize for Claude's recommended size
             max_dimension = 1568
             if width > max_dimension or height > max_dimension:
                 aspect_ratio = width / height
@@ -4935,26 +4951,22 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
                     new_height = max_dimension
                     new_width = int(max_dimension * aspect_ratio)
                 image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                logger.info(f"Resized for Claude: {new_width}x{new_height}")
+            save_format = "JPEG"
+            mime_type = "image/jpeg"
+            save_kwargs = {"format": save_format, "quality": 85, "optimize": True}
         # Convert processed image to bytes
         buffer = io.BytesIO()
-        save_format = "PNG" if format_lower == "png" else "JPEG"
-        save_kwargs = {"format": save_format}
-        if save_format == "JPEG":
-            save_kwargs["quality"] = 95
-            save_kwargs["optimize"] = True
         image.save(buffer, **save_kwargs)
         processed_image_data = buffer.getvalue()
-        # Final size check after processing
+        # Final size check
         final_size_mb = len(processed_image_data) / (1024 * 1024)
+        logger.info(f"Processed image size: {final_size_mb:.2f}MB")
+        # Model-specific final size limits
         if model_type == "openai" and final_size_mb > 20:
-            raise ValueError(f"Processed image size ({final_size_mb:.1f}MB) still exceeds OpenAI's 20MB limit. Try reducing image quality or dimensions.")
-        # Debug logging for image processing
-        with Image.open(io.BytesIO(processed_image_data)) as final_img:
-            final_width, final_height = final_img.size
-            final_size_mb = len(processed_image_data) / (1024 * 1024)
-            logger.info(f"Image after processing: {final_width}x{final_height} pixels, {final_size_mb:.2f}MB")
-            expected_tokens = (final_width * final_height) / 750
-            logger.info(f"Expected token count based on dimensions: {expected_tokens:.0f}")
+            raise ValueError(f"Processed image size ({final_size_mb:.1f}MB) still exceeds OpenAI's 20MB limit")
+        elif model_type == "claude" and final_size_mb > 5:
+            raise ValueError(f"Processed image size ({final_size_mb:.1f}MB) still exceeds Claude's 5MB limit")
         return processed_image_data, mime_type
     except Exception as e:
         raise ValueError(f"Image validation/processing failed: {str(e)}")
@@ -6342,22 +6354,16 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
             return resp.json()["data"][0]["embedding"], {"output_text": "embedding", "output_files": ["NA"]}
     elif inference_type == "ask_question_about_an_image":
         try:
-            # Decode input data
             input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
-            # Strip data URL prefix if present
             image_base64 = strip_data_url_prefix(input_data["image"])
             image_data_binary = base64.b64decode(image_base64)
             question = input_data["question"]
-            # Get detail parameter from model parameters or default to "auto"
-            detail_level = model_parameters.get("detail", "auto")
-            # Validate and preprocess the image using our improved function
             try:
                 processed_image_data, mime_type = await validate_and_preprocess_image(
                     image_data_binary, 
                     model_type="openai",
-                    detail=detail_level
                 )
-                logger.info(f"Successfully processed image with {detail_level} detail mode and mime type {mime_type}")
+                logger.info(f"Successfully processed image with mime type {mime_type}")
             except ValueError as ve:
                 logger.error(f"Image validation/processing failed: {ve}")
                 return None, None
@@ -6369,25 +6375,32 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
             # Create requests
             async with httpx.AsyncClient(timeout=float(model_parameters.get("request_timeout_seconds", 90))) as client:
                 for _ in range(num_completions):
-                    # Construct the base64 data URL with correct mime type
-                    image_b64 = base64.b64encode(processed_image_data).decode("utf-8")
-                    image_url = f"data:{mime_type};base64,{image_b64}"
+                    # Decode input data
+                    input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
+                    image_base64 = strip_data_url_prefix(input_data["image"])
+                    image_data_binary = base64.b64decode(image_base64)
+                    question = input_data["question"]
+                    # Process image - no need to override OpenAI's auto detail setting
+                    processed_image_data, mime_type = await validate_and_preprocess_image(
+                        image_data_binary, 
+                        model_type="openai"
+                    )
+                    messages = [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": question},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime_type};base64,{base64.b64encode(processed_image_data).decode()}"
+                                }
+                            }
+                        ]
+                    }]                    
                     # Build the payload
                     payload = {
                         "model": model_name.replace("openai-", ""),
-                        "messages": [{
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": question},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": image_url,
-                                        "detail": detail_level
-                                    }
-                                }
-                            ]
-                        }],
+                        "messages": messages,
                         "max_tokens": int(model_parameters.get("number_of_tokens_to_generate", 300)),
                         "temperature": float(model_parameters.get("temperature", 0.7))
                     }
