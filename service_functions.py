@@ -4666,9 +4666,18 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
             }]
         elif isinstance(input_data, dict):
             if input_data.get('image'):
-                image_base64 = strip_data_url_prefix(input_data["image"])
-                image_data = base64.b64decode(image_base64)
+                # Get the raw image data first
+                try:
+                    # Try decoding if it's base64
+                    image_base64 = strip_data_url_prefix(input_data["image"])
+                    image_data = base64.b64decode(image_base64)
+                except Exception as decode_err:
+                    logger.error(f"Base64 decode error: {decode_err}")
+                    # If decode fails, assume it's already raw bytes
+                    image_data = input_data["image"]
+                # Process the image
                 processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
+                # Now create the message content
                 content = [{
                     "type": "image",
                     "source": {
@@ -4747,7 +4756,9 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
             except Exception as img_err:
                 logger.error(f"Image fallback estimation failed: {str(img_err)}")
                 return 1500
-
+        # Move this outside - we were incorrectly logging success when using fallback
+        return 1500
+    
 def super_approximate_token_count(input_data: Any) -> int:
     """
     Very rough approximation used only as fallback if Anthropic token counting API fails
@@ -4876,10 +4887,33 @@ def estimate_pixtral_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[
     
 async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mistral", detail: str = "auto") -> tuple[bytes, str]:
     try:
+        # First try to detect if this is base64 encoded data that wasn't decoded
+        if isinstance(image_data, bytes):
+            try:
+                # See if it's valid base64 by attempting to decode a small sample
+                sample = image_data[:100].decode('ascii', errors='strict')
+                if all(c in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=' for c in sample):
+                    # Likely base64 - add padding if needed
+                    try:
+                        padding_needed = len(image_data) % 4
+                        if padding_needed:
+                            padded_data = image_data + b'=' * (4 - padding_needed)
+                            image_data = base64.b64decode(padded_data)
+                        else:
+                            image_data = base64.b64decode(image_data)
+                    except Exception as decode_err:
+                        logger.warning(f"Base64 decode attempt failed: {decode_err}")
+                        # Continue with original data if decode fails
+            except (UnicodeDecodeError, AttributeError):
+                # Not base64, continue with original data
+                pass
         # Create BytesIO buffer and load image
         image_buffer = io.BytesIO(image_data)
         image_buffer.seek(0)  # Ensure we're at start of buffer
-        image = Image.open(image_buffer)
+        try:
+            image = Image.open(image_buffer)
+        except Exception as e:
+            raise ValueError(f"Could not open image data: {str(e)}")
         image_size_mb = len(image_data) / (1024 * 1024)
         width, height = image.size
         # Log original dimensions and size
@@ -4887,7 +4921,7 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
         # Validate format
         format_lower = image.format.lower() if image.format else "jpeg"
         if format_lower not in {"jpeg", "jpg", "png", "gif", "webp"}:
-            format_lower = "png"
+            format_lower = "jpg"  # Default to PNG for unsupported formats
         # Convert RGBA to RGB if needed
         if image.mode == 'RGBA':
             background = Image.new('RGB', image.size, (255, 255, 255))
@@ -4941,6 +4975,8 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
             mime_type = "image/jpeg"
             save_kwargs = {"format": save_format, "quality": 85, "optimize": True}
         elif model_type == "claude":
+            if width < 16 or height < 16:
+                raise ValueError(f"Image dimensions ({width}x{height}) below minimum of 16x16")
             max_dimension = 1568
             if width > max_dimension or height > max_dimension:
                 aspect_ratio = width / height
@@ -4967,10 +5003,16 @@ async def validate_and_preprocess_image(image_data: bytes, model_type: str = "mi
             raise ValueError(f"Processed image size ({final_size_mb:.1f}MB) still exceeds OpenAI's 20MB limit")
         elif model_type == "claude" and final_size_mb > 5:
             raise ValueError(f"Processed image size ({final_size_mb:.1f}MB) still exceeds Claude's 5MB limit")
+        # Verify the processed image data is valid
+        try:
+            verification_buffer = io.BytesIO(processed_image_data)
+            Image.open(verification_buffer)
+        except Exception as e:
+            raise ValueError(f"Processed image validation failed: {str(e)}")
         return processed_image_data, mime_type
     except Exception as e:
         raise ValueError(f"Image validation/processing failed: {str(e)}")
-
+    
 async def calculate_api_cost(model_name: str, input_data: str, model_parameters: Dict) -> float:
     # Define the pricing data for each API service and model
     logger.info(f"Evaluating API cost for model: {model_name}")
@@ -6946,6 +6988,8 @@ async def submit_inference_request_to_claude_api(inference_request):
             image_data = base64.b64decode(input_data_dict["image"])
             question = input_data_dict["question"]
             processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
+            if not processed_image_data:
+                raise ValueError("Failed to process image data")            
             messages = [{
                 "role": "user",
                 "content": [
