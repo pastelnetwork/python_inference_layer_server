@@ -4612,6 +4612,12 @@ async def save_inference_api_usage_request(inference_request_model: db_code.Infe
 def get_fallback_tokenizer():
     return "gpt2"  # Default to "gpt2" tokenizer as a fallback
 
+def strip_data_url_prefix(base64_string: str) -> str:
+    """Remove data URL prefix if present and return raw base64 data."""
+    if "base64," in base64_string:
+        return base64_string.split("base64,")[1]
+    return base64_string
+
 def get_tokenizer(model_name: str):
     model_name = model_name.replace('swiss_army_llama-', '')
     model_to_tokenizer_mapping = {
@@ -4660,7 +4666,8 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
             }]
         elif isinstance(input_data, dict):
             if input_data.get('image'):
-                image_data = base64.b64decode(input_data["image"])
+                image_base64 = strip_data_url_prefix(input_data["image"])
+                image_data = base64.b64decode(image_base64)
                 processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
                 content = [{
                     "type": "image",
@@ -4678,7 +4685,7 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
                 messages = [{
                     "role": "user",
                     "content": content
-                }]
+                }]                
             elif input_data.get('document'):
                 content = [{
                     "type": "document",
@@ -4713,6 +4720,7 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
         )
         input_tokens = response.input_tokens
         logger.info(f"Token count from Claude API: {input_tokens}")
+        # Add debug logging for image dimensions if dealing with an image
         if isinstance(input_data, dict) and input_data.get('image'):
             image_data = base64.b64decode(input_data["image"])
             with Image.open(io.BytesIO(image_data)) as img:
@@ -5203,11 +5211,13 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
             return float(MINIMUM_COST_IN_CREDITS)
     elif model_name.startswith("openai-"):
         try:
-            if isinstance(input_data, dict) and input_data.get('image'):
-                image_data = base64.b64decode(input_data["image"])
+            # First check if this is JSON string containing image data
+            if input_data.startswith('{"image":'):
+                input_data_dict = json.loads(input_data)
+                image_data = base64.b64decode(input_data_dict["image"])
                 processed_image_data, _ = await validate_and_preprocess_image(image_data, "openai")
                 image_tokens, _ = estimate_openai_image_tokens(processed_image_data)
-                question = input_data.get("question", "")
+                question = input_data_dict.get("question", "")
                 question_tokens = count_tokens(model_name, question)
                 input_tokens = image_tokens + question_tokens
             else:
@@ -5253,26 +5263,38 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
         input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
         estimated_cost = input_cost * number_of_completions_to_generate
     elif "claude" in model_name.lower():
-        try: # First try using Claude's official token counting API
+        try:
+            # First try using Claude's token counting API
             try:
+                # If input_data is a string that might be JSON, parse it first
+                if isinstance(input_data, str) and input_data.startswith('{'):
+                    input_data = json.loads(input_data)
                 input_tokens = await count_tokens_claude(model_name, input_data)
                 logger.info(f"Successfully used Claude's token counting API: {input_tokens} tokens")
             except Exception as token_api_err:
                 logger.warning(f"Claude token counting API failed, falling back to calculation: {token_api_err}")
-                # Fall back to manual calculation if API fails
-                if isinstance(input_data, dict) and "image" in input_data:
-                    # Handle image input
+                # Handle image input
+                if isinstance(input_data, (dict, str)) and (
+                    (isinstance(input_data, dict) and input_data.get('image')) or 
+                    (isinstance(input_data, str) and input_data.startswith('{"image":'))
+                ):
+                    if isinstance(input_data, str):
+                        input_data = json.loads(input_data)
                     image_data_binary = base64.b64decode(input_data["image"])
                     image = Image.open(io.BytesIO(image_data_binary))
                     width, height = image.size
                     # Calculate image tokens using Claude's formula
-                    # Approximately 750 pixels per token
                     image_tokens = (width * height) // 750
                     question_tokens = await count_tokens(model_name, input_data.get("question", ""))
                     input_tokens = image_tokens + question_tokens
                     logger.info(f"Calculated image tokens: {image_tokens}, question tokens: {question_tokens}")
-                elif isinstance(input_data, dict) and "document" in input_data:
-                    # Handle PDF input - estimate ~1500-3000 tokens per page
+                # Handle PDF input
+                elif isinstance(input_data, (dict, str)) and (
+                    (isinstance(input_data, dict) and input_data.get('document')) or
+                    (isinstance(input_data, str) and input_data.startswith('{"document":'))
+                ):
+                    if isinstance(input_data, str):
+                        input_data = json.loads(input_data)
                     pdf_data = base64.b64decode(input_data["document"])
                     with io.BytesIO(pdf_data) as pdf_file:
                         pdf_reader = PyPDF2.PdfReader(pdf_file)
@@ -6322,14 +6344,16 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
         try:
             # Decode input data
             input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
-            image_data_binary = base64.b64decode(input_data["image"])
+            # Strip data URL prefix if present
+            image_base64 = strip_data_url_prefix(input_data["image"])
+            image_data_binary = base64.b64decode(image_base64)
             question = input_data["question"]
             # Get detail parameter from model parameters or default to "auto"
             detail_level = model_parameters.get("detail", "auto")
             # Validate and preprocess the image using our improved function
             try:
                 processed_image_data, mime_type = await validate_and_preprocess_image(
-                    image_data_binary,
+                    image_data_binary, 
                     model_type="openai",
                     detail=detail_level
                 )
