@@ -1,7 +1,6 @@
 import warnings
 from cryptography.utils import CryptographyDeprecationWarning
 from logger_config import setup_logger
-from endpoint_functions import router
 import asyncio
 import os
 import random
@@ -19,8 +18,22 @@ from uvicorn import Config, Server
 from decouple import Config as DecoupleConfig, RepositoryEnv
 from database_code import initialize_db
 from setup_swiss_army_llama import check_and_setup_swiss_army_llama
-from service_functions import (monitor_new_messages, generate_or_load_encryption_key_sync, decrypt_sensitive_data, get_env_value, fetch_all_mnid_tickets_details, establish_ssh_tunnel, schedule_micro_benchmark_periodically,
-                                list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them, generate_supernode_inference_ip_blacklist, kill_open_ssh_tunnels)
+from service_functions import (
+    monitor_new_messages,
+    generate_or_load_encryption_key_sync,
+    decrypt_sensitive_data,
+    get_env_value,
+    fetch_all_mnid_tickets_details,
+    establish_ssh_tunnel,
+    schedule_micro_benchmark_periodically,
+    list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them,
+    generate_supernode_inference_ip_blacklist,
+    kill_open_ssh_tunnels
+)
+
+import sqlite3
+import shutil
+
 warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 config = DecoupleConfig(RepositoryEnv('.env'))
 UVICORN_PORT = config.get("UVICORN_PORT", cast=int)
@@ -30,6 +43,22 @@ SWISS_ARMY_LLAMA_SECURITY_TOKEN = config.get("SWISS_ARMY_LLAMA_SECURITY_TOKEN", 
 os.environ['TZ'] = 'UTC' # Set timezone to UTC for the current session
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
+
+# Safely import endpoint_functions.router to handle malformed DB:
+try:
+    from endpoint_functions import router
+except sqlite3.DatabaseError as e:
+    # Check if it's the "database disk image is malformed" error
+    if 'database disk image is malformed' in str(e).lower():
+        logger.error("Detected 'database disk image is malformed'. Removing local_credit_pack_cache folder...")
+        # Remove the corrupted cache directory
+        local_cache_dir = os.path.join(os.path.dirname(__file__), "local_credit_pack_cache")
+        shutil.rmtree(local_cache_dir, ignore_errors=True)
+        # Retry import after removing cache
+        from endpoint_functions import router
+    else:
+        # If it's some other SQLite error, just raise it
+        raise
 
 app = fastapi.FastAPI(
     title="Pastel-Supernode-Inference-Layer",
@@ -96,9 +125,8 @@ async def startup():
         asyncio.create_task(monitor_new_messages())  # Create a background task
         asyncio.create_task(fetch_all_mnid_tickets_details())
         asyncio.create_task(list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them())
-        # asyncio.create_task(periodic_ticket_listing_and_validation())
         asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
-        await generate_supernode_inference_ip_blacklist()  # Compile IP blacklist text file of unresponsive Supernodes for inference tasks
+        await generate_supernode_inference_ip_blacklist()  # Compile IP blacklist text file
         asyncio.create_task(schedule_generate_supernode_inference_ip_blacklist())  # Schedule the task
         asyncio.create_task(schedule_micro_benchmark_periodically())  # Schedule the task
     except Exception as e:
