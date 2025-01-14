@@ -4655,6 +4655,21 @@ def get_tokenizer(model_name: str):
     best_match = process.extractOne(model_name.lower(), model_to_tokenizer_mapping.keys())
     return model_to_tokenizer_mapping.get(best_match[0], get_fallback_tokenizer())  # Default to fallback tokenizer if no match found
 
+def decode_base64_with_padding(b64_string: str) -> bytes:
+    """Decode base64 string, adding padding if necessary."""
+    try:
+        # If already bytes, decode to string first
+        if isinstance(b64_string, bytes):
+            b64_string = b64_string.decode('utf-8')
+        # Add padding if needed
+        padding_needed = len(b64_string) % 4
+        if padding_needed:
+            b64_string += '=' * (4 - padding_needed)
+        return base64.b64decode(b64_string)
+    except Exception as e:
+        logger.error(f"Base64 decode failed: {str(e)}")
+        raise
+
 async def count_tokens_claude(model_name: str, input_data: Any) -> int:
     """Use Claude's token counting API to accurately count tokens for any input type."""
     client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
@@ -4666,35 +4681,37 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
             }]
         elif isinstance(input_data, dict):
             if input_data.get('image'):
-                # Get the raw image data first
                 try:
-                    # Try decoding if it's base64
-                    image_base64 = strip_data_url_prefix(input_data["image"])
-                    image_data = base64.b64decode(image_base64)
-                except Exception as decode_err:
-                    logger.error(f"Base64 decode error: {decode_err}")
-                    # If decode fails, assume it's already raw bytes
-                    image_data = input_data["image"]
-                # Process the image
-                processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
-                # Now create the message content
-                content = [{
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": mime_type,
-                        "data": base64.b64encode(processed_image_data).decode()
-                    }
-                }]
-                if "question" in input_data:
-                    content.append({
-                        "type": "text",
-                        "text": input_data["question"]
-                    })
-                messages = [{
-                    "role": "user",
-                    "content": content
-                }]
+                    # Get the raw image data using our padding-aware decoder
+                    image_data = decode_base64_with_padding(input_data["image"])
+                    # Process the image
+                    processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
+                    # Create the message content
+                    content = [{
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": base64.b64encode(processed_image_data).decode()
+                        }
+                    }]
+                    if "question" in input_data:
+                        content.append({
+                            "type": "text",
+                            "text": input_data["question"]
+                        })
+                    messages = [{
+                        "role": "user",
+                        "content": content
+                    }]
+                    # Add debug logging for image dimensions
+                    with Image.open(io.BytesIO(processed_image_data)) as img:
+                        width, height = img.size
+                        expected_tokens = (width * height) / 750
+                        logger.info(f"Expected image tokens based on dimensions {width}x{height}: {expected_tokens:.0f}")
+                except Exception as img_err:
+                    logger.error(f"Error processing image for token counting: {str(img_err)}")
+                    raise
             elif input_data.get('document'):
                 content = [{
                     "type": "document",
@@ -4729,22 +4746,16 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
         )
         input_tokens = response.input_tokens
         logger.info(f"Token count from Claude API: {input_tokens}")
-        # Add debug logging for image dimensions if dealing with an image
-        if isinstance(input_data, dict) and input_data.get('image'):
-            image_data = base64.b64decode(input_data["image"])
-            with Image.open(io.BytesIO(image_data)) as img:
-                width, height = img.size
-                expected_tokens = (width * height) / 750
-                logger.info(f"Expected image tokens based on dimensions {width}x{height}: {expected_tokens:.0f}")
         return input_tokens
     except Exception as e:
         logger.error(f"Claude token counting API failed: {str(e)}")
         if isinstance(input_data, dict) and input_data.get('image'):
             try:
-                # Process image first
-                image_data = base64.b64decode(input_data["image"])
+                # Process image for fallback calculation
+                image_data = decode_base64_with_padding(input_data["image"])
                 processed_image_data, _ = await validate_and_preprocess_image(image_data, "claude")
-                # Use processed image dimensions for fallback calculation
+                
+                # Calculate based on processed image dimensions
                 with Image.open(io.BytesIO(processed_image_data)) as image:
                     width, height = image.size
                     image_tokens = (width * height) / 750
@@ -4756,7 +4767,6 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
             except Exception as img_err:
                 logger.error(f"Image fallback estimation failed: {str(img_err)}")
                 return 1500
-        # Move this outside - we were incorrectly logging success when using fallback
         return 1500
     
 def super_approximate_token_count(input_data: Any) -> int:
@@ -4830,6 +4840,7 @@ def count_tokens(model_name: str, input_data: str) -> int:
         return len(input_tokens)
     
 def estimate_openai_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[int, int]]:
+    """Calculate OpenAI token usage for an image based on their pricing model."""
     try:
         image = Image.open(io.BytesIO(image_data_binary))
         width, height = image.size
@@ -4859,8 +4870,8 @@ def estimate_openai_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[i
         return total_tokens, (resized_width, resized_height)
     except Exception as e:
         logger.error(f"Error estimating OpenAI image tokens: {str(e)}")
-        return 0, (0, 0)
-        
+        return 1000, (0, 0)  # Return conservative fallback
+    
 def estimate_pixtral_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[int, int]]:
     try:
         image = Image.open(io.BytesIO(image_data_binary))
@@ -5268,7 +5279,7 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
             # First check if this is JSON string containing image data
             if input_data.startswith('{"image":'):
                 input_data_dict = json.loads(input_data)
-                image_data = base64.b64decode(input_data_dict["image"])
+                image_data = decode_base64_with_padding(input_data_dict["image"])
                 processed_image_data, _ = await validate_and_preprocess_image(image_data, "openai")
                 image_tokens, _ = estimate_openai_image_tokens(processed_image_data)
                 question = input_data_dict.get("question", "")
@@ -6984,29 +6995,32 @@ async def submit_inference_request_to_claude_api(inference_request):
                 "content": [{"type": "text", "text": content}]
             }]
         elif inference_request.model_inference_type_string == "ask_question_about_an_image":
-            input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
-            image_data = base64.b64decode(input_data_dict["image"])
-            question = input_data_dict["question"]
-            processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
-            if not processed_image_data:
-                raise ValueError("Failed to process image data")            
-            messages = [{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": mime_type,
-                            "data": base64.b64encode(processed_image_data).decode()
+            try:
+                input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
+                image_data = decode_base64_with_padding(input_data_dict["image"])
+                question = input_data_dict["question"]
+                # Process the image
+                processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
+                messages = [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime_type,
+                                "data": base64.b64encode(processed_image_data).decode()
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": question
                         }
-                    },
-                    {
-                        "type": "text",
-                        "text": question
-                    }
-                ]
-            }]
+                    ]
+                }]
+            except Exception as e:
+                logger.error(f"Error processing image data: {str(e)}")
+                raise
         elif inference_request.model_inference_type_string == "embedding":
             input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             messages = [{
@@ -7062,7 +7076,7 @@ async def submit_inference_request_to_claude_api(inference_request):
         logger.error(f"Error in Claude API request: {str(e)}")
         traceback.print_exc()
         return None, None
-    
+
 # Swiss Army Llama related functions:
 
 def determine_swiss_army_llama_port():
