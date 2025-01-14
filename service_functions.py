@@ -6264,14 +6264,27 @@ def build_openai_request_params(model_parameters: dict, model_name: str) -> dict
         "model": model_name.replace("openai-", ""),
         "n": 1,
     }
+    # Handle 'o1' and 'o1-mini' differently from other models
     tokens = model_parameters.get("number_of_tokens_to_generate")
     if tokens is not None and str(tokens).strip():
         try:
-            request_params["max_tokens"] = int(tokens)
+            # Use max_completion_tokens for o1 models, max_tokens for others
+            if "o1" in model_name:
+                request_params["max_completion_tokens"] = int(tokens)
+            else:
+                request_params["max_tokens"] = int(tokens)
         except (ValueError, TypeError):
-            request_params["max_tokens"] = 1000
+            # Use max_completion_tokens for o1 models, max_tokens for others
+            if "o1" in model_name:
+                request_params["max_completion_tokens"] = 1000
+            else:
+                request_params["max_tokens"] = 1000
     else:
-        request_params["max_tokens"] = 1000
+        # Use max_completion_tokens for o1 models, max_tokens for others
+        if "o1" in model_name:
+            request_params["max_completion_tokens"] = 1000
+        else:
+            request_params["max_tokens"] = 1000
     temp = model_parameters.get("temperature", 0.7)
     try:
         request_params["temperature"] = float(temp) if temp is not None else 0.7
