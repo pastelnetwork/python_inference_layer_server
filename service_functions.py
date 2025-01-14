@@ -4666,26 +4666,21 @@ def get_tokenizer(model_name: str):
 async def count_tokens_claude(model_name: str, input_data: Any) -> int:
     client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
     try:
-        # If input_data is a JSON string containing 'image', decode and open it similarly to Mistral
         if isinstance(input_data, str) and input_data.startswith('{"image":'):
             try:
                 parsed = json.loads(input_data)
-                image_data = base64.b64decode(parsed["image"])
-                # Mistral-like inline image validation
-                image_buffer = io.BytesIO(image_data)
-                image_buffer.seek(0)
-                img = Image.open(image_buffer)
-                if len(image_data) > 5 * 1024 * 1024:
-                    raise ValueError("Image exceeds Claude's 5MB size limit")
-                if img.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
-                    raise ValueError("Unsupported image format for Claude")
-                # Create messages
+                raw_image_data = parsed["image"]
+                padding_needed = len(raw_image_data) % 4
+                if padding_needed:
+                    raw_image_data += '=' * (4 - padding_needed)
+                image_data = base64.b64decode(raw_image_data)
+                image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
                 content = [
                     {
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": f"image/{img.format.lower()}",
+                            "media_type": mime_type,
                             "data": base64.b64encode(image_data).decode()
                         }
                     }
@@ -6979,7 +6974,6 @@ async def submit_inference_request_to_claude_api(inference_request):
         raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
         await validate_claude_cache_control(inference_request.requested_model_canonical_string, model_parameters.get("cache_control"))
-
         if inference_request.model_inference_type_string == "text_completion":
             content = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             messages = [{
@@ -6987,39 +6981,43 @@ async def submit_inference_request_to_claude_api(inference_request):
                 "content": [{"type": "text", "text": content}]
             }]
         elif inference_request.model_inference_type_string == "ask_question_about_an_image":
-            input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
-            image_data_binary = base64.b64decode(input_data_dict["image"])
-            question = input_data_dict["question"]
-            # Inline approach similar to Mistral
             try:
-                image_buffer = io.BytesIO(image_data_binary)
-                image_buffer.seek(0)
-                image = Image.open(image_buffer)
-                if len(image_data_binary) > 5 * 1024 * 1024:
-                    raise ValueError("Image exceeds Claude's 5MB size limit")
-                if image.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
-                    raise ValueError("Unsupported image format for Claude")
-            except Exception as e:
-                logger.error(f"Image validation failed: {str(e)}")
-                return None, None
-            mime_type = f"image/{image.format.lower()}"
-            messages = [{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": mime_type,
-                            "data": base64.b64encode(image_data_binary).decode()
+                # Parse input data
+                input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
+                raw_image_data = input_data_dict["image"]
+                question = input_data_dict["question"]
+                # Handle base64 padding
+                padding_needed = len(raw_image_data) % 4
+                if padding_needed:
+                    raw_image_data += '=' * (4 - padding_needed)
+                try:
+                    image_data_binary = base64.b64decode(raw_image_data)
+                except Exception as decode_err:
+                    logger.error(f"Base64 decode error: {decode_err}")
+                    return None, None
+                # Validate and preprocess image
+                processed_image_data, mime_type = await validate_and_preprocess_image(image_data_binary, "claude")
+                messages = [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": mime_type,
+                                "data": base64.b64encode(processed_image_data).decode()
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": question
                         }
-                    },
-                    {
-                        "type": "text",
-                        "text": question
-                    }
-                ]
-            }]
+                    ]
+                }]
+            except Exception as e:
+                logger.error(f"Image processing error: {str(e)}")
+                traceback.print_exc()
+                return None, None
         elif inference_request.model_inference_type_string == "embedding":
             input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             messages = [{
@@ -7027,27 +7025,38 @@ async def submit_inference_request_to_claude_api(inference_request):
                 "content": [{"type": "text", "text": input_text}]
             }]
         elif inference_request.model_inference_type_string == "analyze_document":
-            document_data = base64.b64decode(inference_request.model_input_data_json_b64).decode()
-            await validate_claude_pdf_input(base64.b64decode(document_data))
-            content = [{
-                "type": "document",
-                "source": {
-                    "type": "base64",
-                    "media_type": "application/pdf",
-                    "data": document_data
-                }
-            }]
-            if model_parameters.get("query"):
-                content.append({
-                    "type": "text",
-                    "text": model_parameters["query"]
-                })
-            messages = [{
-                "role": "user",
-                "content": content
-            }]
+            try:
+                document_data = base64.b64decode(inference_request.model_input_data_json_b64).decode()
+                # Handle potential base64 padding for document data
+                padding_needed = len(document_data) % 4
+                if padding_needed:
+                    document_data += '=' * (4 - padding_needed)
+                decoded_document = base64.b64decode(document_data)
+                await validate_claude_pdf_input(decoded_document)
+                content = [{
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": document_data
+                    }
+                }]
+                if model_parameters.get("query"):
+                    content.append({
+                        "type": "text",
+                        "text": model_parameters["query"]
+                    })
+                messages = [{
+                    "role": "user",
+                    "content": content
+                }]
+            except Exception as e:
+                logger.error(f"Document processing error: {str(e)}")
+                traceback.print_exc()
+                return None, None
         else:
             raise ValueError(f"Unsupported inference type: {inference_request.model_inference_type_string}")
+        # Handle cache control
         if cache_control := model_parameters.get("cache_control"):
             for msg in messages:
                 if isinstance(msg["content"], list):
@@ -7059,8 +7068,10 @@ async def submit_inference_request_to_claude_api(inference_request):
                         "text": msg["content"],
                         "cache_control": cache_control
                     }
+        # Build request parameters and make API call
         request_params = build_claude_request_params(model_parameters, inference_request.requested_model_canonical_string, messages)
         response = await client.messages.create(**request_params)
+        # Handle different response types
         if inference_request.model_inference_type_string == "embedding":
             output_results = response.content[0].embedding
             output_results_file_type_strings = {"output_text": "embedding", "output_files": ["NA"]}
@@ -7075,7 +7086,7 @@ async def submit_inference_request_to_claude_api(inference_request):
         logger.error(f"Error in Claude API request: {str(e)}")
         traceback.print_exc()
         return None, None
-
+    
 # Swiss Army Llama related functions:
 
 def determine_swiss_army_llama_port():
