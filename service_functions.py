@@ -4666,22 +4666,20 @@ def get_tokenizer(model_name: str):
 async def count_tokens_claude(model_name: str, input_data: Any) -> int:
     client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
     try:
+        # If input_data is a JSON string containing 'image', decode and handle same as Mistral
         if isinstance(input_data, str) and input_data.startswith('{"image":'):
             try:
                 parsed = json.loads(input_data)
-                raw_image_data = parsed["image"]
-                padding_needed = len(raw_image_data) % 4
-                if padding_needed:
-                    raw_image_data += '=' * (4 - padding_needed)
-                image_data = base64.b64decode(raw_image_data)
-                image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
+                image_data_binary = base64.b64decode(parsed["image"])
+                # Use validate_and_preprocess_image just like in Mistral code
+                processed_image_data, mime_type = await validate_and_preprocess_image(image_data_binary, "claude")
                 content = [
                     {
                         "type": "image",
                         "source": {
                             "type": "base64",
                             "media_type": mime_type,
-                            "data": base64.b64encode(image_data).decode()
+                            "data": base64.b64encode(processed_image_data).decode()
                         }
                     }
                 ]
@@ -4689,87 +4687,32 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
                     content.append({"type": "text", "text": parsed["question"]})
                 messages = [{"role": "user", "content": content}]
             except Exception as e:
-                logger.error(f"Failed to parse/validate image: {e}")
-                # Fallback to treating input_data as plain text if something fails
+                logger.error(f"Failed to process image: {e}")
                 messages = [{
                     "role": "user",
                     "content": [{"type": "text", "text": input_data}]
                 }]
         elif isinstance(input_data, str):
-            # Just treat as plain text
             messages = [{
                 "role": "user",
                 "content": [{"type": "text", "text": input_data}]
             }]
-        elif isinstance(input_data, dict):
-            # Check if there's an image key; if so, do Mistral-like extraction
-            if input_data.get('image'):
-                try:
-                    image_data = base64.b64decode(input_data["image"])
-                    image_buffer = io.BytesIO(image_data)
-                    image_buffer.seek(0)
-                    img = Image.open(image_buffer)
-                    if len(image_data) > 5 * 1024 * 1024:
-                        raise ValueError("Image exceeds Claude's 5MB size limit")
-                    if img.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
-                        raise ValueError("Unsupported image format for Claude")
-                    content = [{
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": f"image/{img.format.lower()}",
-                            "data": base64.b64encode(image_data).decode()
-                        }
-                    }]
-                    if "question" in input_data:
-                        content.append({"type": "text", "text": input_data["question"]})
-                    messages = [{
-                        "role": "user",
-                        "content": content
-                    }]
-                except Exception as decode_err:
-                    logger.error(f"Image decode/validation error: {decode_err}")
-                    messages = [{
-                        "role": "user",
-                        "content": [{"type": "text", "text": str(input_data)}]
-                    }]
-            elif input_data.get('document'):
-                content = [{
-                    "type": "document",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "application/pdf",
-                        "data": input_data['document']
-                    }
-                }]
-                if "query" in input_data:
-                    content.append({"type": "text", "text": input_data["query"]})
-                messages = [{
-                    "role": "user",
-                    "content": content
-                }]
-            else:
-                messages = [{
-                    "role": "user",
-                    "content": [{"type": "text", "text": str(input_data)}]
-                }]
         else:
             messages = [{
                 "role": "user",
                 "content": [{"type": "text", "text": str(input_data)}]
             }]
-        # Now call the Claude token-counting endpoint
+        # Call Claude's token counting endpoint
         response = await client.messages.count_tokens(
             model=get_claude3_model_name(model_name),
             messages=messages
         )
         input_tokens = response.input_tokens
         logger.info(f"Token count from Claude API: {input_tokens}")
-        # Add debug logging for image dimensions if dealing with an image
+        # Log image dimensions for token estimation if dealing with an image
         if (
             isinstance(input_data, dict) and input_data.get('image')
         ) or (isinstance(input_data, str) and input_data.startswith('{"image":')):
-            # Parse out the image again to log dimensions
             try:
                 if isinstance(input_data, str):
                     input_data = json.loads(input_data)
@@ -4781,6 +4724,7 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
             except Exception as err:
                 logger.warning(f"Could not log image dimensions: {err}")
         return input_tokens
+
     except Exception as e:
         logger.error(f"Claude token counting API failed: {str(e)}")
         # Fallback if there's an image
@@ -4804,8 +4748,7 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
             except Exception as img_err:
                 logger.error(f"Image fallback estimation failed: {str(img_err)}")
                 return 1500
-        # Otherwise plain fallback
-        return 1500
+        return super_approximate_token_count(input_data)
 
 def super_approximate_token_count(input_data: Any) -> int:
     """
@@ -6982,20 +6925,9 @@ async def submit_inference_request_to_claude_api(inference_request):
             }]
         elif inference_request.model_inference_type_string == "ask_question_about_an_image":
             try:
-                # Parse input data
                 input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
-                raw_image_data = input_data_dict["image"]
+                image_data_binary = base64.b64decode(input_data_dict["image"])
                 question = input_data_dict["question"]
-                # Handle base64 padding
-                padding_needed = len(raw_image_data) % 4
-                if padding_needed:
-                    raw_image_data += '=' * (4 - padding_needed)
-                try:
-                    image_data_binary = base64.b64decode(raw_image_data)
-                except Exception as decode_err:
-                    logger.error(f"Base64 decode error: {decode_err}")
-                    return None, None
-                # Validate and preprocess image
                 processed_image_data, mime_type = await validate_and_preprocess_image(image_data_binary, "claude")
                 messages = [{
                     "role": "user",
@@ -7015,7 +6947,7 @@ async def submit_inference_request_to_claude_api(inference_request):
                     ]
                 }]
             except Exception as e:
-                logger.error(f"Image processing error: {str(e)}")
+                logger.error(f"Image processing failed: {str(e)}")
                 traceback.print_exc()
                 return None, None
         elif inference_request.model_inference_type_string == "embedding":
