@@ -1,6 +1,7 @@
 import warnings
 from cryptography.utils import CryptographyDeprecationWarning
 from logger_config import setup_logger
+from endpoint_functions import router
 import asyncio
 import os
 import random
@@ -30,7 +31,6 @@ from service_functions import (
     generate_supernode_inference_ip_blacklist,
     kill_open_ssh_tunnels
 )
-import sqlite3
 import shutil
 
 warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
@@ -42,22 +42,6 @@ SWISS_ARMY_LLAMA_SECURITY_TOKEN = config.get("SWISS_ARMY_LLAMA_SECURITY_TOKEN", 
 os.environ['TZ'] = 'UTC' # Set timezone to UTC for the current session
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 logger = setup_logger()
-
-# Safely import endpoint_functions.router to handle malformed DB:
-try:
-    from endpoint_functions import router
-except sqlite3.DatabaseError as e:
-    # Check if it's the "database disk image is malformed" error
-    if 'database disk image is malformed' in str(e).lower():
-        logger.error("Detected 'database disk image is malformed'. Removing local_credit_pack_cache folder...")
-        # Remove the corrupted cache directory
-        local_cache_dir = os.path.join(os.path.dirname(__file__), "local_credit_pack_cache")
-        shutil.rmtree(local_cache_dir, ignore_errors=True)
-        # Retry import after removing cache
-        from endpoint_functions import router
-    else:
-        # If it's some other SQLite error, just raise it
-        raise
 
 app = fastapi.FastAPI(
     title="Pastel-Supernode-Inference-Layer",
@@ -117,19 +101,29 @@ def decrypt_sensitive_fields():
 async def startup():
     global encryption_key  # Declare encryption_key as global
     try:
+        # Define the path to the local_credit_pack_cache directory
+        local_cache_dir = os.path.join(os.path.dirname(__file__), "local_credit_pack_cache")
+        # Delete the local_credit_pack_cache directory if it exists
+        if os.path.exists(local_cache_dir):
+            shutil.rmtree(local_cache_dir, ignore_errors=True)
+            logger.info(f"Deleted local_credit_pack_cache directory: {local_cache_dir}")
+        else:
+            logger.info(f"No local_credit_pack_cache directory found at: {local_cache_dir}")
+        # Proceed with other startup tasks
         db_init_complete = await initialize_db()
         logger.info(f"Database initialization complete: {db_init_complete}")
         encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
-        decrypt_sensitive_fields() # Now decrypt sensitive fields        
+        decrypt_sensitive_fields()  # Now decrypt sensitive fields        
         asyncio.create_task(monitor_new_messages())  # Create a background task
         asyncio.create_task(fetch_all_mnid_tickets_details())
         asyncio.create_task(list_generic_tickets_in_blockchain_and_parse_and_validate_and_store_them())
-        asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN)) # Check and setup Swiss Army Llama asynchronously
+        asyncio.create_task(asyncio.to_thread(check_and_setup_swiss_army_llama, SWISS_ARMY_LLAMA_SECURITY_TOKEN))  # Check and setup Swiss Army Llama asynchronously
         await generate_supernode_inference_ip_blacklist()  # Compile IP blacklist text file
         asyncio.create_task(schedule_generate_supernode_inference_ip_blacklist())  # Schedule the task
         asyncio.create_task(schedule_micro_benchmark_periodically())  # Schedule the task
     except Exception as e:
         logger.error(f"Error during startup: {e}")
+        logger.error(traceback.format_exc())
         
 @app.on_event("startup")
 async def startup_event():
