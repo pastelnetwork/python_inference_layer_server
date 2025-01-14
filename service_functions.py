@@ -6412,19 +6412,8 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
         try:
             input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
             image_data_binary = safe_base64_decode(input_data["image"])
+            processed_image_data, mime_type = await validate_and_preprocess_image(image_data_binary, "openai")
             question = input_data["question"]
-            try:
-                image_buffer = io.BytesIO(image_data_binary)
-                image_buffer.seek(0)
-                image = Image.open(image_buffer)
-                if len(image_data_binary) > 20 * 1024 * 1024:
-                    raise ValueError("Image exceeds 20MB size limit for OpenAI")
-                if image.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
-                    raise ValueError("Unsupported image format for OpenAI")
-            except Exception as e:
-                logger.error(f"Image validation failed: {str(e)}")
-                return None, None
-            mime_type = f"image/{image.format.lower()}"
             num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
             output_results = []
             total_input_tokens = 0
@@ -6438,7 +6427,7 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
                                 {"type": "text", "text": question},
                                 {
                                     "type": "image_url",
-                                    "image_url": f"data:{mime_type};base64,{base64.b64encode(image_data_binary).decode('utf-8')}"
+                                    "image_url": f"data:{mime_type};base64,{base64.b64encode(processed_image_data).decode('utf-8')}"
                                 }
                             ]
                         }
