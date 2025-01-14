@@ -1547,18 +1547,6 @@
           "description": "Seed for deterministic sampling"
         },
         {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "minimum": 0,
-          "maximum": 2,
-          "inference_types_parameter_applies_to": [
-            "text_completion",
-            "ask_question_about_an_image"
-          ],
-          "description": "What sampling temperature to use, between 0 and 2. Higher values make output more random, lower values more focused"
-        },
-        {
           "name": "number_of_tokens_to_generate",
           "type": "int",
           "default": 1000,
@@ -1577,24 +1565,6 @@
             "ask_question_about_an_image"
           ],
           "description": "Optional user-defined function code that can be validated, then used as a custom tool."
-        },
-        {
-          "name": "presence_penalty",
-          "type": "float",
-          "default": 0,
-          "minimum": -2.0,
-          "maximum": 2.0,
-          "inference_types_parameter_applies_to": ["text_completion"],
-          "description": "Number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far"
-        },
-        {
-          "name": "frequency_penalty",
-          "type": "float",
-          "default": 0,
-          "minimum": -2.0,
-          "maximum": 2.0,
-          "inference_types_parameter_applies_to": ["text_completion"],
-          "description": "Number between -2.0 and 2.0. Positive values penalize new tokens based on their existing frequency"
         }
       ],
       "credit_costs": {
@@ -1746,15 +1716,6 @@
           "enum": ["low", "medium", "high"],
           "inference_types_parameter_applies_to": ["text_completion"],
           "description": "Controls effort spent on reasoning. Lower values are faster but less thorough"
-        },
-        {
-          "name": "temperature",
-          "type": "float",
-          "default": 0.7,
-          "minimum": 0,
-          "maximum": 2,
-          "inference_types_parameter_applies_to": ["text_completion"],
-          "description": "What sampling temperature to use, between 0 and 2. Higher values make output more random, lower values more focused"
         },
         {
           "name": "number_of_tokens_to_generate",

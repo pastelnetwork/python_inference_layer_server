@@ -6264,44 +6264,51 @@ def build_openai_request_params(model_parameters: dict, model_name: str) -> dict
         "model": model_name.replace("openai-", ""),
         "n": 1,
     }
-    # Handle 'o1' and 'o1-mini' differently from other models
+    # Handle tokens/completion tokens
     tokens = model_parameters.get("number_of_tokens_to_generate")
     if tokens is not None and str(tokens).strip():
         try:
             # Use max_completion_tokens for o1 models, max_tokens for others
-            if "o1" in model_name:
+            if "o1" in model_name and "gpt" not in model_name:  # Exclude gpt4o
                 request_params["max_completion_tokens"] = int(tokens)
             else:
                 request_params["max_tokens"] = int(tokens)
         except (ValueError, TypeError):
-            # Use max_completion_tokens for o1 models, max_tokens for others
-            if "o1" in model_name:
+            if "o1" in model_name and "gpt" not in model_name:  # Exclude gpt4o
                 request_params["max_completion_tokens"] = 1000
             else:
                 request_params["max_tokens"] = 1000
     else:
-        # Use max_completion_tokens for o1 models, max_tokens for others
-        if "o1" in model_name:
+        if "o1" in model_name and "gpt" not in model_name:  # Exclude gpt4o
             request_params["max_completion_tokens"] = 1000
         else:
             request_params["max_tokens"] = 1000
-    temp = model_parameters.get("temperature", 0.7)
-    try:
-        request_params["temperature"] = float(temp) if temp is not None else 0.7
-    except (ValueError, TypeError):
-        request_params["temperature"] = 0.7
-    optional_float_params = ["top_p", "frequency_penalty", "presence_penalty"]
-    for param in optional_float_params:
-        if model_parameters.get(param) is not None:
-            try:
-                value = float(model_parameters[param])
-                if value != 0.0:
-                    request_params[param] = value
-            except (ValueError, TypeError):
-                pass
-    if logit_bias := model_parameters.get("logit_bias"):
-        if isinstance(logit_bias, dict) and logit_bias:
-            request_params["logit_bias"] = logit_bias
+    # Handle temperature - o1 models don't support temperature
+    if not ("o1" in model_name and "gpt" not in model_name):  # Only add for non-o1 models
+        temp = model_parameters.get("temperature", 0.7)
+        try:
+            request_params["temperature"] = float(temp) if temp is not None else 0.7
+        except (ValueError, TypeError):
+            request_params["temperature"] = 0.7
+    # Only add optional params for non-o1 models
+    if not ("o1" in model_name and "gpt" not in model_name):
+        optional_float_params = ["top_p", "frequency_penalty", "presence_penalty"]
+        for param in optional_float_params:
+            if model_parameters.get(param) is not None:
+                try:
+                    value = float(model_parameters[param])
+                    if value != 0.0:
+                        request_params[param] = value
+                except (ValueError, TypeError):
+                    pass
+        if model_parameters.get("logprobs"):
+            request_params["logprobs"] = True
+            if top_logprobs := model_parameters.get("top_logprobs"):
+                request_params["top_logprobs"] = int(top_logprobs)
+        if logit_bias := model_parameters.get("logit_bias"):
+            if isinstance(logit_bias, dict) and logit_bias:
+                request_params["logit_bias"] = logit_bias
+    # These parameters are supported by all models
     if stop := model_parameters.get("stop"):
         if isinstance(stop, (list, tuple)) and stop:
             request_params["stop"] = stop
@@ -6310,15 +6317,12 @@ def build_openai_request_params(model_parameters: dict, model_name: str) -> dict
             request_params["tools"] = tools
             if tool_choice := model_parameters.get("tool_choice"):
                 request_params["tool_choice"] = tool_choice
-            if model_parameters.get("parallel_tool_calls") is not None:
+            # o1 models don't support parallel tool calls yet
+            if not ("o1" in model_name and "gpt" not in model_name) and model_parameters.get("parallel_tool_calls") is not None:
                 request_params["parallel_tool_calls"] = bool(model_parameters["parallel_tool_calls"])
     if response_format := model_parameters.get("response_format"):
         if isinstance(response_format, dict) and response_format.get("type") in ["text", "json_object", "json_schema"]:
             request_params["response_format"] = response_format
-    if model_parameters.get("logprobs"):
-        request_params["logprobs"] = True
-        if top_logprobs := model_parameters.get("top_logprobs"):
-            request_params["top_logprobs"] = int(top_logprobs)
     return request_params
 
 async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Optional[Any], Optional[Dict]]:
