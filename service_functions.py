@@ -22,6 +22,7 @@ import tempfile
 import warnings
 import pickle
 import shutil
+import sqlite3
 import pytz
 import PyPDF2
 from typing import Any
@@ -282,7 +283,32 @@ def async_disk_cached(cache, ttl=None):
         async def wrapper(*args, **kwargs):
             # Create a unique cache key based on the function name and arguments
             cache_key = f"{func.__name__}:{str(args)}:{str(kwargs)}"
-            cached_result = cache.get(cache_key, default=None, expire_time=True)
+            try:
+                cached_result = cache.get(cache_key, default=None, expire_time=True)
+            except sqlite3.DatabaseError as e:
+                if 'database disk image is malformed' in str(e).lower():
+                    logger.error("Cache database is malformed. Deleting cache directory...")
+                    try:
+                        # Remove the corrupted cache directory
+                        cache_dir = cache.directory if hasattr(cache, 'directory') else 'path_to_default_cache_directory'
+                        shutil.rmtree(cache_dir, ignore_errors=True)
+                        logger.info(f"Deleted cache directory: {cache_dir}")
+                        # Recreate the cache directory
+                        os.makedirs(cache_dir, exist_ok=True)
+                        logger.info(f"Recreated cache directory: {cache_dir}")
+                    except Exception as delete_error:
+                        logger.error(f"Failed to delete cache directory {cache_dir}: {delete_error}")
+                        raise
+                    # Retry retrieving from cache after clearing
+                    try:
+                        cached_result = cache.get(cache_key, default=None, expire_time=True)
+                    except Exception as retry_error:
+                        logger.error(f"Failed to retrieve cache after clearing: {retry_error}")
+                        cached_result = None
+                else:
+                    # If it's a different SQLite error, re-raise it
+                    logger.error(f"Unhandled SQLite DatabaseError: {e}")
+                    raise
             # Check if cached_result is a valid, non-None value
             if cached_result is not None and not (isinstance(cached_result, tuple) and all(v is None for v in cached_result)):
                 if isinstance(cached_result, tuple) and len(cached_result) == 2:
@@ -299,7 +325,26 @@ def async_disk_cached(cache, ttl=None):
                 logger.error(f"Exception details: {traceback.format_exc()}")
                 raise
             if value is not None:
-                cache.set(cache_key, value, expire=ttl)
+                try:
+                    cache.set(cache_key, value, expire=ttl)
+                except sqlite3.DatabaseError as e:
+                    if 'database disk image is malformed' in str(e).lower():
+                        logger.error("Cache database is malformed during set operation. Deleting cache directory...")
+                        try:
+                            cache_dir = cache.directory if hasattr(cache, 'directory') else 'path_to_default_cache_directory'
+                            shutil.rmtree(cache_dir, ignore_errors=True)
+                            logger.info(f"Deleted cache directory: {cache_dir}")
+                            os.makedirs(cache_dir, exist_ok=True)
+                            logger.info(f"Recreated cache directory: {cache_dir}")
+                        except Exception as delete_error:
+                            logger.error(f"Failed to delete cache directory {cache_dir}: {delete_error}")
+                            raise
+                        # Optionally, you can retry setting the cache here
+                    else:
+                        logger.error(f"Unhandled SQLite DatabaseError during set: {e}")
+                        raise
+                except Exception as set_error:
+                    logger.error(f"Failed to set cache for {func.__name__}: {set_error}")
             else:
                 logger.warning(f"Not caching None value for {func.__name__}")
             return value
