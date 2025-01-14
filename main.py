@@ -31,7 +31,6 @@ from service_functions import (
     generate_supernode_inference_ip_blacklist,
     kill_open_ssh_tunnels
 )
-import shutil
 
 warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 config = DecoupleConfig(RepositoryEnv('.env'))
@@ -101,15 +100,6 @@ def decrypt_sensitive_fields():
 async def startup():
     global encryption_key  # Declare encryption_key as global
     try:
-        # Define the path to the local_credit_pack_cache directory
-        local_cache_dir = os.path.join(os.path.dirname(__file__), "local_credit_pack_cache")
-        # Delete the local_credit_pack_cache directory if it exists
-        if os.path.exists(local_cache_dir):
-            shutil.rmtree(local_cache_dir, ignore_errors=True)
-            logger.info(f"Deleted local_credit_pack_cache directory: {local_cache_dir}")
-        else:
-            logger.info(f"No local_credit_pack_cache directory found at: {local_cache_dir}")
-        # Proceed with other startup tasks
         db_init_complete = await initialize_db()
         logger.info(f"Database initialization complete: {db_init_complete}")
         encryption_key = generate_or_load_encryption_key_sync()  # Generate or load the encryption key synchronously    
