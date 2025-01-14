@@ -21,6 +21,7 @@ import html
 import tempfile
 import warnings
 import pickle
+import shutil
 import pytz
 import PyPDF2
 from typing import Any
@@ -211,7 +212,20 @@ CACHE_DIR = './local_credit_pack_cache'
 CREDIT_BALANCE_CACHE_INVALIDATION_PERIOD_IN_SECONDS = 5 * 60  # 5 minutes
 
 # Initialize the cache
-credit_pack_cache = Cache(CACHE_DIR)
+try:
+    credit_pack_cache = Cache(CACHE_DIR)
+except Exception as e:
+    # Check if it's the "database disk image is malformed" error
+    if 'database disk image is malformed' in str(e).lower():
+        logger.error("Detected 'database disk image is malformed'. Removing local_credit_pack_cache folder...")
+        # Remove the corrupted cache directory
+        local_cache_dir = os.path.join(os.path.dirname(__file__), "local_credit_pack_cache")
+        shutil.rmtree(local_cache_dir, ignore_errors=True)
+        # Retry after removing cache
+        credit_pack_cache = Cache(CACHE_DIR)
+    else:
+        # If it's some other error, just raise it
+        raise
 
 use_purge_all_caches = 0
 if use_purge_all_caches:

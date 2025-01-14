@@ -30,7 +30,6 @@ from service_functions import (
     generate_supernode_inference_ip_blacklist,
     kill_open_ssh_tunnels
 )
-
 import sqlite3
 import shutil
 
