@@ -4663,15 +4663,28 @@ def get_tokenizer(model_name: str):
     best_match = process.extractOne(model_name.lower(), model_to_tokenizer_mapping.keys())
     return model_to_tokenizer_mapping.get(best_match[0], get_fallback_tokenizer())  # Default to fallback tokenizer if no match found
 
+def safe_base64_decode(encoded_str):
+    if not isinstance(encoded_str, str):
+        raise TypeError("Input must be a string")
+    data_uri_pattern = re.compile(r'^data:image\/[^;]+;base64,', re.IGNORECASE)
+    encoded_str = data_uri_pattern.sub('', encoded_str)
+    encoded_str = ''.join(encoded_str.split())
+    padding_needed = len(encoded_str) % 4
+    if padding_needed:
+        encoded_str += '=' * (4 - padding_needed)
+    try:
+        return base64.b64decode(encoded_str, validate=False)
+    except (base64.binascii.Error, ValueError) as e:
+        logger.error(f"Base64 decoding failed: {e}")
+        return None
+    
 async def count_tokens_claude(model_name: str, input_data: Any) -> int:
     client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
     try:
-        # If input_data is a JSON string containing 'image', decode and handle same as Mistral
         if isinstance(input_data, str) and input_data.startswith('{"image":'):
             try:
                 parsed = json.loads(input_data)
-                image_data_binary = base64.b64decode(parsed["image"])
-                # Use validate_and_preprocess_image just like in Mistral code
+                image_data_binary = safe_base64_decode(parsed["image"])
                 processed_image_data, mime_type = await validate_and_preprocess_image(image_data_binary, "claude")
                 content = [
                     {
@@ -4709,22 +4722,7 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
         )
         input_tokens = response.input_tokens
         logger.info(f"Token count from Claude API: {input_tokens}")
-        # Log image dimensions for token estimation if dealing with an image
-        if (
-            isinstance(input_data, dict) and input_data.get('image')
-        ) or (isinstance(input_data, str) and input_data.startswith('{"image":')):
-            try:
-                if isinstance(input_data, str):
-                    input_data = json.loads(input_data)
-                raw_img = base64.b64decode(input_data["image"])
-                with Image.open(io.BytesIO(raw_img)) as i2:
-                    w, h = i2.size
-                    expected_tokens = (w * h) / 750
-                    logger.info(f"Expected image tokens based on dimensions {w}x{h}: {expected_tokens:.0f}")
-            except Exception as err:
-                logger.warning(f"Could not log image dimensions: {err}")
         return input_tokens
-
     except Exception as e:
         logger.error(f"Claude token counting API failed: {str(e)}")
         # Fallback if there's an image
@@ -4735,7 +4733,7 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
             try:
                 if isinstance(input_data, str):
                     input_data = json.loads(input_data)
-                raw_image = base64.b64decode(input_data["image"])
+                raw_image = safe_base64_decode(input_data["image"])
                 processed_image_data, _ = await validate_and_preprocess_image(raw_image, "claude")
                 with Image.open(io.BytesIO(processed_image_data)) as image:
                     width, height = image.size
@@ -5261,7 +5259,7 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
             if input_data.startswith('{"image":'):
                 try:
                     parsed = json.loads(input_data)
-                    raw_image = base64.b64decode(parsed["image"])
+                    raw_image = safe_base64_decode(parsed["image"])
                     processed_image_data, _ = await validate_and_preprocess_image(raw_image, "openai")
                     image_tokens, _ = estimate_openai_image_tokens(processed_image_data)
                     question = parsed.get("question", "")
@@ -5320,7 +5318,7 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
                 ):
                     if isinstance(input_data, str):
                         input_data = json.loads(input_data)
-                    image_data_binary = base64.b64decode(input_data["image"])
+                    image_data_binary = safe_base64_decode(input_data["image"])
                     image = Image.open(io.BytesIO(image_data_binary))
                     width, height = image.size
                     # Calculate image tokens using Claude's formula
@@ -5335,7 +5333,7 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
                 ):
                     if isinstance(input_data, str):
                         input_data = json.loads(input_data)
-                    pdf_data = base64.b64decode(input_data["document"])
+                    pdf_data = safe_base64_decode(input_data["document"])
                     with io.BytesIO(pdf_data) as pdf_file:
                         pdf_reader = PyPDF2.PdfReader(pdf_file)
                         num_pages = len(pdf_reader.pages)
@@ -6368,7 +6366,7 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
     elif inference_type == "ask_question_about_an_image":
         try:
             input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
-            image_data_binary = base64.b64decode(input_data["image"])
+            image_data_binary = safe_base64_decode(input_data["image"])
             question = input_data["question"]
             try:
                 image_buffer = io.BytesIO(image_data_binary)
@@ -6720,35 +6718,9 @@ async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Op
             # Parse and validate input
             model_name = inference_request.requested_model_canonical_string            
             input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
-            image_data = base64.b64decode(input_data["image"])
+            image_data_binary = safe_base64_decode(input_data["image"])
             question = input_data["question"]
-            try:
-                image_buffer = io.BytesIO(image_data)
-                image_buffer.seek(0)  # Rewind the buffer before reading
-                image = Image.open(image_buffer)
-                if len(image_data) > 10 * 1024 * 1024:
-                    raise ValueError("Image exceeds 10MB size limit")
-                if image.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
-                    raise ValueError("Unsupported image format")
-                # Resize if needed
-                width, height = image.size
-                max_dim = 1024
-                if width > max_dim or height > max_dim:
-                    aspect_ratio = width / height
-                    if width > height:
-                        new_width = max_dim
-                        new_height = int(max_dim / aspect_ratio)
-                    else:
-                        new_height = max_dim
-                        new_width = int(max_dim * aspect_ratio)
-                    image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                    buffer = io.BytesIO()
-                    image.save(buffer, format=image.format)
-                    image_data = buffer.getvalue()
-            except Exception as e:
-                logger.error(f"Image validation failed: {str(e)}")
-                return None, None
-            mime_type = f"image/{image.format.lower()}"
+            processed_image_data, mime_type = await validate_and_preprocess_image(image_data_binary, "mistral")
             messages = [
                 {
                     "role": "user",
@@ -6759,7 +6731,7 @@ async def submit_inference_request_to_mistral_api(inference_request) -> Tuple[Op
                         },
                         {
                             "type": "image_url",
-                            "image_url": f"data:{mime_type};base64,{base64.b64encode(image_data).decode('utf-8')}"
+                            "image_url": f"data:{mime_type};base64,{base64.b64encode(processed_image_data).decode('utf-8')}"
                         }
                     ]
                 }
@@ -6926,7 +6898,7 @@ async def submit_inference_request_to_claude_api(inference_request):
         elif inference_request.model_inference_type_string == "ask_question_about_an_image":
             try:
                 input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
-                image_data_binary = base64.b64decode(input_data_dict["image"])
+                image_data_binary = safe_base64_decode(input_data_dict["image"])
                 question = input_data_dict["question"]
                 processed_image_data, mime_type = await validate_and_preprocess_image(image_data_binary, "claude")
                 messages = [{
@@ -7072,8 +7044,10 @@ async def handle_swiss_army_llama_text_completion(client, inference_request, mod
 
 async def handle_swiss_army_llama_image_question(client, inference_request, model_parameters, port, is_fallback):
     input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
-    image_data_binary = base64.b64decode(input_data["image"])
-    question = input_data["question"]
+    image_data_binary = safe_base64_decode(input_data["image"])
+    processed_image_data, mime_type = await validate_and_preprocess_image(image_data_binary, "claude")
+    if "question" in input_data:
+        question = input_data["question"]
     payload = {
         "question": question,
         "llm_model_name": inference_request.requested_model_canonical_string.replace("swiss_army_llama-", ""),
@@ -7081,7 +7055,7 @@ async def handle_swiss_army_llama_image_question(client, inference_request, mode
         "number_of_tokens_to_generate": model_parameters.get("number_of_tokens_to_generate", 256),
         "number_of_completions_to_generate": model_parameters.get("number_of_completions_to_generate", 1)
     }
-    files = {"image": ("image.png", image_data_binary, "image/png")}
+    files = {"image": ("image.jpg", processed_image_data, "image/jpg")}
     try:
         response = await client.post(
             f"http://localhost:{port}/ask_question_about_image/",
