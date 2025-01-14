@@ -4612,12 +4612,6 @@ async def save_inference_api_usage_request(inference_request_model: db_code.Infe
 def get_fallback_tokenizer():
     return "gpt2"  # Default to "gpt2" tokenizer as a fallback
 
-def strip_data_url_prefix(base64_string: str) -> str:
-    """Remove data URL prefix if present and return raw base64 data."""
-    if "base64," in base64_string:
-        return base64_string.split("base64,")[1]
-    return base64_string
-
 def get_tokenizer(model_name: str):
     model_name = model_name.replace('swiss_army_llama-', '')
     model_to_tokenizer_mapping = {
@@ -4655,63 +4649,81 @@ def get_tokenizer(model_name: str):
     best_match = process.extractOne(model_name.lower(), model_to_tokenizer_mapping.keys())
     return model_to_tokenizer_mapping.get(best_match[0], get_fallback_tokenizer())  # Default to fallback tokenizer if no match found
 
-def decode_base64_with_padding(b64_string: str) -> bytes:
-    """Decode base64 string, adding padding if necessary."""
-    try:
-        # If already bytes, decode to string first
-        if isinstance(b64_string, bytes):
-            b64_string = b64_string.decode('utf-8')
-        # Add padding if needed
-        padding_needed = len(b64_string) % 4
-        if padding_needed:
-            b64_string += '=' * (4 - padding_needed)
-        return base64.b64decode(b64_string)
-    except Exception as e:
-        logger.error(f"Base64 decode failed: {str(e)}")
-        raise
-
 async def count_tokens_claude(model_name: str, input_data: Any) -> int:
-    """Use Claude's token counting API to accurately count tokens for any input type."""
     client = anthropic.AsyncAnthropic(api_key=CLAUDE3_API_KEY)
     try:
-        if isinstance(input_data, str):
+        # If input_data is a JSON string containing 'image', decode and open it similarly to Mistral
+        if isinstance(input_data, str) and input_data.startswith('{"image":'):
+            try:
+                parsed = json.loads(input_data)
+                image_data = base64.b64decode(parsed["image"])
+                # Mistral-like inline image validation
+                image_buffer = io.BytesIO(image_data)
+                image_buffer.seek(0)
+                img = Image.open(image_buffer)
+                if len(image_data) > 5 * 1024 * 1024:
+                    raise ValueError("Image exceeds Claude's 5MB size limit")
+                if img.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
+                    raise ValueError("Unsupported image format for Claude")
+                # Create messages
+                content = [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": f"image/{img.format.lower()}",
+                            "data": base64.b64encode(image_data).decode()
+                        }
+                    }
+                ]
+                if "question" in parsed:
+                    content.append({"type": "text", "text": parsed["question"]})
+                messages = [{"role": "user", "content": content}]
+            except Exception as e:
+                logger.error(f"Failed to parse/validate image: {e}")
+                # Fallback to treating input_data as plain text if something fails
+                messages = [{
+                    "role": "user",
+                    "content": [{"type": "text", "text": input_data}]
+                }]
+        elif isinstance(input_data, str):
+            # Just treat as plain text
             messages = [{
                 "role": "user",
                 "content": [{"type": "text", "text": input_data}]
             }]
         elif isinstance(input_data, dict):
+            # Check if there's an image key; if so, do Mistral-like extraction
             if input_data.get('image'):
                 try:
-                    # Get the raw image data using our padding-aware decoder
-                    image_data = decode_base64_with_padding(input_data["image"])
-                    # Process the image
-                    processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
-                    # Create the message content
+                    image_data = base64.b64decode(input_data["image"])
+                    image_buffer = io.BytesIO(image_data)
+                    image_buffer.seek(0)
+                    img = Image.open(image_buffer)
+                    if len(image_data) > 5 * 1024 * 1024:
+                        raise ValueError("Image exceeds Claude's 5MB size limit")
+                    if img.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
+                        raise ValueError("Unsupported image format for Claude")
                     content = [{
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": mime_type,
-                            "data": base64.b64encode(processed_image_data).decode()
+                            "media_type": f"image/{img.format.lower()}",
+                            "data": base64.b64encode(image_data).decode()
                         }
                     }]
                     if "question" in input_data:
-                        content.append({
-                            "type": "text",
-                            "text": input_data["question"]
-                        })
+                        content.append({"type": "text", "text": input_data["question"]})
                     messages = [{
                         "role": "user",
                         "content": content
                     }]
-                    # Add debug logging for image dimensions
-                    with Image.open(io.BytesIO(processed_image_data)) as img:
-                        width, height = img.size
-                        expected_tokens = (width * height) / 750
-                        logger.info(f"Expected image tokens based on dimensions {width}x{height}: {expected_tokens:.0f}")
-                except Exception as img_err:
-                    logger.error(f"Error processing image for token counting: {str(img_err)}")
-                    raise
+                except Exception as decode_err:
+                    logger.error(f"Image decode/validation error: {decode_err}")
+                    messages = [{
+                        "role": "user",
+                        "content": [{"type": "text", "text": str(input_data)}]
+                    }]
             elif input_data.get('document'):
                 content = [{
                     "type": "document",
@@ -4722,10 +4734,7 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
                     }
                 }]
                 if "query" in input_data:
-                    content.append({
-                        "type": "text",
-                        "text": input_data["query"]
-                    })
+                    content.append({"type": "text", "text": input_data["query"]})
                 messages = [{
                     "role": "user",
                     "content": content
@@ -4740,22 +4749,41 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
                 "role": "user",
                 "content": [{"type": "text", "text": str(input_data)}]
             }]
+        # Now call the Claude token-counting endpoint
         response = await client.messages.count_tokens(
             model=get_claude3_model_name(model_name),
             messages=messages
         )
         input_tokens = response.input_tokens
         logger.info(f"Token count from Claude API: {input_tokens}")
+        # Add debug logging for image dimensions if dealing with an image
+        if (
+            isinstance(input_data, dict) and input_data.get('image')
+        ) or (isinstance(input_data, str) and input_data.startswith('{"image":')):
+            # Parse out the image again to log dimensions
+            try:
+                if isinstance(input_data, str):
+                    input_data = json.loads(input_data)
+                raw_img = base64.b64decode(input_data["image"])
+                with Image.open(io.BytesIO(raw_img)) as i2:
+                    w, h = i2.size
+                    expected_tokens = (w * h) / 750
+                    logger.info(f"Expected image tokens based on dimensions {w}x{h}: {expected_tokens:.0f}")
+            except Exception as err:
+                logger.warning(f"Could not log image dimensions: {err}")
         return input_tokens
     except Exception as e:
         logger.error(f"Claude token counting API failed: {str(e)}")
-        if isinstance(input_data, dict) and input_data.get('image'):
+        # Fallback if there's an image
+        if (
+            (isinstance(input_data, dict) and input_data.get('image')) or 
+            (isinstance(input_data, str) and input_data.startswith('{"image":'))
+        ):
             try:
-                # Process image for fallback calculation
-                image_data = decode_base64_with_padding(input_data["image"])
-                processed_image_data, _ = await validate_and_preprocess_image(image_data, "claude")
-                
-                # Calculate based on processed image dimensions
+                if isinstance(input_data, str):
+                    input_data = json.loads(input_data)
+                raw_image = base64.b64decode(input_data["image"])
+                processed_image_data, _ = await validate_and_preprocess_image(raw_image, "claude")
                 with Image.open(io.BytesIO(processed_image_data)) as image:
                     width, height = image.size
                     image_tokens = (width * height) / 750
@@ -4767,8 +4795,9 @@ async def count_tokens_claude(model_name: str, input_data: Any) -> int:
             except Exception as img_err:
                 logger.error(f"Image fallback estimation failed: {str(img_err)}")
                 return 1500
+        # Otherwise plain fallback
         return 1500
-    
+
 def super_approximate_token_count(input_data: Any) -> int:
     """
     Very rough approximation used only as fallback if Anthropic token counting API fails
@@ -4840,7 +4869,6 @@ def count_tokens(model_name: str, input_data: str) -> int:
         return len(input_tokens)
     
 def estimate_openai_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[int, int]]:
-    """Calculate OpenAI token usage for an image based on their pricing model."""
     try:
         image = Image.open(io.BytesIO(image_data_binary))
         width, height = image.size
@@ -4870,8 +4898,8 @@ def estimate_openai_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[i
         return total_tokens, (resized_width, resized_height)
     except Exception as e:
         logger.error(f"Error estimating OpenAI image tokens: {str(e)}")
-        return 1000, (0, 0)  # Return conservative fallback
-    
+        return 0, (0, 0)
+        
 def estimate_pixtral_image_tokens(image_data_binary: bytes) -> Tuple[int, Tuple[int, int]]:
     try:
         image = Image.open(io.BytesIO(image_data_binary))
@@ -5275,22 +5303,25 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
             logger.error(f"Error calculating Mistral cost: {str(e)}")
             return float(MINIMUM_COST_IN_CREDITS)
     elif model_name.startswith("openai-"):
+        # Updated snippet for image extraction:
         try:
-            # First check if this is JSON string containing image data
+            # If input_data is a JSON string with "image", decode it Mistral-style
             if input_data.startswith('{"image":'):
-                input_data_dict = json.loads(input_data)
-                image_data = decode_base64_with_padding(input_data_dict["image"])
-                processed_image_data, _ = await validate_and_preprocess_image(image_data, "openai")
-                image_tokens, _ = estimate_openai_image_tokens(processed_image_data)
-                question = input_data_dict.get("question", "")
-                question_tokens = count_tokens(model_name, question)
-                input_tokens = image_tokens + question_tokens
+                try:
+                    parsed = json.loads(input_data)
+                    raw_image = base64.b64decode(parsed["image"])
+                    processed_image_data, _ = await validate_and_preprocess_image(raw_image, "openai")
+                    image_tokens, _ = estimate_openai_image_tokens(processed_image_data)
+                    question = parsed.get("question", "")
+                    question_tokens = count_tokens(model_name, question)
+                    input_tokens = image_tokens + question_tokens
+                except Exception as e:
+                    logger.error(f"Failed to parse/validate OpenAI image: {e}")
+                    input_tokens = count_tokens(model_name, input_data)
             else:
                 input_tokens = count_tokens(model_name, input_data)
-            # Get generation parameters
-            number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000 if not input_data.get('image') else 300)
+            number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 300 if input_data.startswith('{"image":') else 1000)
             number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-            # Calculate input cost with caching if supported
             if "input_cost_cached" in model_pricing:
                 cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
                 cache_miss_tokens = input_tokens - cache_hit_tokens
@@ -5305,19 +5336,14 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
             if model_name.startswith("openai-o1"):
                 reasoning_effort = model_parameters.get("reasoning_effort", "medium")
                 reasoning_effort_multiplier = reasoning_effort_multipliers.get(reasoning_effort, 1.0)
-            # Calculate output cost 
             output_cost = (
-                float(model_pricing["output_cost"]) * 
-                float(number_of_tokens_to_generate) * 
+                float(model_pricing["output_cost"]) *
+                float(number_of_tokens_to_generate) *
                 reasoning_effort_multiplier
             ) / 1000.0
             per_call_cost = float(model_pricing.get("per_call_cost", 0.0)) * float(number_of_completions_to_generate)
             estimated_cost = input_cost + output_cost + per_call_cost
-            # Log appropriate cost breakdown
-            if isinstance(input_data, dict) and input_data.get('image'):
-                logger.info(f"OpenAI vision cost breakdown - Image tokens: {image_tokens}, Question tokens: {question_tokens}, Input cost: ${input_cost:.4f}, Output cost: ${output_cost:.4f}")
-            else:
-                logger.info(f"OpenAI text cost breakdown - Input tokens: {input_tokens}, Cost: ${estimated_cost:.4f}")
+            logger.info(f"OpenAI cost breakdown: input_tokens={input_tokens}, cost=${estimated_cost:.4f}")
             return estimated_cost
         except Exception as e:
             logger.error(f"Error calculating OpenAI cost: {str(e)}")
@@ -5331,13 +5357,10 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
         try:
             # First try using Claude's token counting API
             try:
-                # If input_data is a string that might be JSON, parse it first
-                if isinstance(input_data, str) and input_data.startswith('{'):
-                    input_data = json.loads(input_data)
                 input_tokens = await count_tokens_claude(model_name, input_data)
                 logger.info(f"Successfully used Claude's token counting API: {input_tokens} tokens")
             except Exception as token_api_err:
-                logger.warning(f"Claude token counting API failed, falling back to calculation: {token_api_err}")
+                logger.warning(f"Claude token counting API failed, fallback: {token_api_err}")
                 # Handle image input
                 if isinstance(input_data, (dict, str)) and (
                     (isinstance(input_data, dict) and input_data.get('image')) or 
@@ -5373,26 +5396,19 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
                 else:
                     # Handle regular text input
                     input_tokens = await count_tokens(model_name, input_data)
-            # Get cache-related parameters
             cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
             cache_miss_tokens = input_tokens - cache_hit_tokens
-            # Calculate input costs based on caching
             input_cost = (
-                float(model_pricing["input_cost_write"]) * float(cache_miss_tokens) +  # New tokens that need caching
-                float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)    # Already cached tokens
+                float(model_pricing["input_cost_write"]) * float(cache_miss_tokens) +
+                float(model_pricing["input_cost_cached"]) * float(cache_hit_tokens)
             ) / 1000.0
-            # Calculate output costs
             number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
             output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
-            # Add system prompt token costs if applicable
             if model_parameters.get("system_prompt"):
                 system_tokens = await count_tokens(model_name, model_parameters["system_prompt"])
                 input_cost += float(model_pricing["input_cost"]) * float(system_tokens) / 1000.0
             estimated_cost = input_cost + output_cost
-            logger.info(f"Estimated Claude cost breakdown - Input: ${input_cost:.4f}, Output: ${output_cost:.4f}")
-            if estimated_cost <= 0.0:  # Final safeguard
-                logger.warning("Calculated cost was 0 or negative, using minimum cost")
-                estimated_cost = float(MINIMUM_COST_IN_CREDITS)
+            logger.info(f"Claude cost breakdown - Input: ${input_cost:.4f}, Output: ${output_cost:.4f}")
             return estimated_cost
         except Exception as e:
             logger.error(f"Error calculating Claude cost: {str(e)}")
@@ -6247,68 +6263,50 @@ async def _handle_creative_upscale_request(input_image, prompt, model_parameters
         else:
             logger.error(f"Error initiating creative upscale request: {response.text}")
             return None, None
-        
+
 def build_openai_request_params(model_parameters: dict, model_name: str) -> dict:
-    """
-    Builds request parameters for OpenAI API calls, only including valid and non-None parameters.
-    Handles dependencies between parameters (e.g., tools and parallel_tool_calls).
-    """
     request_params = {
         "model": model_name.replace("openai-", ""),
-        "n": 1,  # Handle multiple completions at our level
+        "n": 1,
     }
-    # Set required parameters with appropriate defaults
-    # First check if tokens parameter exists and has a non-empty value
     tokens = model_parameters.get("number_of_tokens_to_generate")
-    if tokens is not None and str(tokens).strip():  # Check if value exists and is not empty
+    if tokens is not None and str(tokens).strip():
         try:
             request_params["max_tokens"] = int(tokens)
         except (ValueError, TypeError):
-            request_params["max_tokens"] = 1000  # Default if conversion fails
+            request_params["max_tokens"] = 1000
     else:
-        request_params["max_tokens"] = 1000  # Default if no value provided
-    # Handle temperature with better error handling
-    temp = model_parameters.get("temperature", 0.7)  # Default to 0.7 if not provided
+        request_params["max_tokens"] = 1000
+    temp = model_parameters.get("temperature", 0.7)
     try:
         request_params["temperature"] = float(temp) if temp is not None else 0.7
     except (ValueError, TypeError):
-        request_params["temperature"] = 0.7  # Default if conversion fails
-    # Optional parameters - only add if they exist and are not None/empty
-    optional_float_params = [
-        "top_p",
-        "frequency_penalty",
-        "presence_penalty"
-    ]
+        request_params["temperature"] = 0.7
+    optional_float_params = ["top_p", "frequency_penalty", "presence_penalty"]
     for param in optional_float_params:
         if model_parameters.get(param) is not None:
             try:
                 value = float(model_parameters[param])
-                if value != 0.0:  # Don't include if it's the default value
+                if value != 0.0:
                     request_params[param] = value
             except (ValueError, TypeError):
-                continue  # Skip if conversion fails
-    # Handle structured parameters that need validation
+                pass
     if logit_bias := model_parameters.get("logit_bias"):
-        if isinstance(logit_bias, dict) and logit_bias:  # Only include if it's a non-empty dict
+        if isinstance(logit_bias, dict) and logit_bias:
             request_params["logit_bias"] = logit_bias
     if stop := model_parameters.get("stop"):
-        if isinstance(stop, (list, tuple)) and stop:  # Only include if it's a non-empty list
+        if isinstance(stop, (list, tuple)) and stop:
             request_params["stop"] = stop
-    # Handle tools and related parameters
     if tools := model_parameters.get("tools"):
-        if isinstance(tools, list) and tools:  # Only include if it's a non-empty list
+        if isinstance(tools, list) and tools:
             request_params["tools"] = tools
-            # Only include tool_choice if tools are present
             if tool_choice := model_parameters.get("tool_choice"):
                 request_params["tool_choice"] = tool_choice
-            # Only include parallel_tool_calls if tools are present
             if model_parameters.get("parallel_tool_calls") is not None:
                 request_params["parallel_tool_calls"] = bool(model_parameters["parallel_tool_calls"])
-    # Handle response format
     if response_format := model_parameters.get("response_format"):
         if isinstance(response_format, dict) and response_format.get("type") in ["text", "json_object", "json_schema"]:
             request_params["response_format"] = response_format
-    # Handle log probabilities
     if model_parameters.get("logprobs"):
         request_params["logprobs"] = True
         if top_logprobs := model_parameters.get("top_logprobs"):
@@ -6339,11 +6337,11 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
             updated_messages.append({"role": "assistant", "content": None, "tool_calls": [call_obj]})
             updated_messages.append({"role": "tool", "content": json.dumps(tool_result), "tool_call_id": tool_call_id})
         post_resp = await client.post(
-            "https://api.openai.com/v1/chat/completions", 
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}, 
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
             json={"messages": updated_messages, **request_params}
         )
-        return post_resp.json()    
+        return post_resp.json()
     if inference_type == "text_completion":
         input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
         num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
@@ -6351,7 +6349,6 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
         if system_msg := model_parameters.get("system_message"):
             messages.append({"role": "system", "content": system_msg})
         messages.append({"role": "user", "content": input_prompt})
-        # Build request parameters using our new function
         request_params = build_openai_request_params(model_parameters, model_name)
         output_results = []
         total_input_tokens = 0
@@ -6385,7 +6382,11 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
                 total_output_tokens += usage_data.get("completion_tokens", 0)
         logger.info(f"Total input tokens used: {total_input_tokens}")
         logger.info(f"Total output tokens used: {total_output_tokens}")
-        final_output = output_results[0] if num_completions == 1 else json.dumps({f"completion_{i+1:02}": val for i, val in enumerate(output_results)})
+        final_output = (
+            output_results[0]
+            if num_completions == 1
+            else json.dumps({f"completion_{i+1:02}": val for i, val in enumerate(output_results)})
+        )
         detect_result = magika.identify_bytes(final_output.encode("utf-8"))
         return final_output, {"output_text": detect_result.output.ct_label, "output_files": ["NA"]}
     elif inference_type == "embedding":
@@ -6395,12 +6396,19 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
             logger.error(f"Could not decode model_input_data_json_b64: {exc}")
             return None, None
         async with httpx.AsyncClient() as client:
-            payload = {"model": model_name.replace("openai-", ""), "input": input_text}
+            payload = {
+                "model": model_name.replace("openai-", ""),
+                "input": input_text
+            }
             if encoding_format := model_parameters.get("encoding_format"):
                 payload["encoding_format"] = encoding_format
             if dimensions := model_parameters.get("dimensions"):
                 payload["dimensions"] = dimensions
-            resp = await client.post("https://api.openai.com/v1/embeddings", headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}, json=payload)
+            resp = await client.post(
+                "https://api.openai.com/v1/embeddings",
+                headers={"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"},
+                json=payload
+            )
             if resp.status_code != 200:
                 logger.error(f"Error generating embedding from OpenAI API: {resp.text}")
                 return None, None
@@ -6408,65 +6416,51 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
     elif inference_type == "ask_question_about_an_image":
         try:
             input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
-            image_base64 = strip_data_url_prefix(input_data["image"])
-            image_data_binary = base64.b64decode(image_base64)
+            image_data_binary = base64.b64decode(input_data["image"])
             question = input_data["question"]
             try:
-                processed_image_data, mime_type = await validate_and_preprocess_image(
-                    image_data_binary, 
-                    model_type="openai",
-                )
-                logger.info(f"Successfully processed image with mime type {mime_type}")
-            except ValueError as ve:
-                logger.error(f"Image validation/processing failed: {ve}")
+                image_buffer = io.BytesIO(image_data_binary)
+                image_buffer.seek(0)
+                image = Image.open(image_buffer)
+                if len(image_data_binary) > 20 * 1024 * 1024:
+                    raise ValueError("Image exceeds 20MB size limit for OpenAI")
+                if image.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
+                    raise ValueError("Unsupported image format for OpenAI")
+            except Exception as e:
+                logger.error(f"Image validation failed: {str(e)}")
                 return None, None
-            # Set up for completion generation
+            mime_type = f"image/{image.format.lower()}"
             num_completions = int(model_parameters.get("number_of_completions_to_generate", 1))
             output_results = []
             total_input_tokens = 0
             total_output_tokens = 0
-            # Create requests
             async with httpx.AsyncClient(timeout=float(model_parameters.get("request_timeout_seconds", 90))) as client:
                 for _ in range(num_completions):
-                    # Decode input data
-                    input_data = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
-                    image_base64 = strip_data_url_prefix(input_data["image"])
-                    image_data_binary = base64.b64decode(image_base64)
-                    question = input_data["question"]
-                    # Process image - no need to override OpenAI's auto detail setting
-                    processed_image_data, mime_type = await validate_and_preprocess_image(
-                        image_data_binary, 
-                        model_type="openai"
-                    )
-                    messages = [{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": question},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{mime_type};base64,{base64.b64encode(processed_image_data).decode()}"
+                    messages = [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": question},
+                                {
+                                    "type": "image_url",
+                                    "image_url": f"data:{mime_type};base64,{base64.b64encode(image_data_binary).decode('utf-8')}"
                                 }
-                            }
-                        ]
-                    }]                    
-                    # Build the payload
+                            ]
+                        }
+                    ]
                     payload = {
                         "model": model_name.replace("openai-", ""),
                         "messages": messages,
                         "max_tokens": int(model_parameters.get("number_of_tokens_to_generate", 300)),
                         "temperature": float(model_parameters.get("temperature", 0.7))
                     }
-                    # Add response format if specified
                     if response_format := model_parameters.get("response_format"):
                         if isinstance(response_format, dict):
                             if response_format.get("type") in ["json_schema", "json_object"]:
                                 payload["response_format"] = response_format
-                    # Add any other model parameters that should be included
                     for param in ["top_p", "n", "stream", "stop", "presence_penalty", "frequency_penalty"]:
                         if param_value := model_parameters.get(param):
                             payload[param] = param_value
-                    # Make the API call
                     resp = await client.post(
                         "https://api.openai.com/v1/chat/completions",
                         headers={
@@ -6475,26 +6469,22 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
                         },
                         json=payload
                     )
-                    # Handle API response
                     if resp.status_code != 200:
                         logger.error(f"Error with ask_question_about_an_image: {resp.text}")
                         return None, None
-                    # Process response
                     resp_json = resp.json()
                     output_results.append(resp_json["choices"][0]["message"]["content"])
-                    # Track token usage
                     usage_info = resp_json.get("usage", {})
                     total_input_tokens += usage_info.get("prompt_tokens", 0)
                     total_output_tokens += usage_info.get("completion_tokens", 0)
-            # Log token usage
             logger.info(f"Total input tokens used with {model_name}: {total_input_tokens}")
             logger.info(f"Total output tokens used with {model_name}: {total_output_tokens}")
-            # Format output
             if num_completions == 1:
                 output_text = output_results[0]
             else:
-                output_text = json.dumps({f"completion_{i+1:02}": val for i, val in enumerate(output_results)})
-            # Determine output type
+                output_text = json.dumps(
+                    {f"completion_{i+1:02}": val for i, val in enumerate(output_results)}
+                )
             data_type_result = magika.identify_bytes(output_text.encode("utf-8"))
             return output_text, {
                 "output_text": data_type_result.output.ct_label,
@@ -6506,8 +6496,8 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
             return None, None
     else:
         logger.warning(f"Unsupported inference type '{inference_type}' for OpenAI model '{model_name}'")
-        return None, None
-    
+        return None, None        
+
 async def submit_inference_request_to_openrouter(inference_request):
     logger.info("Now accessing OpenRouter...")
     if inference_request.model_inference_type_string == "text_completion":
@@ -6931,41 +6921,25 @@ async def validate_claude_cache_control(model_name: str, cache_control: Optional
         raise ValueError(f"Cache requires minimum {min_tokens} tokens for {model_name}")
 
 def build_claude_request_params(model_parameters: dict, model_name: str, messages: list) -> dict:
-    """
-    Builds request parameters for Claude API calls, only including parameters that are explicitly set.
-    
-    Args:
-        model_parameters: Dictionary of validated parameters
-        model_name: Name of the model
-        messages: List of message objects to include in the request
-    
-    Returns:
-        Dictionary of parameters to send to the Claude API
-    """
     request_params = {
         "model": get_claude3_model_name(model_name),
         "messages": messages
     }
-    # Add max_tokens only if explicitly set
     if tokens := model_parameters.get("number_of_tokens_to_generate"):
         request_params["max_tokens"] = int(tokens)
-    # Add temperature only if explicitly set
     if temp := model_parameters.get("temperature"):
         request_params["temperature"] = float(temp)
-    # Handle optional parameters
     optional_params = {
         "top_p": ("top_p", float),
         "top_k": ("top_k", int),
-        "metadata": ("metadata", None),  # No type conversion needed
-        "stop_sequences": ("stop_sequences", None)  # No type conversion needed
+        "metadata": ("metadata", None),
+        "stop_sequences": ("stop_sequences", None)
     }
     for param_name, (api_name, converter) in optional_params.items():
         if (value := model_parameters.get(param_name)) is not None:
             request_params[api_name] = converter(value) if converter else value
-    # Handle system message
     if system_msg := model_parameters.get("system_message"):
         request_params["system"] = system_msg
-    # Handle response format
     if response_format := model_parameters.get("response_format"):
         if response_format.get("type") == "json_object":
             json_instruction = "Provide your response as a valid JSON object."
@@ -6974,7 +6948,10 @@ def build_claude_request_params(model_parameters: dict, model_name: str, message
             else:
                 request_params["system"] = json_instruction
         elif response_format.get("type") == "json_schema" and response_format.get("schema"):
-            schema_prompt = f"Return your response as a valid JSON object matching this schema: {json.dumps(response_format['schema'])}"
+            schema_prompt = (
+                f"Return your response as a valid JSON object matching this schema: "
+                f"{json.dumps(response_format['schema'])}"
+            )
             if "system" in request_params:
                 request_params["system"] = f"{request_params['system']}\n{schema_prompt}"
             else:
@@ -6988,6 +6965,7 @@ async def submit_inference_request_to_claude_api(inference_request):
         raw_parameters = json.loads(base64.b64decode(inference_request.model_parameters_json_b64).decode("utf-8"))
         model_parameters = validate_model_parameters(raw_parameters, inference_request.requested_model_canonical_string)
         await validate_claude_cache_control(inference_request.requested_model_canonical_string, model_parameters.get("cache_control"))
+
         if inference_request.model_inference_type_string == "text_completion":
             content = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             messages = [{
@@ -6995,32 +6973,39 @@ async def submit_inference_request_to_claude_api(inference_request):
                 "content": [{"type": "text", "text": content}]
             }]
         elif inference_request.model_inference_type_string == "ask_question_about_an_image":
+            input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8"))
+            image_data_binary = base64.b64decode(input_data_dict["image"])
+            question = input_data_dict["question"]
+            # Inline approach similar to Mistral
             try:
-                input_data_dict = json.loads(base64.b64decode(inference_request.model_input_data_json_b64).decode())
-                image_data = decode_base64_with_padding(input_data_dict["image"])
-                question = input_data_dict["question"]
-                # Process the image
-                processed_image_data, mime_type = await validate_and_preprocess_image(image_data, "claude")
-                messages = [{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": mime_type,
-                                "data": base64.b64encode(processed_image_data).decode()
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": question
-                        }
-                    ]
-                }]
+                image_buffer = io.BytesIO(image_data_binary)
+                image_buffer.seek(0)
+                image = Image.open(image_buffer)
+                if len(image_data_binary) > 5 * 1024 * 1024:
+                    raise ValueError("Image exceeds Claude's 5MB size limit")
+                if image.format.lower() not in ["png", "jpeg", "jpg", "webp", "gif"]:
+                    raise ValueError("Unsupported image format for Claude")
             except Exception as e:
-                logger.error(f"Error processing image data: {str(e)}")
-                raise
+                logger.error(f"Image validation failed: {str(e)}")
+                return None, None
+            mime_type = f"image/{image.format.lower()}"
+            messages = [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": base64.b64encode(image_data_binary).decode()
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": question
+                    }
+                ]
+            }]
         elif inference_request.model_inference_type_string == "embedding":
             input_text = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             messages = [{
@@ -7052,8 +7037,8 @@ async def submit_inference_request_to_claude_api(inference_request):
         if cache_control := model_parameters.get("cache_control"):
             for msg in messages:
                 if isinstance(msg["content"], list):
-                    for content in msg["content"]:
-                        content["cache_control"] = cache_control
+                    for content_item in msg["content"]:
+                        content_item["cache_control"] = cache_control
                 else:
                     msg["content"] = {
                         "type": "text",
