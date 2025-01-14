@@ -6427,7 +6427,9 @@ async def submit_inference_request_to_openai_api(inference_request) -> Tuple[Opt
                                 {"type": "text", "text": question},
                                 {
                                     "type": "image_url",
-                                    "image_url": f"data:{mime_type};base64,{base64.b64encode(processed_image_data).decode('utf-8')}"
+                                    "image_url": {
+                                        "url": f"data:{mime_type};base64,{base64.b64encode(processed_image_data).decode('utf-8')}"
+                                    }
                                 }
                             ]
                         }
