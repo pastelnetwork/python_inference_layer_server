@@ -5166,6 +5166,12 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
             "output_cost": 0.00110,       # $1.10 per million tokens
             "per_call_cost": 0
         },        
+        "deepseek-reasoner": {
+            "input_cost": 0.00055,         # $0.55 per million tokens for cache miss
+            "input_cost_cache_hit": 0.00014,  # $0.14 per million tokens for cache hit 
+            "output_cost": 0.00219,        # $2.19 per million tokens (includes both CoT and final answer)
+            "per_call_cost": 0
+        },
         "openrouter/auto": {"input_cost": 0.0005, "output_cost": 0.0015, "per_call_cost": 0},
         "openrouter/nousresearch/nous-capybara-7b:free": {"input_cost": 0, "output_cost": 0, "per_call_cost": 0},
         "openrouter/mistralai/mistral-7b-instruct:free": {"input_cost": 0, "output_cost": 0, "per_call_cost": 0},
@@ -5410,13 +5416,31 @@ async def calculate_api_cost(model_name: str, input_data: str, model_parameters:
             traceback.print_exc()
             return float(MINIMUM_COST_IN_CREDITS)  # Return minimum instead of 0.0 to avoid None comparison issues
     elif model_name.startswith("deepseek-"):
-        input_tokens = count_tokens(model_name, input_data)
-        number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 4096)
-        number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
-        input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
-        output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
-        per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
-        estimated_cost = input_cost + output_cost + per_call_cost
+        try:
+            input_tokens = count_tokens(model_name, input_data)
+            number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 4096)
+            number_of_completions_to_generate = model_parameters.get("number_of_completions_to_generate", 1)
+            if model_name == "deepseek-reasoner":
+                # For reasoner, we need to account for both CoT and final answer tokens in the output cost, and use the specific reasoner pricing
+                cache_hit_tokens = model_parameters.get("prompt_cache_hit_tokens", 0)
+                cache_miss_tokens = input_tokens - cache_hit_tokens
+                input_cost = (
+                    float(model_pricing["input_cost_cache_hit"]) * float(cache_hit_tokens) +
+                    float(model_pricing["input_cost"]) * float(cache_miss_tokens)
+                ) / 1000.0
+                # Note: For reasoner, output_tokens includes both CoT and final answer
+                output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
+            else:
+                # Original deepseek-chat pricing logic
+                input_cost = float(model_pricing["input_cost"]) * float(input_tokens) / 1000.0
+                output_cost = float(model_pricing["output_cost"]) * float(number_of_tokens_to_generate) / 1000.0
+            per_call_cost = float(model_pricing["per_call_cost"]) * float(number_of_completions_to_generate)
+            estimated_cost = input_cost + output_cost + per_call_cost
+            logger.info(f"DeepSeek cost breakdown - Input: ${input_cost:.4f}, Output: ${output_cost:.4f}, Total: ${estimated_cost:.4f}")
+            return estimated_cost
+        except Exception as e:
+            logger.error(f"Error calculating DeepSeek cost: {str(e)}")
+            return float(MINIMUM_COST_IN_CREDITS)
     elif model_name.startswith("groq-"):
         input_tokens = count_tokens(model_name, input_data)
         number_of_tokens_to_generate = model_parameters.get("number_of_tokens_to_generate", 1000)
@@ -6537,41 +6561,57 @@ async def submit_inference_request_to_openrouter(inference_request):
         logger.warning(f"Unsupported inference type for OpenRouter model: {inference_request.model_inference_type_string}")
         return None, None
 
-def build_deepseek_request_params(model_parameters: dict, messages: list) -> dict:
+def build_deepseek_request_params(model_parameters: dict, messages: list, model_name: str) -> dict:
     """
-    Builds request parameters for DeepSeek API calls, only including non-None parameters.
+    Builds request parameters for DeepSeek API calls, handling both deepseek-chat and deepseek-reasoner models.
+    
+    Args:
+        model_parameters: Dictionary of model parameters
+        messages: List of message objects
+        model_name: Name of the model being used ("deepseek-chat" or "deepseek-reasoner")
+    
+    Returns:
+        Dictionary of parameters for the API request
     """
     request_params = {
-        "model": "deepseek-chat",  # Always use this exact name
+        "model": model_name,
         "messages": messages,
         "stream": False  # This is a fixed parameter
     }
-    # Handle numeric parameters
-    numeric_params = {
-        "max_tokens": ("number_of_tokens_to_generate", 4096, int),
-        "temperature": ("temperature", 1.0, float),
-        "frequency_penalty": ("frequency_penalty", 0.0, float),
-        "presence_penalty": ("presence_penalty", 0.0, float),
-        "top_p": ("top_p", 1.0, float)
-    }
-    for api_param, (param_name, default, converter) in numeric_params.items():
-        if (value := model_parameters.get(param_name)) is not None:
-            request_params[api_param] = converter(value)
-    # Handle response format
-    response_format = {"type": "text"}  # Default
-    if model_parameters.get("response_format") == "json":
-        response_format = {"type": "json_object"}
-    request_params["response_format"] = response_format
-    # Handle tool-related parameters
-    if tools := model_parameters.get("tools"):
-        request_params["tools"] = tools
-        if tool_choice := model_parameters.get("tool_choice"):
-            request_params["tool_choice"] = tool_choice
-    # Handle log probability parameters
-    if model_parameters.get("logprobs"):
-        request_params["logprobs"] = True
-        if top_logprobs := model_parameters.get("top_logprobs"):
-            request_params["top_logprobs"] = top_logprobs
+    if model_name == "deepseek-reasoner":
+        # Reasoner only supports max_tokens
+        if (max_tokens := model_parameters.get("max_tokens")) is not None:
+            request_params["max_tokens"] = int(max_tokens)
+        # Remove any reasoning_content from previous messages to avoid API errors
+        for msg in request_params["messages"]:
+            msg.pop("reasoning_content", None)
+    else:  # deepseek-chat
+        # Handle numeric parameters
+        numeric_params = {
+            "max_tokens": ("number_of_tokens_to_generate", 4096, int),
+            "temperature": ("temperature", 1.0, float),
+            "frequency_penalty": ("frequency_penalty", 0.0, float),
+            "presence_penalty": ("presence_penalty", 0.0, float),
+            "top_p": ("top_p", 1.0, float)
+        }
+        for api_param, (param_name, default, converter) in numeric_params.items():
+            if (value := model_parameters.get(param_name)) is not None:
+                request_params[api_param] = converter(value)
+        # Handle response format
+        response_format = {"type": "text"}  # Default
+        if model_parameters.get("response_format") == "json":
+            response_format = {"type": "json_object"}
+        request_params["response_format"] = response_format
+        # Handle tool-related parameters
+        if tools := model_parameters.get("tools"):
+            request_params["tools"] = tools
+            if tool_choice := model_parameters.get("tool_choice"):
+                request_params["tool_choice"] = tool_choice
+        # Handle log probability parameters
+        if model_parameters.get("logprobs"):
+            request_params["logprobs"] = True
+            if top_logprobs := model_parameters.get("top_logprobs"):
+                request_params["top_logprobs"] = top_logprobs
     return request_params
 
 async def submit_inference_request_to_deepseek(inference_request):
@@ -6592,11 +6632,25 @@ async def submit_inference_request_to_deepseek(inference_request):
                 messages.append({"role": "system", "content": system_message})
             input_prompt = base64.b64decode(inference_request.model_input_data_json_b64).decode("utf-8")
             messages.append({"role": "user", "content": input_prompt})
-            # Use the parameter builder function
-            request_params = build_deepseek_request_params(model_parameters, messages)
+            # Use the parameter builder function with model name
+            request_params = build_deepseek_request_params(
+                model_parameters, 
+                messages,
+                inference_request.requested_model_canonical_string
+            )
             # Make API call
             response = await client.chat.completions.create(**request_params)
-            output_text = response.choices[0].message.content
+            # Handle response based on model type
+            if inference_request.requested_model_canonical_string == "deepseek-reasoner":
+                output_text = {
+                    "content": response.choices[0].message.content,
+                    "reasoning_content": response.choices[0].message.reasoning_content
+                }
+                # Convert to JSON string since that's what the rest of the system expects
+                output_text = json.dumps(output_text)
+            else:
+                output_text = response.choices[0].message.content
+            
             # Detect output type
             result = magika.identify_bytes(output_text.encode("utf-8"))
             return output_text, {

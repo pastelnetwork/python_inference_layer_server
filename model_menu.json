@@ -617,6 +617,53 @@
       }
     },
     {
+      "model_name": "deepseek-reasoner",
+      "model_url": "",
+      "description": "DeepSeek's specialized reasoning model with Chain of Thought (CoT) capabilities. Features 64K context window, explicit reasoning output, and enhanced accuracy through CoT generation. Does not support function calling or JSON output.",
+      "supported_inference_type_strings": ["text_completion"],
+      "input_fields": [
+        {
+          "name": "input_prompt",
+          "file_type": "text",
+          "optional": false
+        }
+      ],
+      "output_fields": [
+        {
+          "name": "generated_text",
+          "file_type": "text",
+          "optional": false
+        },
+        {
+          "name": "reasoning_content",
+          "file_type": "text",
+          "optional": false,
+          "description": "Chain of Thought (CoT) reasoning steps generated before the final answer"
+        }
+      ],
+      "model_parameters": [
+        {
+          "name": "max_tokens",
+          "type": "int",
+          "default": 4096,
+          "minimum": 1,
+          "maximum": 8192,
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "The maximum length of the final response after CoT output completion"
+        },
+        {
+          "name": "system_message",
+          "type": "string",
+          "default": "",
+          "inference_types_parameter_applies_to": ["text_completion"],
+          "description": "System message for setting context [Optional]"
+        }
+      ],
+      "credit_costs": {
+        "api_based_pricing": 1
+      }
+    },
+    {
       "model_name": "swiss_army_llama-Llama-3.1-8B-Lexi-Uncensored_V2_Q5",
       "model_url": "https://huggingface.co/Orenguteng/Llama-3.1-8B-Lexi-Uncensored-V2-GGUF/blob/main/Llama-3.1-8B-Lexi-Uncensored_V2_Q5.gguf",
       "description": "The Llama-3.1-8B-Lexi-Uncensored V2, based on the powerful Meta Llama-3.1-8B model, is designed for uncensored text generation with a focus on creative and innovative content.",
